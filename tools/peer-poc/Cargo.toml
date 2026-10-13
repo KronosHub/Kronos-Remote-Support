@@ -1,0 +1,18 @@
+[package]
+name = "peer-poc"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Phase 2 PoC: two peers connect through the signaling server and ping over a data channel"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+protocol.workspace = true
+rand.workspace = true
+signaling-proto.workspace = true
+stream.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+transport.workspace = true

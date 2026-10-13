@@ -1,0 +1,39 @@
+[package]
+name = "desktop-remoto"
+version = "1.2.1"
+description = "Desktop Remoto: remote desktop client and host"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+# The `_lib` suffix avoids a name clash between lib and bin on Windows (cargo#8519).
+name = "desktop_remoto_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+# "Quick access" build: no installation, share-only (ADR 0031).
+quick-access = []
+
+[dependencies]
+anyhow.workspace = true
+rand.workspace = true
+agent.workspace = true
+input.workspace = true
+protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+signaling-proto.workspace = true
+stream.workspace = true
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+transport.workspace = true
+tauri-plugin-autostart = "2"
+tauri-plugin-updater = "2"
+regex = "1"
+tracing-appender = "0.2"

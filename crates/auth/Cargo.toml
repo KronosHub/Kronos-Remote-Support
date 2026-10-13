@@ -1,0 +1,14 @@
+[package]
+name = "auth"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Session password and SPAKE2-based mutual authentication between peers"
+
+[dependencies]
+hmac = "0.12"
+pbkdf2 = "0.12"
+rand.workspace = true
+sha2 = "0.10"
+spake2 = "0.4"
+thiserror.workspace = true

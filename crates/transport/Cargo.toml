@@ -1,0 +1,27 @@
+[package]
+name = "transport"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Signaling client and WebRTC peer sessions"
+
+[dependencies]
+anyhow.workspace = true
+auth.workspace = true
+async-trait = "0.1"
+bytes = "1"
+futures-util.workspace = true
+if-addrs = "0.15"
+mdns-sd = "0.13"
+gethostname = "1"
+rand.workspace = true
+# Same core crate webrtc builds on; needed for media/RTP types it does not re-export.
+rtc = { version = "0.21", default-features = false, features = ["crypto-ring"] }
+serde.workspace = true
+serde_json.workspace = true
+signaling-proto.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+tracing.workspace = true
+webrtc = "0.21"

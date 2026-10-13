@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Kronos Remote Support",
+  "version": "1.2.1",
+  "identifier": "tech.kronos.desktopremoto",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Kronos Remote Support",
+        "visible": false,
+        "width": 1060,
+        "height": 640,
+        "minWidth": 880,
+        "minHeight": 560
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "publisher": "Kronos",
+    "category": "Utility",
+    "shortDescription": "Kronos Remote Support: assistenza remota con ID e password",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "nsis": {
+        "installerHooks": "windows/hooks.nsh"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE0OTJCNEFGMUUxOEM3OUYKUldTZnh4Z2VyN1NTRkJVMEhBWFZZNkMwZ3lkVGU4OTBYK2x3eXNEQzVhczlTNzJERUpVWHpJaUoK",
+      "endpoints": [
+        "https://github.com/KronosHub/Kronos-Remote-Support/releases/latest/download/latest.json",
+        "https://github.com/albarth84/Remote-Desktop-releases/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

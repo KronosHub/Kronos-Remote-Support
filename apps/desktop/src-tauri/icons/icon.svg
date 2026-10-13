@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Kronos Remote Support: Kronos "K" + monitor with two-way arrows, in an orange-rimmed tile -->
+  <rect x="96" y="96" width="832" height="832" rx="190" fill="#ffffff" stroke="#f39200" stroke-width="56"/>
+
+  <!-- K: dark bar + orange chevron -->
+  <rect x="196" y="300" width="84" height="424" fill="#1f1f1f"/>
+  <polygon points="480,300 368,300 254,512 368,724 480,724 366,512" fill="#f39200"/>
+
+  <!-- Monitor (centred on the K) -->
+  <g transform="translate(0 22)">
+  <rect x="514" y="330" width="320" height="236" rx="28" fill="#1f1f1f"/>
+  <rect x="538" y="354" width="272" height="188" rx="12" fill="#ffffff"/>
+  <rect x="650" y="566" width="48" height="58" fill="#1f1f1f"/>
+  <rect x="590" y="618" width="168" height="34" rx="17" fill="#1f1f1f"/>
+
+  <!-- Two-way arrows on the screen -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="26">
+    <path d="M582 414 H760" stroke="#f39200"/>
+    <path d="M726 384 L760 414 L726 444" stroke="#f39200"/>
+    <path d="M766 484 H588" stroke="#1f1f1f"/>
+    <path d="M622 454 L588 484 L622 514" stroke="#1f1f1f"/>
+  </g>
+  </g>
+</svg>

@@ -1,0 +1,4 @@
+# ScreenCaptureKit bindings are built on a Swift bridge. Their build script only adds the
+# Swift runtime rpath to its own targets, so every binary/test linking `capture` needs it too.
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-arg=-Wl,-rpath,/usr/lib/swift"]

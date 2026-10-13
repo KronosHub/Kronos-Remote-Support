@@ -1,0 +1,104 @@
+# Format, lint, tests and end-to-end run, plus capture/input smoke tests on Linux (X11)
+# and Windows. Runs on pushes to main and on pull requests; manual run:
+#   gh workflow run checks.yml -R KronosHub/Kronos-Remote-Support -f ref=main
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - name: System dependencies (Tauri on Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable branch (2026-10-09)
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Frontend build (Tauri embeds it at compile time)
+        working-directory: apps/desktop
+        run: npm ci && npm run build
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: ./scripts/e2e-local.sh
+
+  linux-x11:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install -y xvfb xdotool x11-xserver-utils xclip
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable branch (2026-10-09)
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo build --release -p capture-poc
+      - run: cargo build --release -p input --example smoke
+      - name: Capture + input on a virtual X display
+        run: |
+          # -noreset: otherwise the server resets (pointer back to centre) whenever the
+          # last client disconnects, e.g. right after the input test exits.
+          Xvfb :99 -screen 0 1280x720x24 -noreset &
+          export DISPLAY=:99 XDG_SESSION_TYPE=x11
+          sleep 2
+          (for i in $(seq 1 20); do xsetroot -solid "#$(printf '%02x%02x80' $((i*12)) $((255-i*12)))"; sleep 0.1; done) &
+          mover=$!
+          ./target/release/capture-poc --seconds 2 --output x11.h264 | tee capture.log
+          grep -E "frames encoded +([2-9]|[1-9][0-9])" capture.log
+          wait $mover
+          ./target/release/examples/smoke 0.25 0.5
+          eval "$(xdotool getmouselocation --shell)"
+          echo "pointer at $X,$Y"
+          test "$X" -ge 318 -a "$X" -le 322 -a "$Y" -ge 358 -a "$Y" -le 362
+      - name: Shared clipboard (text and files) between two X displays
+        run: ./scripts/e2e-clipboard-x11.sh
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable branch (2026-10-09)
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo build --release -p agent -p agent-poc -p windesk
+      - run: cargo build --release -p capture-poc
+      - run: cargo build --release -p input --example smoke
+      - name: Capture (DXGI duplication)
+        shell: pwsh
+        run: ./target/release/capture-poc.exe --seconds 2 --output win.h264
+      - name: Input (SendInput)
+        shell: pwsh
+        run: |
+          ./target/release/examples/smoke.exe 0.25 0.5
+          Add-Type -AssemblyName System.Windows.Forms
+          $p = [System.Windows.Forms.Cursor]::Position
+          $s = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          "pointer at $($p.X),$($p.Y) on $($s.Width)x$($s.Height)"
+          $ex = [math]::Round(0.25 * ($s.Width - 1)); $ey = [math]::Round(0.5 * ($s.Height - 1))
+          if ([math]::Abs($p.X - $ex) -gt 2 -or [math]::Abs($p.Y - $ey) -gt 2) { throw "pointer not moved" }

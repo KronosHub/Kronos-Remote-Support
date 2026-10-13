@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- macOS local network privacy: without it direct LAN connections fail with
+       "No route to host" (EHOSTUNREACH). Merged by Tauri into the bundle's Info.plist. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Kronos Remote Support trova gli altri computer della stessa rete e vi si collega direttamente, senza passare dal server.</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_kronos-rs._tcp</string>
+  </array>
+</dict>
+</plist>

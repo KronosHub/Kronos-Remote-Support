@@ -1,0 +1,138 @@
+# Builds Kronos Remote Support at a tag and publishes the installers + latest.json
+# (in-app updater, ADR 0023) as a release of this repository. Manual trigger only:
+#   gh workflow run release.yml -R KronosHub/Kronos-Remote-Support -f tag=v1.2.1
+#
+# Secrets: TAURI_SIGNING_PRIVATE_KEY(+_PASSWORD) to sign update packages,
+# APPLE_CERTIFICATE(+_PASSWORD), APPLE_SIGNING_IDENTITY, KEYCHAIN_PASSWORD for macOS code signing
+# (self-signed stable identity, imported by hand: Tauri's own import rejects untrusted certs).
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build (e.g. v1.2.1)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+            rust_targets: aarch64-apple-darwin
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin
+            rust_targets: x86_64-apple-darwin
+          - platform: windows-latest
+            args: ""
+            rust_targets: ""
+          - platform: ubuntu-22.04
+            args: ""
+            rust_targets: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - name: System dependencies (Linux)
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable branch (2026-10-09)
+        with:
+          toolchain: stable
+          targets: ${{ matrix.rust_targets }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+      # Stable (self-signed) code signing identity: macOS then recognises every update as
+      # the same app and keeps its Screen Recording / Accessibility permissions (ADR 0027).
+      # Not a Developer ID, so Gatekeeper still warns on the first download.
+      - name: Import macOS signing certificate
+        if: startsWith(matrix.platform, 'macos')
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          echo "$CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$kc"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+          security find-identity -p codesigning "$kc"
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS: sign with the stable identity imported above (only the name is passed,
+          # so Tauri does not re-import and reject the self-signed certificate).
+          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_SIGNING_IDENTITY || '' }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ inputs.tag }}
+          releaseName: Kronos Remote Support ${{ inputs.tag }}
+          releaseBody: |
+            Aggiornamento di Kronos Remote Support. Si installa dal pulsante "Aggiornamenti" nell'app.
+
+            **Kronos Quick Support** (file `KronosQuickSupport_*`): versione senza installazione per farsi assistere.
+            Si avvia, mostra ID e password, ogni connessione va confermata; chiusa la finestra non resta nulla.
+          releaseCommitish: ${{ inputs.tag }}
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: ${{ matrix.args }}
+
+      # Quick access (ADR 0031): share-only build, no installer. Windows: the bare .exe;
+      # macOS: the signed .app zipped; Linux: an AppImage.
+      - name: Quick access build
+        shell: bash
+        working-directory: apps/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_SIGNING_IDENTITY || '' }}
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            macOS) bundles="--bundles app" ;;
+            Linux) bundles="--bundles appimage" ;;
+            Windows) bundles="--no-bundle" ;;
+          esac
+          npx tauri build --config src-tauri/tauri.quick.conf.json --features quick-access $bundles ${{ matrix.args }}
+          version="${TAG#v}"
+          out="../../target/${{ matrix.rust_targets }}/release"
+          [ -n "${{ matrix.rust_targets }}" ] || out="../../target/release"
+          case "$RUNNER_OS" in
+            macOS)
+              arch=$([ "${{ matrix.rust_targets }}" = aarch64-apple-darwin ] && echo aarch64 || echo x64)
+              file="KronosQuickSupport_${version}_macos_${arch}.zip"
+              ditto -c -k --keepParent "$out/bundle/macos/Kronos Quick Support.app" "$file" ;;
+            Linux)
+              file="KronosQuickSupport_${version}_linux_amd64.AppImage"
+              cp "$out"/bundle/appimage/*.AppImage "$file" ;;
+            Windows)
+              file="KronosQuickSupport_${version}_windows_x64.exe"
+              cp "$out/kronos-quick-support.exe" "$file" ;;
+          esac
+          gh release upload "$TAG" "$file" --clobber -R "${{ github.repository }}"

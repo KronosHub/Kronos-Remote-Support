@@ -1,0 +1,50 @@
+[workspace]
+resolver = "3"
+members = [
+    "apps/desktop/src-tauri",
+    "apps/signaling",
+    "crates/agent",
+    "crates/auth",
+    "crates/capture",
+    "crates/codec", "crates/input",
+    "crates/protocol",
+    "crates/signaling-proto",
+    "crates/stream",
+    "crates/transport",
+    "crates/windesk",
+    "tools/agent-poc",
+    "tools/capture-poc",
+    "tools/peer-poc",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "signal", "fs"] }
+futures-util = "0.3"
+rand = "0.10"
+auth = { path = "crates/auth" }
+capture = { path = "crates/capture" }
+signaling-proto = { path = "crates/signaling-proto" }
+transport = { path = "crates/transport" }
+codec = { path = "crates/codec" }
+input = { path = "crates/input" }
+windesk = { path = "crates/windesk" }
+agent = { path = "crates/agent" }
+protocol = { path = "crates/protocol" }
+stream = { path = "crates/stream" }
+
+# Size/speed for shipped binaries (Tauri guideline: https://tauri.app/concept/size/).
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true

@@ -1,0 +1,37 @@
+[package]
+name = "agent"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Windows SYSTEM agent: capture and input on the secure desktop (UAC), service, local IPC"
+
+[dependencies]
+anyhow.workspace = true
+capture.workspace = true
+input.workspace = true
+protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["io-util", "net"] }
+tracing.workspace = true
+windesk.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-service = "0.8"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_ProcessStatus",
+    "Win32_UI_HiDpi",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Registry",
+] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "macros"] }

@@ -1,0 +1,13 @@
+[package]
+name = "windesk"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Windows: make a thread follow the input desktop (normal / secure desktop)"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_StationsAndDesktops",
+    "Win32_UI_WindowsAndMessaging",
+] }

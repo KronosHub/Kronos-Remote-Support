@@ -1,0 +1,14 @@
+[package]
+name = "capture-poc"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Phase 1 PoC: capture the screen and encode it to a raw H.264 file"
+
+[dependencies]
+anyhow.workspace = true
+capture.workspace = true
+clap.workspace = true
+codec.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

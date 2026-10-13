@@ -1,0 +1,9 @@
+/target
+*.h264
+*.mp4
+.DS_Store
+peer-host.key
+/data
+
+# Separate project (self-hosted RustDesk), tracked on its own
+/RUSTDESK/

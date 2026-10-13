@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Kronos Quick Support",
+  "mainBinaryName": "kronos-quick-support",
+  "identifier": "tech.kronos.quicksupport",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Kronos Quick Support",
+        "visible": false,
+        "width": 660,
+        "height": 640,
+        "minWidth": 540,
+        "minHeight": 520,
+        "incognito": true
+      }
+    ]
+  },
+  "bundle": {
+    "shortDescription": "Kronos Quick Support: condividi lo schermo per l'assistenza, senza installazione",
+    "createUpdaterArtifacts": false
+  }
+}
