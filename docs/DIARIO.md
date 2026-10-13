@@ -391,6 +391,12 @@
   privato). Workflow `checks.yml` (push, pull request, manuale) e `release.yml` nel repository stesso, con il
   `GITHUB_TOKEN`: niente più deploy key e token separato. Secret di firma caricati; checks verdi.
 - 1.2.1: l'updater cerca prima nel nuovo repository e poi nel vecchio.
-- Worker Cloudflare aggiornato: il primo `wrangler deploy` era finito su un account sbagliato (copia di prova, da
-  eliminare); il deploy di produzione resta da lanciare a mano.
+- Worker Cloudflare aggiornato in produzione e verificato con due peer (il primo `wrangler deploy` era finito su un
+  account sbagliato: copia di prova da eliminare).
+- Release 1.2.1: le build macOS si sono fermate su "Resource not accessible by integration" nel creare la release
+  (`releaseCommitish` uguale al tag); release creata a mano e job rilanciati, ora `releaseCommitish` non è più
+  impostato. `latest.json` con le note dal nuovo `CHANGELOG.md`, copiato come release del vecchio repository:
+  le installazioni fino alla 1.2.0 trovano la 1.2.1 (verificato).
+- Changelog nell'app (richiesta utente): `CHANGELOG.md` → note della release → l'app mostra solo le versioni più
+  nuove di quella installata (dalla 1.2.2).
 

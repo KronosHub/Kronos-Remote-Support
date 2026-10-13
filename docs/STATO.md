@@ -4,6 +4,7 @@
 **Fase corrente:** v1.2.1 (codice pubblico su `KronosHub/Kronos-Remote-Support`, ADR 0040) — v1.2.0 (revisione di sicurezza prima dell'apertura del codice, ADR 0039) — v1.1.1 (fix rete locale: tutti gli indirizzi, ripiego sul server, ID sessione compatibili con JS) — v1.1.0 barra laterale stile TeamViewer (ADR 0038) — v1.0.0 (chat tra host e guest, ADR 0037; prima release stabile) — v0.13.0 (nomi LAN, popup fine sessione, barra riordinata; ADR 0036) — v0.12.0 (signaling su Cloudflare, ADR 0035) — v0.11.0 (collegamento in rete locale senza server, ADR 0034) — v0.10.0 (agente Windows UAC/lock screen, ADR 0033) — v0.9.3 (installer Windows chiude l'app prima di aggiornare) — v0.9.2 (fix disattivazione password personale) — v0.9.1 cattura condivisa, fix Disconnetti — v0.9.0: finestra separata per sessione, appunti condivisi (testo e file), più controllori (ADR 0032)
 
 ## Fatto
+- Worker Cloudflare con i limiti della revisione di sicurezza in produzione (verificato con due peer)
 - Codice aperto (MIT): repository pubblico unico `KronosHub/Kronos-Remote-Support` con sorgente, CI e release; l'updater
   della 1.2.1 cerca prima lì e poi nel vecchio repository delle release (ADR 0040)
 - Revisione di sicurezza e correzioni (ADR 0039): servizio Windows su copia protetta, password temporanea cambiata dopo 3 errori, limiti su rete locale/chat/Worker, appunti, pipeline fissate
@@ -55,12 +56,10 @@
    Apple Developer per eliminare l'avviso Gatekeeper.
 
 ## Da fare per l'open source (ADR 0039, 0040)
-0. Pubblicare il Worker aggiornato (`cd deploy/cloudflare && npx wrangler deploy`, Node.js ≥ 22, account Cloudflare
-   del Worker di produzione) e verificarlo con due peer.
-1. Copiare il `latest.json` della 1.2.1 come release del vecchio repository delle release, così le installazioni fino
-   alla 1.2.0 si aggiornano; archiviare il vecchio repository quando non ne restano.
-2. SignPath Foundation (firma gratuita; policy e privacy già nel README) e segnalazione falso positivo a WithSecure.
-3. Facoltativi: interruttore host per gli appunti (`allow_clipboard`), segreto personale cifrato con DPAPI su
+0. Archiviare il vecchio repository delle release quando non restano installazioni precedenti alla 1.2.1 (la 1.2.1 è
+   pubblicata anche lì, solo `latest.json`).
+1. SignPath Foundation (firma gratuita; policy e privacy già nel README) e segnalazione falso positivo a WithSecure.
+2. Facoltativi: interruttore host per gli appunti (`allow_clipboard`), segreto personale cifrato con DPAPI su
    Windows, TURN di Cloudflare con credenziali temporanee, ID LAN mostrato come "non verificato", rimozione del
    servizio Windows alla disinstallazione.
 
