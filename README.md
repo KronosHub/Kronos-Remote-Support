@@ -131,12 +131,40 @@ Per installare il server Rust (`apps/signaling`) su una propria VM vedi [`deploy
 - [x] Build automatiche per macOS, Windows e Linux
 - [x] Streaming dello schermo al viewer (H.264 su WebRTC, decodifica hardware)
 - [x] Controllo remoto di mouse e tastiera
-- [ ] Relay TURN per reti restrittive
+- [x] Relay TURN per reti restrittive
 - [x] Cattura schermo su Windows e Linux (X11)
 - [ ] Linux Wayland, encoder hardware
-- [ ] Appunti condivisi, trasferimento file, più monitor
+- [x] Appunti condivisi, trasferimento file, più monitor
 - [x] Accesso non presidiato con password personale
 - [ ] Installer firmati
 
 Dettagli: [`docs/ROADMAP.md`](docs/ROADMAP.md) · Stato attuale: [`docs/STATO.md`](docs/STATO.md) ·
 Architettura: [`docs/ARCHITETTURA.md`](docs/ARCHITETTURA.md) · Decisioni: [`docs/adr/`](docs/adr/)
+
+## Firma del codice
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
+[SignPath Foundation](https://signpath.org).
+
+Ruoli (code signing policy):
+- Committer e revisori: [KronosHub](https://github.com/KronosHub)
+- Approvatori delle firme: [KronosHub](https://github.com/KronosHub)
+
+Si firmano solo i file prodotti dal workflow [`release.yml`](.github/workflows/release.yml) di questo repository,
+a partire da un tag; ogni firma va approvata a mano.
+
+## Privacy
+
+L'app non raccoglie statistiche né dati di utilizzo. Si collega in rete solo per funzionare:
+- al server di signaling, per registrare l'ID del dispositivo e mettere in contatto i due computer
+  (ID e indirizzi di rete necessari alla connessione; il server non vede schermo, input, file o chat,
+  cifrati da un computer all'altro);
+- se la connessione diretta non è possibile, a un relay TURN che inoltra il traffico cifrato;
+- nella rete locale annuncia ID e nome del dispositivo (mDNS) per farsi trovare dagli altri computer della stessa rete;
+- a GitHub, per controllare se esistono aggiornamenti (all'avvio e dal pulsante **Aggiornamenti**).
+
+Kronos Quick Support non controlla gli aggiornamenti.
+
+## Licenza
+
+[MIT](LICENSE) © 2026 Kronos Informatica
