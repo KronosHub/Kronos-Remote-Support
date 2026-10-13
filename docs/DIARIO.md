@@ -382,3 +382,15 @@
   leggibile; chat senza limiti; file degli appunti scritti con la condivisione spenta e cartella `/tmp` condivisa;
   overflow nella somma delle dimensioni; Worker senza limiti; azioni GitHub non fissate.
 - Rischi residui accettati e voci ancora da fare: in ADR 0039 e in STATO.md.
+
+## 2026-10-13 — Repository pubblico (v1.2.1, ADR 0040)
+- Utente: spostare tutto sull'account GitHub aziendale e procedere con apertura del codice e SignPath.
+- Documenti ripuliti (IP e chiavi della vecchia VM, percorsi, ID dispositivi, nomi degli account), aggiunto `LICENSE`
+  (MIT, Kronos Informatica), sezioni README su firma del codice e privacy.
+- Nuovo repository `KronosHub/Kronos-Remote-Support` creato da un solo commit (la cronologia resta nel repository
+  privato). Workflow `checks.yml` (push, pull request, manuale) e `release.yml` nel repository stesso, con il
+  `GITHUB_TOKEN`: niente più deploy key e token separato. Secret di firma caricati; checks verdi.
+- 1.2.1: l'updater cerca prima nel nuovo repository e poi nel vecchio.
+- Worker Cloudflare aggiornato: il primo `wrangler deploy` era finito su un account sbagliato (copia di prova, da
+  eliminare); il deploy di produzione resta da lanciare a mano.
+

@@ -1,9 +1,11 @@
 # Stato del progetto
 
 **Ultimo aggiornamento:** 2026-10-13
-**Fase corrente:** v1.2.0 (revisione di sicurezza prima dell'apertura del codice, ADR 0039) — v1.1.1 (fix rete locale: tutti gli indirizzi, ripiego sul server, ID sessione compatibili con JS) — v1.1.0 barra laterale stile TeamViewer (ADR 0038) — v1.0.0 (chat tra host e guest, ADR 0037; prima release stabile) — v0.13.0 (nomi LAN, popup fine sessione, barra riordinata; ADR 0036) — v0.12.0 (signaling su Cloudflare, ADR 0035) — v0.11.0 (collegamento in rete locale senza server, ADR 0034) — v0.10.0 (agente Windows UAC/lock screen, ADR 0033) — v0.9.3 (installer Windows chiude l'app prima di aggiornare) — v0.9.2 (fix disattivazione password personale) — v0.9.1 cattura condivisa, fix Disconnetti — v0.9.0: finestra separata per sessione, appunti condivisi (testo e file), più controllori (ADR 0032)
+**Fase corrente:** v1.2.1 (codice pubblico su `KronosHub/Kronos-Remote-Support`, ADR 0040) — v1.2.0 (revisione di sicurezza prima dell'apertura del codice, ADR 0039) — v1.1.1 (fix rete locale: tutti gli indirizzi, ripiego sul server, ID sessione compatibili con JS) — v1.1.0 barra laterale stile TeamViewer (ADR 0038) — v1.0.0 (chat tra host e guest, ADR 0037; prima release stabile) — v0.13.0 (nomi LAN, popup fine sessione, barra riordinata; ADR 0036) — v0.12.0 (signaling su Cloudflare, ADR 0035) — v0.11.0 (collegamento in rete locale senza server, ADR 0034) — v0.10.0 (agente Windows UAC/lock screen, ADR 0033) — v0.9.3 (installer Windows chiude l'app prima di aggiornare) — v0.9.2 (fix disattivazione password personale) — v0.9.1 cattura condivisa, fix Disconnetti — v0.9.0: finestra separata per sessione, appunti condivisi (testo e file), più controllori (ADR 0032)
 
 ## Fatto
+- Codice aperto (MIT): repository pubblico unico `KronosHub/Kronos-Remote-Support` con sorgente, CI e release; l'updater
+  della 1.2.1 cerca prima lì e poi nel vecchio repository delle release (ADR 0040)
 - Revisione di sicurezza e correzioni (ADR 0039): servizio Windows su copia protetta, password temporanea cambiata dopo 3 errori, limiti su rete locale/chat/Worker, appunti, pipeline fissate
 - Barra laterale nella finestra principale: Supporto remoto, Dispositivi, Chat, Attività, Aggiornamenti (ADR 0038; da provare nell'app compilata)
 - Signaling su Cloudflare Workers (gratuito), password con almeno 5 cifre e rinnovata a fine connessione (ADR 0035)
@@ -52,14 +54,15 @@
 5. Migliorie: risoluzione ridotta a banda molto bassa; avvio cattura lento su monitor molto grandi; apertura più rapida in relay; dominio per nascondere l'IP;
    Apple Developer per eliminare l'avviso Gatekeeper.
 
-## Da fare per l'open source (ADR 0039)
-0. Pubblicare il Worker aggiornato (`cd deploy/cloudflare && npx wrangler deploy`): serve Node.js ≥ 22 e il login
-   Cloudflare.
-1. Ripulire i documenti (IP, percorsi locali, ID dispositivo, email) e creare il repository pubblico da un solo commit.
-2. Dopo la pubblicazione: verificare i workflow in `KronosHub/Kronos-Remote-Support` (azioni fissate a commit).
-3. SignPath Foundation (firma gratuita) e segnalazione falso positivo a WithSecure.
-4. Facoltativi: interruttore host per gli appunti (`allow_clipboard`), segreto personale cifrato con DPAPI su
-   Windows, TURN di Cloudflare con credenziali temporanee, ID LAN mostrato come "non verificato".
+## Da fare per l'open source (ADR 0039, 0040)
+0. Pubblicare il Worker aggiornato (`cd deploy/cloudflare && npx wrangler deploy`, Node.js ≥ 22, account Cloudflare
+   del Worker di produzione) e verificarlo con due peer.
+1. Copiare il `latest.json` della 1.2.1 come release del vecchio repository delle release, così le installazioni fino
+   alla 1.2.0 si aggiornano; archiviare il vecchio repository quando non ne restano.
+2. SignPath Foundation (firma gratuita; policy e privacy già nel README) e segnalazione falso positivo a WithSecure.
+3. Facoltativi: interruttore host per gli appunti (`allow_clipboard`), segreto personale cifrato con DPAPI su
+   Windows, TURN di Cloudflare con credenziali temporanee, ID LAN mostrato come "non verificato", rimozione del
+   servizio Windows alla disinstallazione.
 
 ## In coda (deciso con l'utente)
 - **Microsoft Store** (gratuito): account Kronos su Partner Center (utente) + pagina informativa privacy; io: pacchetto
