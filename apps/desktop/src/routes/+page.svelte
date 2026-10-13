@@ -405,6 +405,38 @@
     }
   }
 
+  /** Splits "1.2.3" into numbers; anything after the version (" — date") is ignored. */
+  function versionParts(v: string): number[] {
+    return (v.match(/^v?(\d+(?:\.\d+)*)/)?.[1] ?? "0").split(".").map(Number);
+  }
+
+  function newerThan(a: string, b: string): boolean {
+    const x = versionParts(a);
+    const y = versionParts(b);
+    for (let i = 0; i < Math.max(x.length, y.length); i++) {
+      if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) > (y[i] ?? 0);
+    }
+    return false;
+  }
+
+  /**
+   * Release notes carry the latest CHANGELOG.md sections ("## 1.2.1 — date"): keeps the
+   * versions newer than the installed one. Notes without sections are shown as they are.
+   */
+  function changesSince(notes: string, current: string): { title: string; body: string }[] {
+    const sections = notes
+      .split(/^## /m)
+      .slice(1)
+      .map((chunk) => {
+        const end = chunk.indexOf("\n");
+        const title = (end < 0 ? chunk : chunk.slice(0, end)).trim();
+        return { title, body: end < 0 ? "" : chunk.slice(end + 1).trim() };
+      })
+      .filter((s) => /^\d/.test(s.title));
+    if (sections.length === 0) return [{ title: "", body: notes.trim() }];
+    return sections.filter((s) => newerThan(s.title, current));
+  }
+
   /** Result shown in the Aggiornamenti page; the sidebar marks an available version. */
   async function checkUpdate() {
     if (update.kind === "checking" || update.kind === "installing") return;
@@ -1292,7 +1324,14 @@
         <p>
           È disponibile la versione <strong>{update.info.version}</strong>.
         </p>
-        {#if update.info.notes}<pre class="notes">{update.info.notes}</pre>{/if}
+        {#if update.info.notes}
+          <div class="notes">
+            {#each changesSince(update.info.notes, update.info.current) as change}
+              {#if change.title}<strong>Versione {change.title}</strong>{/if}
+              <pre>{change.body}</pre>
+            {/each}
+          </div>
+        {/if}
         <p class="hint small">
           L'app si riavvia al termine. Su macOS potrebbe servire concedere di nuovo i permessi
           Registrazione schermo e Accessibilità.
@@ -1921,13 +1960,17 @@
     color: var(--text);
   }
   .notes {
-    white-space: pre-wrap;
     font-size: 12px;
-    max-height: 160px;
+    max-height: 220px;
     overflow: auto;
     background: var(--bg);
     border-radius: 8px;
     padding: 8px;
+  }
+  .notes pre {
+    white-space: pre-wrap;
+    font: inherit;
+    margin: 4px 0 10px;
   }
   .connecting {
     align-items: center;

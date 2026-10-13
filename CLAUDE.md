@@ -26,6 +26,10 @@ cd apps/desktop && npx tauri build
 # Kronos Quick Support (ADR 0031)
 npx tauri build --config src-tauri/tauri.quick.conf.json --features quick-access --bundles app
 ```
+Ogni release ha una sezione `## X.Y.Z — AAAA-MM-GG` in cima a `CHANGELOG.md` (novità per l'utente, in italiano):
+il workflow la mette nelle note dell'aggiornamento e l'app mostra le versioni più nuove di quella installata.
+Proporla all'utente insieme alla release.
+
 Test e release girano con GitHub Actions in questo repository (`.github/workflows/`), avvio manuale:
 ```
 gh workflow run checks.yml  -R KronosHub/Kronos-Remote-Support -f ref=main

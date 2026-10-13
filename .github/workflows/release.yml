@@ -79,6 +79,28 @@ jobs:
           security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
           rm "$RUNNER_TEMP/cert.p12"
           security find-identity -p codesigning "$kc"
+      # Release notes = CHANGELOG.md from this version's section down (10 versions), so the
+      # app can show every change newer than the installed version. Fails without a section.
+      - name: Release notes
+        id: notes
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          awk -v v="${TAG#v}" '
+            /^## / { if (!on && ($2 == v)) on = 1; if (on && ++n > 10) exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          [ -s notes.md ] || { echo "::error::CHANGELOG.md has no section for ${TAG#v}"; exit 1; }
+          {
+            echo 'body<<EOF_NOTES'
+            echo 'Si installa dal pulsante "Aggiornamenti" nell'"'"'app.'
+            echo 'Kronos Quick Support (file KronosQuickSupport_*): versione senza installazione per farsi assistere.'
+            echo
+            cat notes.md
+            echo 'EOF_NOTES'
+          } >> "$GITHUB_OUTPUT"
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -91,12 +113,7 @@ jobs:
           projectPath: apps/desktop
           tagName: ${{ inputs.tag }}
           releaseName: Kronos Remote Support ${{ inputs.tag }}
-          releaseBody: |
-            Aggiornamento di Kronos Remote Support. Si installa dal pulsante "Aggiornamenti" nell'app.
-
-            **Kronos Quick Support** (file `KronosQuickSupport_*`): versione senza installazione per farsi assistere.
-            Si avvia, mostra ID e password, ogni connessione va confermata; chiusa la finestra non resta nulla.
-          releaseCommitish: ${{ inputs.tag }}
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
