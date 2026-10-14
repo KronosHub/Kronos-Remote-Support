@@ -13,6 +13,9 @@ Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, qu
 - Barra della finestra di controllo su due righe: nome, ID e pulsanti sopra, connessione e statistiche sotto (più
   leggibile sugli schermi piccoli).
 - "Resync per minuto" compare solo quando nell'ultimo minuto c'è stato almeno un resync.
+- Se uno dei due computer non risponde più per 20 secondi la sessione si chiude da sola ("il partner non
+  risponde"): prima il computer controllato poteva restare in condivisione anche dopo che chi controllava aveva
+  chiuso.
 
 ## 1.3.0 — 2026-10-14
 - Audio: pulsante "Audio" nella barra per ascoltare il suono del computer controllato (Mac e Windows). È spento

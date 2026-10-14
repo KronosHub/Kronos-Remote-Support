@@ -27,3 +27,11 @@
 - Accanto al tipo di connessione: verde, giallo se almeno una statistica è in attenzione, rosso se una è critica;
   stesse soglie dei contorni (latenza, CPU/RAM, qualità ridotta, resync); il tooltip elenca i motivi.
 - Barra della finestra di controllo su due righe: nome/ID e pulsanti sopra, pallino, connessione e statistiche sotto.
+
+## Sessioni rimaste aperte
+Dal log dell'host (1.2.3–1.3.0): dopo la chiusura dal lato viewer le sessioni dell'host finivano solo quando il
+viewer si ricollegava al server ("peer reconnected") o chiudeva l'app ("peer disconnected"); nessun `Bye`, nessun
+`leave`, e la connessione WebRTC restava "connected". Quindi la sessione restava viva dal lato viewer; causa
+esatta da chiarire con il log del viewer. Rimedio indipendente dalla causa: entrambi i lati chiudono la sessione
+se per 20 s non arriva nessun messaggio di controllo (il viewer manda Ping/Report ogni secondo, l'host Pong ogni
+secondo e Usage ogni 2 s).

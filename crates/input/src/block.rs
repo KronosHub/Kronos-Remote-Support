@@ -19,13 +19,17 @@ use anyhow::Result;
 pub const MARK: i64 = 0x4B52_4F4E; // "KRON"
 
 /// Physical Esc presses that release the block, and the window they must fall in.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 const ESCAPES: usize = 3;
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 const ESCAPE_WINDOW: Duration = Duration::from_secs(2);
 
 /// Counts physical Esc presses; true when the block must be released.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 #[derive(Default)]
 struct EscapeCounter(Vec<Instant>);
 
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 impl EscapeCounter {
     fn pressed(&mut self, now: Instant) -> bool {
         self.0.retain(|t| now.duration_since(*t) < ESCAPE_WINDOW);

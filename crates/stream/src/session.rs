@@ -17,6 +17,17 @@ const PING_INTERVAL: Duration = Duration::from_secs(1);
 const USAGE_INTERVAL: Duration = Duration::from_secs(2);
 /// Do not flood the host with keyframe requests while packets keep getting lost.
 const MIN_KEYFRAME_REQUEST_GAP: Duration = Duration::from_millis(500);
+/// Nothing heard from the partner for this long (it pings every second, the host answers and
+/// reports usage every 2 s): the session is over even if no goodbye arrived.
+const PEER_TIMEOUT: Duration = Duration::from_secs(20);
+/// How often that is checked.
+const LIVENESS_CHECK: Duration = Duration::from_secs(5);
+
+/// Notes that the partner just spoke (any control message, even one we ignore).
+fn heard<T>(at: &mut Instant, value: T) -> T {
+    *at = Instant::now();
+    value
+}
 /// Pause between attempts to restart a stream whose capture stopped.
 const RESTART_RETRY: Duration = Duration::from_secs(2);
 
@@ -212,6 +223,10 @@ pub async fn serve_host(
     let mut clipboard = ClipboardShare::new(files);
     // No display sleep or screen lock while someone is controlling this machine.
     let awake = crate::awake::KeepAwake::new();
+    // Ends the session if the viewer goes silent (its app hung or the network died
+    // without the connection noticing).
+    let mut last_heard = Instant::now();
+    let mut liveness = tokio::time::interval(LIVENESS_CHECK);
     // This computer's own mouse and keyboard, blocked on the viewer's request; `released`
     // fires when the person here takes them back (Esc ×3).
     let mut local_block: Option<input::block::LocalBlock> = None;
@@ -289,7 +304,13 @@ pub async fn serve_host(
                     }
                 }
             }
-            msg = recv(&channel) => match msg {
+            _ = liveness.tick() => {
+                if last_heard.elapsed() > PEER_TIMEOUT {
+                    tracing::warn!("no message from the viewer for {:?}, ending", last_heard.elapsed());
+                    break "il partner non risponde".to_owned();
+                }
+            }
+            msg = recv(&channel) => match heard(&mut last_heard, msg) {
                 Some(ControlMsg::Ping { seq, sent_us }) => {
                     send(&channel, &ControlMsg::Pong { seq, sent_us }).await;
                 }
@@ -660,6 +681,8 @@ pub async fn run_viewer(
     send(&channel, &ControlMsg::ClipboardMode { enabled }).await;
     on_event(ViewerEvent::ClipboardEnabled(enabled));
 
+    let mut last_heard = Instant::now();
+    let mut liveness = tokio::time::interval(LIVENESS_CHECK);
     let reason = loop {
         if want_keyframe
             && last_keyframe_request.is_none_or(|t| t.elapsed() >= MIN_KEYFRAME_REQUEST_GAP)
@@ -670,7 +693,13 @@ pub async fn run_viewer(
             on_event(ViewerEvent::Resync);
         }
         tokio::select! {
-            msg = recv(&channel) => match msg {
+            _ = liveness.tick() => {
+                if last_heard.elapsed() > PEER_TIMEOUT {
+                    tracing::warn!("no message from the host for {:?}, ending", last_heard.elapsed());
+                    break "il partner non risponde".to_owned();
+                }
+            }
+            msg = recv(&channel) => match heard(&mut last_heard, msg) {
                 Some(ControlMsg::StreamStarted { width, height }) => {
                     on_event(ViewerEvent::Started { width, height });
                 }
