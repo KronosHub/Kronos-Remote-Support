@@ -7,11 +7,6 @@
 //! - Windows: the display and system stay on for the whole session.
 //! - Elsewhere: nothing.
 
-use std::time::Duration;
-
-/// How often remote input is reported as user activity, at most.
-const ACTIVITY_GAP: Duration = Duration::from_secs(10);
-
 /// Held for the duration of a host session; dropping it lets the machine sleep again.
 pub struct KeepAwake(imp::Inner);
 
@@ -36,7 +31,10 @@ impl Default for KeepAwake {
 mod imp {
     use std::ffi::{CStr, c_char, c_void};
     use std::sync::Mutex;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
+
+    /// How often remote input is reported as user activity, at most.
+    const ACTIVITY_GAP: Duration = Duration::from_secs(10);
 
     type CFStringRef = *const c_void;
 
@@ -108,10 +106,7 @@ mod imp {
 
         pub fn user_active(&self) {
             let mut activity = self.activity.lock().unwrap();
-            if activity
-                .1
-                .is_some_and(|t| t.elapsed() < super::ACTIVITY_GAP)
-            {
+            if activity.1.is_some_and(|t| t.elapsed() < ACTIVITY_GAP) {
                 return;
             }
             activity.1 = Some(Instant::now());
