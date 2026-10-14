@@ -433,3 +433,12 @@
 - "Resync per minuto": sempre visibile e ricalcolato con l'orologio reattivo della pagina (prima la cifra cambiava
   solo all'arrivo di un nuovo resync e restava ferma).
 - Aperto: Invio remoto sulla schermata di accesso del Mac rifiutato come password errata.
+
+## 2026-10-14 — Nitidezza, modificatori bloccati (v1.2.5)
+- "Resync per minuto" fermo a 14: la finestra di controllo usciva da `onMount` prima di avviare l'orologio, quindi
+  `now` restava all'apertura e i resync non scadevano mai.
+- Blocco dopo uno screenshot (⌘⇧4) sul Mac di chi controlla: ⌘ e ⇧ inoltrati, rilascio preso dal sistema; sul Mac
+  controllato restavano premuti. Ora il viewer confronta i flag di ogni evento mouse/tastiera con i tasti premuti e
+  rilascia quelli spariti.
+- Nitidezza (richiesta utente): massimo 2560×1600, soglie per pixel, limite a 1080p se la codifica è lenta, riduzione
+  a media d'area con test. Test locali ora possibili con `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.

@@ -127,9 +127,16 @@ pub fn fps_for(bitrate: u32, max_fps: u32) -> u32 {
     fps.min(max_fps).max(1)
 }
 
-/// Resolution steps, in percent of the captured size. Below about 800 kbit/s even 15 fps
-/// of a full-size screen are too blurry to read; fewer pixels keep text legible.
-const SCALE_STEPS: [(u32, u32); 2] = [(450_000, 50), (800_000, 75)];
+/// Largest picture (pixels) worth sending under each bitrate. Below about 800 kbit/s even
+/// 15 fps of a 1080p screen are too blurry to read; fewer pixels keep text legible. Above
+/// 1.5 Mbit/s the whole captured size is sent (up to 2560×1600).
+const PIXEL_BUDGETS: [(u32, u64); 3] = [
+    (450_000, 960 * 540),
+    (800_000, 1440 * 810),
+    (1_500_000, 1920 * 1080),
+];
+/// Pixels a machine that encodes too slowly is limited to (1080p).
+pub const HEAVY_PIXELS: u64 = 1920 * 1080;
 /// Before going back up, the bitrate must exceed the step's threshold by this much (in
 /// percent): each resolution change costs a keyframe, so it must not flap.
 const SCALE_UP_MARGIN: u32 = 125;
@@ -137,22 +144,32 @@ const SCALE_UP_MARGIN: u32 = 125;
 pub const SCALE_DOWN_GAP: Duration = Duration::from_secs(2);
 pub const SCALE_UP_GAP: Duration = Duration::from_secs(10);
 
-fn scale_below(bitrate: u32) -> u32 {
-    SCALE_STEPS
-        .iter()
-        .find(|&&(threshold, _)| bitrate < threshold)
-        .map_or(100, |&(_, scale)| scale)
+/// Scale (percent of each side) that brings `pixels` within `budget`.
+pub fn scale_to_fit(pixels: u64, budget: u64) -> u32 {
+    if pixels <= budget {
+        return 100;
+    }
+    let scale = (budget as f64 / pixels as f64).sqrt() * 100.0;
+    ((scale + 1e-9).floor() as u32).max(10)
 }
 
-/// Resolution (percent of the captured size) for a bitrate, given the current one: steps
-/// down as soon as the bitrate falls under a threshold, back up only with some margin.
-pub fn scale_for(bitrate: u32, current: u32) -> u32 {
-    let target = scale_below(bitrate);
+fn scale_below(bitrate: u32, pixels: u64) -> u32 {
+    PIXEL_BUDGETS
+        .iter()
+        .find(|&&(threshold, _)| bitrate < threshold)
+        .map_or(100, |&(_, budget)| scale_to_fit(pixels, budget))
+}
+
+/// Resolution (percent of the captured size, `pixels` in all) for a bitrate, given the
+/// current one: steps down as soon as the bitrate falls under a threshold, back up only
+/// with some margin.
+pub fn scale_for(bitrate: u32, current: u32, pixels: u64) -> u32 {
+    let target = scale_below(bitrate, pixels);
     if target < current {
         return target;
     }
     let reduced = u64::from(bitrate) * 100 / u64::from(SCALE_UP_MARGIN);
-    scale_below(reduced as u32).max(current)
+    scale_below(reduced as u32, pixels).max(current)
 }
 
 /// Output size for a scale, rounded down to even sizes (YUV 4:2:0).
@@ -248,17 +265,31 @@ mod tests {
 
     #[test]
     fn resolution_steps_down_at_once_and_up_with_margin() {
-        assert_eq!(scale_for(4_000_000, 100), 100);
-        assert_eq!(scale_for(700_000, 100), 75);
-        assert_eq!(scale_for(300_000, 100), 50);
-        assert_eq!(scale_for(300_000, 75), 50);
+        const FULL_HD: u64 = 1920 * 1080;
+        assert_eq!(scale_for(4_000_000, 100, FULL_HD), 100);
+        assert_eq!(scale_for(1_000_000, 100, FULL_HD), 100);
+        assert_eq!(scale_for(700_000, 100, FULL_HD), 75);
+        assert_eq!(scale_for(300_000, 100, FULL_HD), 50);
+        assert_eq!(scale_for(300_000, 75, FULL_HD), 50);
         // Just above a threshold is not enough to go back up...
-        assert_eq!(scale_for(500_000, 50), 50);
-        assert_eq!(scale_for(900_000, 75), 75);
+        assert_eq!(scale_for(500_000, 50, FULL_HD), 50);
+        assert_eq!(scale_for(900_000, 75, FULL_HD), 75);
         // ...25 % above is.
-        assert_eq!(scale_for(570_000, 50), 75);
-        assert_eq!(scale_for(1_000_000, 75), 100);
-        assert_eq!(scale_for(1_000_000, 50), 100);
+        assert_eq!(scale_for(570_000, 50, FULL_HD), 75);
+        assert_eq!(scale_for(1_000_000, 75, FULL_HD), 100);
+        assert_eq!(scale_for(1_000_000, 50, FULL_HD), 100);
+    }
+
+    #[test]
+    fn large_screens_step_down_to_the_same_pixel_budgets() {
+        const LARGE: u64 = 2560 * 1600;
+        assert_eq!(scale_for(4_000_000, 100, LARGE), 100);
+        // Under 1.5 Mbit/s: about 1080p worth of pixels.
+        assert_eq!(scale_for(1_200_000, 100, LARGE), 71);
+        assert_eq!(scale_for(700_000, 100, LARGE), 53);
+        assert_eq!(scale_for(300_000, 100, LARGE), 35);
+        // Small screens are not touched until their size exceeds the budget.
+        assert_eq!(scale_for(700_000, 100, 1366 * 768), 100);
     }
 
     #[test]

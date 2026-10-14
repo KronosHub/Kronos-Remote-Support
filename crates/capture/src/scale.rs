@@ -1,4 +1,5 @@
-//! CPU downscaling for backends that capture at native resolution (Windows, Linux).
+//! CPU downscaling: bilinear for backends that capture at native resolution (Windows,
+//! Linux), area average for the stream's reduced resolution (text stays legible).
 
 /// Bilinear resize of a tightly packed BGRA image.
 pub fn scale_bgra(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<u8> {
@@ -42,9 +43,83 @@ pub fn scale_bgra(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<u8> {
     dst
 }
 
+/// Fixed-point one for the area weights.
+const ONE: u32 = 1 << 12;
+
+/// For each destination pixel along one axis: the source pixels it covers and their
+/// weights (summing to [`ONE`]).
+fn area_taps(src: usize, dst: usize) -> Vec<Vec<(usize, u32)>> {
+    let ratio = src as f64 / dst as f64;
+    (0..dst)
+        .map(|d| {
+            let (start, end) = (d as f64 * ratio, (d + 1) as f64 * ratio);
+            let first = start.floor() as usize;
+            let last = (end.ceil() as usize).min(src);
+            let mut taps: Vec<(usize, u32)> = (first..last)
+                .map(|i| {
+                    let overlap = end.min(i as f64 + 1.0) - start.max(i as f64);
+                    (i, (overlap / ratio * f64::from(ONE)).round() as u32)
+                })
+                .filter(|&(_, w)| w > 0)
+                .collect();
+            // Rounding leftovers go to the heaviest tap, so a flat area stays flat.
+            let sum: u32 = taps.iter().map(|&(_, w)| w).sum();
+            if let Some(tap) = taps.iter_mut().max_by_key(|&&mut (_, w)| w) {
+                tap.1 = (i64::from(tap.1) + i64::from(ONE) - i64::from(sum)) as u32;
+            }
+            taps
+        })
+        .collect()
+}
+
+/// Area-average resize for shrinking a tightly packed BGRA image: every source pixel
+/// counts, weighted by how much of it each destination pixel covers. Bilinear sampling
+/// skips source pixels when shrinking by more than ~1.5×, and thin text strokes then
+/// break up or vanish. Enlarging falls back to [`scale_bgra`].
+pub fn shrink_bgra(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<u8> {
+    if dw > sw || dh > sh || (dw, dh) == (sw, sh) {
+        return scale_bgra(src, sw, sh, dw, dh);
+    }
+    let (sw, sh, dw, dh) = (sw as usize, sh as usize, dw as usize, dh as usize);
+    let (cols, rows) = (area_taps(sw, dw), area_taps(sh, dh));
+    let round = |acc: u32| ((acc + ONE / 2) / ONE).min(255) as u16;
+
+    // Horizontal pass: every source row shrunk to the destination width.
+    let mut narrow = vec![0u16; dw * sh * 4];
+    for y in 0..sh {
+        let row = &src[y * sw * 4..(y + 1) * sw * 4];
+        let out = &mut narrow[y * dw * 4..(y + 1) * dw * 4];
+        for (x, taps) in cols.iter().enumerate() {
+            let mut acc = [0u32; 4];
+            for &(i, w) in taps {
+                for c in 0..4 {
+                    acc[c] += u32::from(row[i * 4 + c]) * w;
+                }
+            }
+            for c in 0..4 {
+                out[x * 4 + c] = round(acc[c]);
+            }
+        }
+    }
+
+    // Vertical pass.
+    let mut dst = vec![0u8; dw * dh * 4];
+    for (y, taps) in rows.iter().enumerate() {
+        let out = &mut dst[y * dw * 4..(y + 1) * dw * 4];
+        for (i, value) in out.iter_mut().enumerate() {
+            let acc: u32 = taps
+                .iter()
+                .map(|&(row, w)| u32::from(narrow[row * dw * 4 + i]) * w)
+                .sum();
+            *value = round(acc) as u8;
+        }
+    }
+    dst
+}
+
 #[cfg(test)]
 mod tests {
-    use super::scale_bgra;
+    use super::{scale_bgra, shrink_bgra};
 
     #[test]
     fn same_size_is_a_copy() {
@@ -58,6 +133,32 @@ mod tests {
         let out = scale_bgra(&img, 64, 48, 40, 30);
         assert_eq!(out.len(), 40 * 30 * 4);
         assert!(out.chunks(4).all(|p| p == [10, 20, 30, 255]));
+    }
+
+    #[test]
+    fn shrinking_keeps_flat_areas_flat() {
+        let img = [10u8, 20, 30, 255].repeat(64 * 48);
+        let out = shrink_bgra(&img, 64, 48, 37, 29);
+        assert_eq!(out.len(), 37 * 29 * 4);
+        assert!(out.chunks(4).all(|p| p == [10, 20, 30, 255]));
+    }
+
+    #[test]
+    fn shrinking_keeps_thin_lines() {
+        // A one-pixel white column every 3 columns: shrunk 3×, every output pixel holds a
+        // third of it (bilinear sampling could land on black only and lose the line).
+        let row: Vec<u8> = (0..30)
+            .flat_map(|x| {
+                if x % 3 == 1 {
+                    [255u8; 4]
+                } else {
+                    [0, 0, 0, 255]
+                }
+            })
+            .collect();
+        let img = row.repeat(6);
+        let out = shrink_bgra(&img, 30, 6, 10, 2);
+        assert!(out.chunks(4).all(|p| p == [85, 85, 85, 255]));
     }
 
     #[test]

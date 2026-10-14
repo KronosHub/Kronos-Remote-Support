@@ -53,7 +53,9 @@ impl Default for StreamConfig {
     fn default() -> Self {
         Self {
             source: Source::Screen { display_id: None },
-            max_size: (1920, 1080),
+            // Sharp text on large and Retina screens; slow links and slow machines step
+            // down from here (`rate::scale_for`, `HEAVY_ENCODE`).
+            max_size: (2560, 1600),
             fps: 30,
             bitrate_bps: 4_000_000,
             keyframe_interval: 300,
@@ -140,6 +142,12 @@ impl Drop for StreamHandle {
         self.stop();
     }
 }
+
+/// Average encoding time above this share of the frame interval: the machine struggles
+/// with a large screen, so it is held to [`rate::HEAVY_PIXELS`] for the rest of the session.
+const HEAVY_ENCODE: f64 = 0.6;
+/// Frames encoded before judging the encoding time (the first ones include warm-up).
+const HEAVY_SAMPLE: u32 = 60;
 
 /// Minimum spacing between forced keyframes.
 const MIN_KEYFRAME_GAP: Duration = Duration::from_millis(300);
@@ -303,8 +311,13 @@ fn encode_loop(
 
     let captured_size = source.output_size();
     size.send_replace(captured_size);
+    let captured_pixels = u64::from(captured_size.0) * u64::from(captured_size.1);
     // Resolution in percent of the captured size, lowered while the bandwidth is low.
     let mut scale = 100;
+    // Highest scale this machine encodes fast enough (lowered once if it struggles).
+    let mut cpu_cap = 100;
+    let mut encode_avg: Option<Duration> = None;
+    let mut encoded_frames = 0u32;
     let mut last_rescale: Option<Instant> = None;
     let start = Instant::now();
     let mut last_keyframe: Option<Instant> = None;
@@ -324,7 +337,7 @@ fn encode_loop(
             encoder.set_rate(target, fps);
             interval = Duration::from_secs(1) / fps;
         }
-        let wanted = rate::scale_for(applied_bitrate, scale);
+        let wanted = rate::scale_for(applied_bitrate, scale, captured_pixels).min(cpu_cap);
         let gap = if wanted < scale {
             rate::SCALE_DOWN_GAP
         } else {
@@ -400,8 +413,9 @@ fn encode_loop(
             continue;
         }
         let (width, height) = encoder.size();
+        let work_started = Instant::now();
         let scaled = (scale < 100).then(|| {
-            capture::scale::scale_bgra(&frame.data, frame.width, frame.height, width, height)
+            capture::scale::shrink_bgra(&frame.data, frame.width, frame.height, width, height)
         });
         let data = scaled.as_deref().unwrap_or(&frame.data);
 
@@ -411,7 +425,25 @@ fn encode_loop(
         }
         last_encoded = Some(Instant::now());
         let ts = frame.captured_at.duration_since(start).as_millis() as u64;
-        match encoder.encode_bgra(data, width, height, ts) {
+        let result = encoder.encode_bgra(data, width, height, ts);
+        let took = work_started.elapsed();
+        encode_avg = Some(encode_avg.map_or(took, |avg| avg.mul_f64(0.9) + took.mul_f64(0.1)));
+        encoded_frames = encoded_frames.saturating_add(1);
+        let full_rate = Duration::from_secs(1) / config.fps.max(1);
+        if cpu_cap == 100
+            && encoded_frames >= HEAVY_SAMPLE
+            && u64::from(width) * u64::from(height) > rate::HEAVY_PIXELS
+            && encode_avg.is_some_and(|avg| avg > full_rate.mul_f64(HEAVY_ENCODE))
+        {
+            cpu_cap = rate::scale_to_fit(captured_pixels, rate::HEAVY_PIXELS);
+            tracing::warn!(
+                avg_ms = encode_avg.map(|a| a.as_millis()),
+                size = ?(width, height),
+                cap = cpu_cap,
+                "encoding too slow for this screen size, limiting the resolution"
+            );
+        }
+        match result {
             Ok(Some(encoded)) => {
                 let item = Encoded {
                     data: encoded.data,

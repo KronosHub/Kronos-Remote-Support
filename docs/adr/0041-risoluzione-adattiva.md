@@ -24,3 +24,14 @@ dell'utente (rischio di lasciarlo nero).
   dimensione trasmessa. Le coordinate del mouse si calcolano sull'area dell'immagine, escluse le bande nere; un clic
   sulle bande non viene inviato.
 - Statistiche della barra con larghezza fissa e valori allineati (font monospaziato).
+
+## Aggiornamento 1.2.5 (2026-10-14)
+- **Risoluzione massima** dello stream da 1920×1080 a 2560×1600: sugli schermi grandi e Retina il testo era
+  ridotto anche con la rete buona (es. 2688×1680 punti trasmessi a 1728×1080).
+- **Soglie per pixel** invece che per percentuale: sotto 1,5 Mbit/s al massimo 1920×1080 di pixel, sotto 0,8
+  1440×810, sotto 0,45 960×540 (`rate::PIXEL_BUDGETS`); uno schermo 1080p si comporta come prima, uno 2560×1600
+  scende al 71/53/35 %.
+- **Computer lenti**: se la codifica (riduzione compresa) supera in media il 60 % dell'intervallo tra fotogrammi
+  dopo 60 fotogrammi e l'immagine supera 1080p, la risoluzione resta limitata a 1080p per tutta la sessione.
+- **Riduzione a media d'area** (`capture::scale::shrink_bgra`) invece che bilineare: ogni pixel sorgente conta, le
+  linee sottili del testo non spariscono. La cattura Windows dallo schermo nativo resta bilineare (costo minore).

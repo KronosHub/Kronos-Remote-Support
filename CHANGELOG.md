@@ -6,6 +6,9 @@ Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, qu
 - "Resync per minuto" ora cala davvero dopo un minuto senza resync (nella 1.2.4 restava fermo).
 - Le scorciatoie prese dal tuo computer (es. ⌘⇧4 per lo screenshot, ⌘Tab) non lasciano più ⌘ o ⇧ "premuti" sul
   computer controllato: prima clic e tasti diventavano scorciatoie e sembrava tutto bloccato.
+- Immagine più nitida sugli schermi grandi e Retina: con la rete buona fino a 2560×1600 (prima al massimo 1920×1080).
+  Se il computer controllato fatica a stare dietro, torna da solo a 1080p.
+- Quando la banda cala e la risoluzione viene ridotta, il testo resta più leggibile (riduzione più accurata).
 
 ## 1.2.4 — 2026-10-14
 - "Resync per minuto" è sempre visibile, anche quando è 0, e conta solo l'ultimo minuto: cala da solo quando la
