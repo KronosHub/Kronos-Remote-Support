@@ -86,6 +86,10 @@ impl InputSink {
                     let event = match rx.recv() {
                         Ok(Msg::Event(event)) => event,
                         Ok(Msg::Area(area)) => {
+                            #[cfg(target_os = "macos")]
+                            if area != replayer.area {
+                                replayer.refresh_display();
+                            }
                             replayer.area = area;
                             continue;
                         }
@@ -264,6 +268,17 @@ impl Replayer {
             }
         }
         Ok(())
+    }
+
+    /// enigo places clicks using the main display it found when created. Leaving the login
+    /// or lock screen replaces that display (the capture then restarts with a new area), and
+    /// clicks went nowhere while the pointer still moved: start a fresh enigo.
+    #[cfg(target_os = "macos")]
+    fn refresh_display(&mut self) {
+        match Enigo::new(&Settings::default()) {
+            Ok(enigo) => self.enigo = enigo,
+            Err(e) => tracing::warn!("cannot refresh the display used for clicks: {e}"),
+        }
     }
 
     #[cfg(target_os = "macos")]

@@ -3,7 +3,10 @@
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
 ## 1.2.4 — 2026-10-14
-- "Resync per minuto" è sempre visibile nella barra delle statistiche, anche quando è 0.
+- "Resync per minuto" è sempre visibile, anche quando è 0, e conta solo l'ultimo minuto: cala da solo quando la
+  rete torna stabile (prima restava fermo all'ultimo valore).
+- Mac: i clic del mouse funzionano anche dopo essere passati dalla schermata di blocco o di accesso (prima il
+  puntatore si muoveva ma i clic andavano persi).
 
 ## 1.2.3 — 2026-10-14
 - Collegandosi a un computer fermo sulla schermata di accesso o di blocco, dopo aver inserito la password

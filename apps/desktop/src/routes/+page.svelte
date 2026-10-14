@@ -199,7 +199,8 @@
   const worst = (...levels: Level[]): Level =>
     levels.includes("critical") ? "critical" : levels.includes("caution") ? "caution" : "";
   const RESYNC_WINDOW_MS = 60_000;
-  const recentResyncs = (v: View) => v.resyncs.filter((t) => Date.now() - t < RESYNC_WINDOW_MS).length;
+  // Reads the reactive `now`, so the count drops as resyncs get older than a minute.
+  const recentResyncs = (v: View) => v.resyncs.filter((t) => now - t < RESYNC_WINDOW_MS).length;
   const mb = (ram: number) => (ram >= 1000 ? `${decimal(ram / 1000, 1)} GB` : `${ram} MB`);
   /** Right-aligns a value in a fixed number of characters (monospaced toolbar stats). */
   const pad = (text: string | number, width: number) => String(text).padStart(width);
