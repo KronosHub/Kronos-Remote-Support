@@ -423,3 +423,13 @@
   con i puntini), contorno giallo/rosso con soglie, "Resync per minuto"; puntatore a freccia.
 - Toolchain Rust temporanea nella cartella di lavoro: clippy pulito su macOS e sulla cattura Windows; i test non
   linkano in locale (manca parte del toolchain Swift), girano in CI.
+
+## 2026-10-14 — Clic sul Mac dopo il cambio di schermo (v1.2.4)
+- 1.2.3 provata: la cattura riparte da sola passando dalla schermata di blocco e rientrando (log: display 205 →
+  206 a 1920×1080 → 207 a 5376×3360).
+- Però i clic non funzionavano più (il puntatore sì): enigo su macOS calcola la posizione dei clic con il display
+  principale trovato alla creazione (`CGDisplay::main()`), sparito dopo lo scambio. Ora l'input ricrea enigo quando
+  cambia l'area (cioè quando la cattura riparte su un altro schermo).
+- "Resync per minuto": sempre visibile e ricalcolato con l'orologio reattivo della pagina (prima la cifra cambiava
+  solo all'arrivo di un nuovo resync e restava ferma).
+- Aperto: Invio remoto sulla schermata di accesso del Mac rifiutato come password errata.
