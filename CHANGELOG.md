@@ -2,6 +2,9 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.3.1 — 2026-10-14
+- "Resync per minuto" compare solo quando nell'ultimo minuto c'è stato almeno un resync (come "Qualità ridotta").
+
 ## 1.3.0 — 2026-10-14
 - Audio: pulsante "Audio" nella barra per ascoltare il suono del computer controllato (Mac e Windows). È spento
   all'inizio di ogni sessione e usa poca banda (circa 64 kbit/s).
