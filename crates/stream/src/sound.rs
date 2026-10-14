@@ -102,6 +102,8 @@ impl HostSound {
 
 /// Viewer side.
 pub struct ViewerSound {
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+    volume: f32,
     #[cfg(any(target_os = "macos", windows))]
     player: Arc<Mutex<Option<audio::Player>>>,
     task: tokio::task::JoinHandle<()>,
@@ -133,9 +135,19 @@ impl ViewerSound {
             }
         });
         Self {
+            volume: 1.0,
             #[cfg(any(target_os = "macos", windows))]
             player,
             task,
+        }
+    }
+
+    /// Volume of the host's sound here, 0.0–1.0 (kept for the next time it is turned on).
+    pub fn set_volume(&mut self, volume: f32) {
+        self.volume = volume.clamp(0.0, 1.0);
+        #[cfg(any(target_os = "macos", windows))]
+        if let Some(player) = self.player.lock().unwrap().as_ref() {
+            player.set_volume(self.volume);
         }
     }
 
@@ -155,6 +167,7 @@ impl ViewerSound {
                 .map_err(|e| e.to_string())?;
             match started {
                 Ok(player) => {
+                    player.set_volume(self.volume);
                     *self.player.lock().unwrap() = Some(player);
                     Ok(())
                 }

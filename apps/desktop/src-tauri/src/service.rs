@@ -842,6 +842,12 @@ impl Service {
         }
     }
 
+    pub fn set_audio_volume(&self, session: SessionId, volume: f32) {
+        if let Some(viewer) = self.shared.viewers.lock().unwrap().get(&session) {
+            let _ = viewer.commands.send(ViewerCommand::Volume(volume));
+        }
+    }
+
     pub fn set_audio(&self, session: SessionId, enabled: bool) {
         if let Some(viewer) = self.shared.viewers.lock().unwrap().get(&session) {
             let _ = viewer.commands.send(ViewerCommand::Audio(enabled));

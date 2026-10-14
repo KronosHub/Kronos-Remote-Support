@@ -35,3 +35,8 @@ dell'utente (rischio di lasciarlo nero).
   dopo 60 fotogrammi e l'immagine supera 1080p, la risoluzione resta limitata a 1080p per tutta la sessione.
 - **Riduzione a media d'area** (`capture::scale::shrink_bgra`) invece che bilineare: ogni pixel sorgente conta, le
   linee sottili del testo non spariscono. La cattura Windows dallo schermo nativo resta bilineare (costo minore).
+
+## Aggiornamento 1.5.1 (2026-10-14)
+- **Bitrate massimo per dimensione**: 4 Mbit/s fino a 1080p, in proporzione ai pixel oltre (tetto 6 Mbit/s;
+  `rate::max_bitrate_for`); vale per l'encoder e per il regolatore (quindi "Qualità ridotta" resta corretta).
+- **Keyframe periodico ogni 60 s** (prima 10 s): le richieste di keyframe dopo le perdite restano immediate.

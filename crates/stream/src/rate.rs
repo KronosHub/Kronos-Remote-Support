@@ -137,6 +137,16 @@ const PIXEL_BUDGETS: [(u32, u64); 3] = [
 ];
 /// Pixels of 1080p: the limit for machines that encode too slowly and with HD turned off.
 pub const FULL_HD_PIXELS: u64 = 1920 * 1080;
+/// Highest bitrate for pictures up to 1080p; larger ones get more in proportion.
+const FULL_HD_BITRATE: u64 = 4_000_000;
+
+/// Highest bitrate worth sending for a picture of `pixels`: 4 Mbit/s up to 1080p, more for
+/// larger pictures in proportion (fine text in motion), never above `cap`. A static screen
+/// costs little either way; this only matters while it changes and the link allows it.
+pub fn max_bitrate_for(pixels: u64, cap: u32) -> u32 {
+    let scaled = FULL_HD_BITRATE * pixels.max(FULL_HD_PIXELS) / FULL_HD_PIXELS;
+    scaled.min(u64::from(cap)) as u32
+}
 /// Before going back up, the bitrate must exceed the step's threshold by this much (in
 /// percent): each resolution change costs a keyframe, so it must not flap.
 const SCALE_UP_MARGIN: u32 = 125;
@@ -278,6 +288,15 @@ mod tests {
         assert_eq!(scale_for(570_000, 50, FULL_HD), 75);
         assert_eq!(scale_for(1_000_000, 75, FULL_HD), 100);
         assert_eq!(scale_for(1_000_000, 50, FULL_HD), 100);
+    }
+
+    #[test]
+    fn bitrate_grows_with_the_picture() {
+        assert_eq!(max_bitrate_for(1366 * 768, 6_000_000), 4_000_000);
+        assert_eq!(max_bitrate_for(1920 * 1080, 6_000_000), 4_000_000);
+        assert_eq!(max_bitrate_for(2560 * 1440, 6_000_000), 6_000_000);
+        assert_eq!(max_bitrate_for(2560 * 1600, 6_000_000), 6_000_000);
+        assert_eq!(max_bitrate_for(2560 * 1600, 3_000_000), 3_000_000);
     }
 
     #[test]

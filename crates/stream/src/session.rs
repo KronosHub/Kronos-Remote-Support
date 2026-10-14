@@ -152,7 +152,6 @@ pub async fn serve_host(
     mut on_event: impl FnMut(HostEvent),
 ) {
     let allow_control = config.allow_control;
-    let mut rate = RateController::new(config.bitrate_bps);
     let mut handle = match crate::start(config.clone(), video.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
@@ -173,6 +172,12 @@ pub async fn serve_host(
             return;
         }
     };
+    // The most this picture is worth: more for large screens (`rate::max_bitrate_for`).
+    let max_bitrate = rate::max_bitrate_for(
+        u64::from(handle.width) * u64::from(handle.height),
+        config.bitrate_bps,
+    );
+    let mut rate = RateController::new(max_bitrate);
     send(
         &channel,
         &ControlMsg::StreamStarted {
@@ -641,6 +646,8 @@ pub enum ViewerCommand {
     HighResolution(bool),
     /// Play the host's sound or not (off by default).
     Audio(bool),
+    /// Volume of the host's sound here, 0.0–1.0.
+    Volume(f32),
     /// Block the host's own mouse and keyboard or not.
     BlockInput(bool),
     Stop,
@@ -774,6 +781,7 @@ pub async fn run_viewer(
                 Some(ViewerCommand::BlockInput(enabled)) => {
                     send(&channel, &ControlMsg::BlockInput { enabled }).await;
                 }
+                Some(ViewerCommand::Volume(volume)) => sound.set_volume(volume),
                 Some(ViewerCommand::Audio(enabled)) => {
                     // Speakers first, so the first packets are not lost; host last on stop.
                     match sound.set_enabled(enabled).await {

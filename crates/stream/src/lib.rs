@@ -58,8 +58,11 @@ impl Default for StreamConfig {
             // down from here (`rate::scale_for`, `HEAVY_ENCODE`).
             max_size: (2560, 1600),
             fps: 30,
-            bitrate_bps: 4_000_000,
-            keyframe_interval: 300,
+            // Cap; the actual limit follows the picture size (`rate::max_bitrate_for`).
+            bitrate_bps: 6_000_000,
+            // A full picture every 60 s at most: losses ask for one at once anyway, and the
+            // bits go to the picture instead.
+            keyframe_interval: 1800,
             allow_control: true,
             allow_clipboard: true,
             agent_product: None,
@@ -295,7 +298,10 @@ fn encode_loop(
     let new_encoder = |(width, height): (u32, u32)| {
         H264Encoder::new(&EncoderSettings {
             fps: config.fps,
-            bitrate_bps: config.bitrate_bps,
+            bitrate_bps: rate::max_bitrate_for(
+                u64::from(width) * u64::from(height),
+                config.bitrate_bps,
+            ),
             keyframe_interval: config.keyframe_interval,
             ..EncoderSettings::new(width, height)
         })

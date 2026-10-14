@@ -701,10 +701,19 @@
     addLog("info", "accesso non presidiato disattivato");
   }
 
+  let editingName = $state(false);
+
   async function saveName() {
-    if (nameDraft.trim() === (displayName ?? "")) return;
-    displayName = await invoke<string | null>("set_display_name", { name: nameDraft });
+    if (nameDraft.trim() !== (displayName ?? "")) {
+      displayName = await invoke<string | null>("set_display_name", { name: nameDraft });
+    }
     nameDraft = displayName ?? "";
+    editingName = false;
+  }
+
+  function cancelName() {
+    nameDraft = displayName ?? "";
+    editingName = false;
   }
 
   async function toggleAutostart() {
@@ -1034,9 +1043,31 @@
     invoke("set_block_input", { session: view.session, enabled: !view.inputBlocked });
   }
 
+  /** Volume of the partner's sound, 0–100, remembered on this computer. */
+  let audioVolume = $state(
+    (() => {
+      try {
+        const saved = localStorage.getItem("audioVolume");
+        const value = Number(saved);
+        return saved !== null && Number.isFinite(value) ? value : 100;
+      } catch {
+        return 100;
+      }
+    })(),
+  );
+
+  function setVolume(value: number) {
+    audioVolume = value;
+    try {
+      localStorage.setItem("audioVolume", String(value));
+    } catch {}
+    if (view) invoke("set_audio_volume", { session: view.session, volume: value / 100 });
+  }
+
   function toggleAudio() {
     if (!view) return;
     view.audio = !view.audio;
+    if (view.audio) invoke("set_audio_volume", { session: view.session, volume: audioVolume / 100 });
     invoke("set_audio", { session: view.session, enabled: view.audio });
   }
 
@@ -1084,11 +1115,6 @@
   async function toggleClipboard() {
     if (!view || view.clipboard === null) return;
     await invoke("set_clipboard", { session: view.session, enabled: !view.clipboard });
-  }
-
-  async function toggleFullscreen() {
-    const win = getCurrentWindow();
-    await win.setFullscreen(!(await win.isFullscreen()));
   }
 
   async function stopHosting(session: number) {
@@ -1184,6 +1210,18 @@
             onclick={toggleAudio}
             title={view.audio ? "Audio del partner attivo. Clic per spegnerlo" : "Ascolta l'audio del partner (circa 64 kbit/s)"}
             >Audio</button>
+          {#if view.audio}
+            <input
+              class="volume"
+              type="range"
+              min="0"
+              max="100"
+              value={audioVolume}
+              oninput={(e) => setVolume(Number(e.currentTarget.value))}
+              title="Volume: {audioVolume} %"
+              aria-label="Volume dell'audio del partner"
+            />
+          {/if}
         {/if}
         {#if !view.ended}
           <button
@@ -1193,7 +1231,6 @@
               ? "HD attivo: con la rete buona fino a 2560×1600. Clic per limitare a 1080p (meno banda e CPU)"
               : "HD spento: al massimo 1080p. Clic per riattivarlo"}>HD</button>
         {/if}
-        <button onclick={toggleFullscreen}>Schermo intero</button>
         <button class="danger" onclick={disconnect}>{view.ended ? "Chiudi" : "Disconnetti"}</button>
       </div>
       <div class="toolbar-row stats">
@@ -1382,16 +1419,28 @@
       </div>
       <p class="hint small">Con questa password ogni connessione va confermata da te.</p>
 
-      <label class="label" for="display-name">Il tuo nome</label>
-      <input
-        id="display-name"
-        class="name-input"
-        maxlength="40"
-        placeholder="es. Alberto – Kronos"
-        bind:value={nameDraft}
-        onblur={saveName}
-        onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-      />
+      <span class="label">Il tuo nome</span>
+      {#if editingName}
+        <form class="value-row" onsubmit={(e) => { e.preventDefault(); saveName(); }}>
+          <!-- svelte-ignore a11y_autofocus -->
+          <input
+            class="name-input"
+            maxlength="40"
+            placeholder="es. Alberto – Kronos"
+            aria-label="Il tuo nome"
+            autofocus
+            bind:value={nameDraft}
+            onkeydown={(e) => e.key === "Escape" && cancelName()}
+          />
+          <button class="icon-btn primary" type="submit">Salva</button>
+          <button class="icon-btn" type="button" onclick={cancelName}>Annulla</button>
+        </form>
+      {:else}
+        <div class="value-row">
+          <span class:muted={!displayName}>{displayName ?? "Nessun nome"}</span>
+          <button class="icon-btn" onclick={() => (editingName = true)}>Modifica</button>
+        </div>
+      {/if}
       <p class="hint small">Lo vede chi ti controlla e chi controlli, accanto al tuo ID.</p>
 
       {#if permissions?.required && (!permissions.screen || !permissions.accessibility)}
@@ -2534,6 +2583,10 @@
   .toolbar-row.transfer progress,
   .banner-progress {
     width: 180px;
+    accent-color: var(--accent);
+  }
+  .volume {
+    width: 90px;
     accent-color: var(--accent);
   }
   /* New chat message while the chat is closed: the button pulses. */

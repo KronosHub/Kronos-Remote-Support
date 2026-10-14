@@ -1,6 +1,7 @@
 //! Viewer side: decodes the host's packets and plays them on the default output device.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 use anyhow::{Context, Result, anyhow};
@@ -40,6 +41,8 @@ pub struct Player {
     incoming: Mutex<Incoming>,
     /// Device rate, for the queue limits.
     rate: u32,
+    /// Volume (0.0–1.0, as `f32` bits), applied by the output callback.
+    volume: Arc<AtomicU32>,
     _stop: mpsc::Sender<()>,
 }
 
@@ -52,10 +55,12 @@ impl Player {
         let (stop, stopped) = mpsc::channel::<()>();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<u32>>();
         let shared = queue.clone();
+        let volume = Arc::new(AtomicU32::new(1.0f32.to_bits()));
+        let gain = volume.clone();
         // cpal streams are not `Send`: a thread owns the stream until the player is dropped.
         std::thread::Builder::new()
             .name("audio-playback".into())
-            .spawn(move || match open(shared) {
+            .spawn(move || match open(shared, gain) {
                 Ok((stream, rate)) => {
                     let _ = ready_tx.send(Ok(rate));
                     let _ = stopped.recv();
@@ -78,8 +83,15 @@ impl Player {
                 resampled: Vec::new(),
             }),
             rate,
+            volume,
             _stop: stop,
         })
+    }
+
+    /// Sets the volume, 0.0 (silent) to 1.0 (as sent).
+    pub fn set_volume(&self, volume: f32) {
+        self.volume
+            .store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 
     /// Queues one wire packet (see [`crate::packet`]).
@@ -126,7 +138,7 @@ impl Player {
 }
 
 /// Opens the default output device; returns the stream and its sample rate.
-fn open(queue: Arc<Mutex<Queue>>) -> Result<(Stream, u32)> {
+fn open(queue: Arc<Mutex<Queue>>, volume: Arc<AtomicU32>) -> Result<(Stream, u32)> {
     let device = cpal::default_host()
         .default_output_device()
         .context("no audio output device")?;
@@ -138,6 +150,7 @@ fn open(queue: Arc<Mutex<Queue>>) -> Result<(Stream, u32)> {
     // Fills `frames` of `channels` from the queue (silence while buffering or dry).
     let fill = move |out: &mut dyn FnMut(usize, f32), frames: usize| {
         let mut queue = queue.lock().unwrap();
+        let gain = f32::from_bits(volume.load(Ordering::Relaxed));
         for frame in 0..frames {
             let stereo = if queue.buffering || queue.samples.len() < 2 {
                 if !queue.buffering {
@@ -157,7 +170,7 @@ fn open(queue: Arc<Mutex<Queue>>) -> Result<(Stream, u32)> {
                     (_, 1) => stereo[1],
                     _ => 0.0,
                 };
-                out(frame * channels + c, s);
+                out(frame * channels + c, s * gain);
             }
         }
     };

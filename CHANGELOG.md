@@ -2,6 +2,16 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.5.1 — 2026-10-14
+- Audio: accanto al pulsante "Audio", quando è acceso, c'è uno slider per regolare il volume (ricordato per le
+  sessioni successive). Al suo posto non c'è più il pulsante "Schermo intero": si usa quello della finestra (il
+  pulsante verde su Mac, "Ingrandisci" su Windows).
+- Il tuo nome si cambia con "Modifica" e si conferma con "Salva" (o Invio; Esc annulla).
+- Immagine più definita in movimento sugli schermi grandi: fino a 6 Mbit/s oltre il 1080p (prima 4), solo quando lo
+  schermo cambia e la rete lo permette; con lo schermo fermo il consumo non cambia.
+- Meno immagini complete di "rinfresco" (una al minuto invece di ogni 10 secondi): la banda risparmiata va alla
+  qualità; dopo una perdita di dati l'immagine viene comunque ricostruita subito.
+
 ## 1.5.0 — 2026-10-14
 - Copia/incolla di file: barra di avanzamento in alto con percentuale, dati trasferiti e velocità (nella finestra di
   controllo e, sul computer controllato, nella barra della condivisione). Limite: 500 MB e 10.000 file per copia.

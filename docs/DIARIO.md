@@ -473,3 +473,9 @@
   portata davanti, si apre invece una finestrella di chat (capability estesa a `chat-*`); i messaggi scritti in una
   finestra compaiono nelle altre (`HostChatSent`).
 - Regola dall'utente: release minori (x.y.Z) per le modifiche piccole.
+
+## 2026-10-14 — Volume e qualità (v1.5.1)
+- Audio provato dall'utente: funziona. Aggiunto lo slider del volume al posto di "Schermo intero" (si usa il
+  pulsante della finestra).
+- Più qualità senza banda in più a schermo fermo: bitrate massimo proporzionale ai pixel oltre il 1080p (fino a
+  6 Mbit/s), keyframe periodico ogni 60 s invece di 10 s.

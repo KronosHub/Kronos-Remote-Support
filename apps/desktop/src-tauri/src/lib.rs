@@ -315,6 +315,11 @@ fn set_block_input(service: State<'_, Service>, session: u64, enabled: bool) {
 }
 
 #[tauri::command]
+fn set_audio_volume(service: State<'_, Service>, session: u64, volume: f32) {
+    service.set_audio_volume(session, volume);
+}
+
+#[tauri::command]
 fn set_audio(service: State<'_, Service>, session: u64, enabled: bool) {
     service.set_audio(session, enabled);
 }
@@ -639,6 +644,7 @@ pub fn run() {
             select_display,
             set_high_resolution,
             set_audio,
+            set_audio_volume,
             set_block_input,
             display_name,
             set_display_name,
