@@ -167,7 +167,7 @@ fn shell_execute_self_elevated(args: &[&str], wait: bool) -> Result<bool> {
         info.lpVerb = verb.as_ptr();
         info.lpFile = file.as_ptr();
         info.lpParameters = params_w.as_ptr();
-        info.nShow = SW_HIDE as i32;
+        info.nShow = SW_HIDE;
         if ShellExecuteExW(&mut info) == 0 {
             // 1223 = ERROR_CANCELLED (user said no to UAC).
             let err = std::io::Error::last_os_error();
@@ -583,12 +583,12 @@ fn service_loop() -> Result<()> {
             .as_ref()
             .is_some_and(|(_, h)| unsafe { WaitForSingleObject(*h, 0) } == WAIT_OBJECT_0);
         let moved = agent.as_ref().is_some_and(|(s, _)| *s != session);
-        if exited || moved {
-            if let Some((_, h)) = agent.take() {
-                unsafe {
-                    TerminateProcess(h, 0);
-                    CloseHandle(h);
-                }
+        if (exited || moved)
+            && let Some((_, h)) = agent.take()
+        {
+            unsafe {
+                TerminateProcess(h, 0);
+                CloseHandle(h);
             }
         }
         if agent.is_none() && session != u32::MAX {
