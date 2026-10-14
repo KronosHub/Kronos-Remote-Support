@@ -2,6 +2,9 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.2.4 — 2026-10-14
+- "Resync per minuto" è sempre visibile nella barra delle statistiche, anche quando è 0.
+
 ## 1.2.3 — 2026-10-14
 - Collegandosi a un computer fermo sulla schermata di accesso o di blocco, dopo aver inserito la password
   l'immagine riprende da sola, senza doversi riconnettere (Mac e Windows).

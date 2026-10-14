@@ -938,7 +938,7 @@
           <span class="stat-v mono" style="min-width: 15ch">{pad(rate(view.limited.kbps), 11)}</span>
         </span>
       {/if}
-      {#if recentResyncs(view) > 0}
+      {#if view.width}
         {@const count = recentResyncs(view)}
         <span class="stat {level(count, 2, 5)}"
           title="Volte nell'ultimo minuto in cui l'immagine è stata ricostruita da capo perché si erano persi dati in rete (giallo da 2, rosso da 5)">
