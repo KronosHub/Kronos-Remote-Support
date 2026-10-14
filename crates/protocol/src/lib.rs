@@ -94,6 +94,9 @@ pub enum ControlMsg {
     AudioUnavailable {
         message: String,
     },
+    /// Either side: the clipboard file transfer under way was cancelled; the sender stops,
+    /// the receiver drops what it got. Older peers ignore it.
+    TransferCancelled,
     /// Viewer → host: block the host's own mouse and keyboard during the session, or not.
     BlockInput {
         enabled: bool,

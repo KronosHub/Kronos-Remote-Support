@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use protocol::ControlMsg;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use transport::{DataChannel, DataChannelEvent};
 
@@ -34,6 +34,8 @@ pub(crate) struct ClipboardShare {
     received_dir: Arc<Mutex<Option<PathBuf>>>,
     /// Whether the reader keeps what the peer sends: only while sharing is on here.
     accepting: Arc<AtomicBool>,
+    /// Wakes the reader to drop the transfer it is receiving (cancelled).
+    drop_incoming: Arc<Notify>,
     /// Progress of the files we send and receive.
     progress_tx: mpsc::UnboundedSender<TransferProgress>,
     progress: mpsc::UnboundedReceiver<TransferProgress>,
@@ -55,6 +57,7 @@ impl ClipboardShare {
     pub(crate) fn new(files: oneshot::Receiver<Arc<dyn DataChannel>>) -> Self {
         let (progress_tx, progress) = mpsc::unbounded_channel();
         Self {
+            drop_incoming: Arc::default(),
             progress_tx,
             progress,
             sync: None,
@@ -250,6 +253,21 @@ impl ClipboardShare {
         Some(message)
     }
 
+    /// Stops the file transfer under way in either direction (sending: no more chunks;
+    /// receiving: what arrived is deleted). With `tell`, the peer is told to do the same.
+    pub(crate) async fn cancel_transfer(&mut self, control: &Arc<dyn DataChannel>, tell: bool) {
+        if let Some(task) = self.sending.take() {
+            task.abort();
+        }
+        self.drop_incoming.notify_one();
+        if tell {
+            let _ = control
+                .send_text(&ControlMsg::TransferCancelled.to_json())
+                .await;
+        }
+        tracing::info!(by_us = tell, "clipboard transfer cancelled");
+    }
+
     fn take_transfer_id(&mut self) -> u32 {
         let id = self.next_transfer;
         self.next_transfer = self.next_transfer.wrapping_add(1);
@@ -261,9 +279,19 @@ impl ClipboardShare {
         let mut receiver = FileReceiver::private(self.received_dir.clone())
             .with_progress(self.progress_tx.clone());
         let accepting = self.accepting.clone();
+        let drop_incoming = self.drop_incoming.clone();
         self.incoming = Some(rx);
         self.reader = Some(tokio::spawn(async move {
-            while let Some(event) = channel.poll().await {
+            loop {
+                let event = tokio::select! {
+                    event = channel.poll() => event,
+                    () = drop_incoming.notified() => {
+                        // Later chunks of that transfer find nothing to write into.
+                        receiver.discard();
+                        continue;
+                    }
+                };
+                let Some(event) = event else { break };
                 match event {
                     DataChannelEvent::OnMessage(message) => {
                         // Sharing off here: nothing the peer sends is kept, not even on disk.

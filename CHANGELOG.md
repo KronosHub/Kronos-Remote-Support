@@ -2,6 +2,10 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.5.2 — 2026-10-14
+- Pulsante ✕ accanto alla barra di avanzamento per interrompere il trasferimento di un file: lo può fare chi
+  invia o chi riceve, l'altro computer viene avvisato e i file arrivati a metà vengono cancellati.
+
 ## 1.5.1 — 2026-10-14
 - Audio: accanto al pulsante "Audio", quando è acceso, c'è uno slider per regolare il volume (ricordato per le
   sessioni successive). Al suo posto non c'è più il pulsante "Schermo intero": si usa quello della finestra (il

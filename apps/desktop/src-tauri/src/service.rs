@@ -842,6 +842,15 @@ impl Service {
         }
     }
 
+    /// Stops the clipboard file transfer of a session we view or share.
+    pub fn cancel_transfer(&self, session: SessionId) {
+        if let Some(viewer) = self.shared.viewers.lock().unwrap().get(&session) {
+            let _ = viewer.commands.send(ViewerCommand::CancelTransfer);
+        } else if let Some(host) = self.shared.hosting.lock().unwrap().get(&session) {
+            let _ = host.send(HostCommand::CancelTransfer);
+        }
+    }
+
     pub fn set_audio_volume(&self, session: SessionId, volume: f32) {
         if let Some(viewer) = self.shared.viewers.lock().unwrap().get(&session) {
             let _ = viewer.commands.send(ViewerCommand::Volume(volume));

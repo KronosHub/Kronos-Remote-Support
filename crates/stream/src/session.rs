@@ -139,6 +139,8 @@ pub enum HostCommand {
     Stop,
     /// A chat message typed on the host, to show on the viewer.
     Chat(String),
+    /// Stop the clipboard file transfer under way.
+    CancelTransfer,
 }
 
 /// Host: streams until the viewer leaves, the channel closes or `Stop` arrives.
@@ -337,6 +339,10 @@ pub async fn serve_host(
                     }
                 }
                 Some(ControlMsg::Clipboard { text }) => clipboard.remote_text(text),
+                Some(ControlMsg::TransferCancelled) => {
+                    clipboard.cancel_transfer(&channel, false).await;
+                    on_event(HostEvent::Clipboard("trasferimento annullato dal partner".into()));
+                }
                 Some(ControlMsg::BlockInput { enabled }) => {
                     let (blocked, message) = if !enabled {
                         local_block = None;
@@ -423,6 +429,10 @@ pub async fn serve_host(
                 None => break "connessione chiusa".to_owned(),
             },
             cmd = commands.recv() => match cmd {
+                Some(HostCommand::CancelTransfer) => {
+                    clipboard.cancel_transfer(&channel, true).await;
+                    on_event(HostEvent::Clipboard("trasferimento annullato".into()));
+                }
                 Some(HostCommand::Chat(text)) => {
                     send(&channel, &ControlMsg::Chat { text }).await;
                 }
@@ -648,6 +658,8 @@ pub enum ViewerCommand {
     Audio(bool),
     /// Volume of the host's sound here, 0.0–1.0.
     Volume(f32),
+    /// Stop the clipboard file transfer under way.
+    CancelTransfer,
     /// Block the host's own mouse and keyboard or not.
     BlockInput(bool),
     Stop,
@@ -731,6 +743,10 @@ pub async fn run_viewer(
                     on_event(ViewerEvent::Rtt(rtt));
                 }
                 Some(ControlMsg::Clipboard { text }) => clipboard.remote_text(text),
+                Some(ControlMsg::TransferCancelled) => {
+                    clipboard.cancel_transfer(&channel, false).await;
+                    on_event(ViewerEvent::Clipboard("trasferimento annullato dal partner".into()));
+                }
                 // The host does not allow clipboard sharing.
                 Some(ControlMsg::ClipboardMode { enabled: false }) => {
                     clipboard.set_enabled(false, false).await;
@@ -782,6 +798,10 @@ pub async fn run_viewer(
                     send(&channel, &ControlMsg::BlockInput { enabled }).await;
                 }
                 Some(ViewerCommand::Volume(volume)) => sound.set_volume(volume),
+                Some(ViewerCommand::CancelTransfer) => {
+                    clipboard.cancel_transfer(&channel, true).await;
+                    on_event(ViewerEvent::Clipboard("trasferimento annullato".into()));
+                }
                 Some(ViewerCommand::Audio(enabled)) => {
                     // Speakers first, so the first packets are not lost; host last on stop.
                     match sound.set_enabled(enabled).await {

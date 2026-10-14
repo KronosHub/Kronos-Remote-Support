@@ -821,6 +821,10 @@
     await invoke("send_chat", { session: chatPopupSession, text });
   }
 
+  function cancelTransfer(session: number) {
+    invoke("cancel_transfer", { session });
+  }
+
   /** "12,3 MB di 40,0 MB · 3,1 MB/s · 31 %" */
   function transferText(t: Transfer) {
     const mbs = (b: number) => `${decimal(b / 1_000_000, 1)} MB`;
@@ -1285,6 +1289,8 @@
         <div class="toolbar-row transfer">
           <progress max={view.transfer.total || 1} value={view.transfer.done}></progress>
           <span class="mono small">{transferText(view.transfer)}</span>
+          <button class="icon-btn cancel-transfer" onclick={() => view && cancelTransfer(view.session)}
+            title="Interrompi il trasferimento" aria-label="Interrompi il trasferimento">✕</button>
         </div>
       {/if}
     </div>
@@ -1380,6 +1386,8 @@
       {#if h.transfer}
         <progress class="banner-progress" max={h.transfer.total || 1} value={h.transfer.done}></progress>
         <span class="mono small">{transferText(h.transfer)}</span>
+        <button class="icon-btn cancel-transfer" onclick={() => cancelTransfer(h.session)}
+          title="Interrompi il trasferimento" aria-label="Interrompi il trasferimento">✕</button>
       {/if}
       {#if h.blocked}
         <span class="badge warn" title="Chi ti controlla ha bloccato mouse e tastiera di questo computer">
@@ -2584,6 +2592,10 @@
   .banner-progress {
     width: 180px;
     accent-color: var(--accent);
+  }
+  .cancel-transfer {
+    padding: 1px 8px;
+    line-height: 1.2;
   }
   .volume {
     width: 90px;
