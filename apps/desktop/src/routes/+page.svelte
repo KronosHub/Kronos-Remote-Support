@@ -292,8 +292,8 @@
         if (view?.session === event.session && !view.resyncStarted) {
           view.resyncStarted = true;
         } else if (view?.session === event.session) {
-          const now = Date.now();
-          view.resyncs = [...view.resyncs.filter((t) => now - t < RESYNC_WINDOW_MS), now];
+          const at = Date.now();
+          view.resyncs = [...view.resyncs.filter((t) => at - t < RESYNC_WINDOW_MS), at];
         }
         break;
       case "view_rtt":
@@ -359,10 +359,13 @@
 
   onMount(() => {
     const unlisten = listen<UiEvent>("service", (e) => handle(e.payload));
+    // Clock for countdowns and the resyncs of the last minute (session windows too).
+    const timer = setInterval(() => (now = Date.now()), 250);
     if (viewSession !== null) {
       openView(viewSession);
       return () => {
         unlisten.then((f) => f());
+        clearInterval(timer);
       };
     }
     invoke<"quick" | "full">("app_mode").then((m) => (mode = m));
@@ -390,7 +393,6 @@
     );
     // Quiet check shortly after start; the button shows if something is available.
     const firstCheck = setTimeout(checkUpdate, 4000);
-    const timer = setInterval(() => (now = Date.now()), 250);
     return () => {
       unlisten.then((f) => f());
       unlistenProgress.then((f) => f());
@@ -781,7 +783,34 @@
     );
   }
 
+  /** Modifier keys and the event flag telling whether they are still held. */
+  const modifiers: [string, (e: MouseEvent | KeyboardEvent) => boolean][] = [
+    ["MetaLeft", (e) => e.metaKey],
+    ["MetaRight", (e) => e.metaKey],
+    ["ShiftLeft", (e) => e.shiftKey],
+    ["ShiftRight", (e) => e.shiftKey],
+    ["ControlLeft", (e) => e.ctrlKey],
+    ["ControlRight", (e) => e.ctrlKey],
+    ["AltLeft", (e) => e.altKey],
+    ["AltRight", (e) => e.altKey],
+  ];
+
+  /**
+   * Releases on the partner the modifiers no longer held here. Shortcuts taken by this
+   * system (⌘⇧4 screenshot, ⌘Tab...) swallow the key-up, and ⌘⇧ then stayed down on the
+   * partner: every click and key became a shortcut.
+   */
+  function syncModifiers(e: MouseEvent | KeyboardEvent) {
+    for (const [code, held] of modifiers) {
+      if (keysDown.has(code) && !held(e)) {
+        keysDown.delete(code);
+        sendInput({ k: "key", code, down: false });
+      }
+    }
+  }
+
   function onMouseMove(e: MouseEvent) {
+    syncModifiers(e);
     pendingMove = normalized(e);
     if (moveScheduled) return;
     moveScheduled = true;
@@ -795,6 +824,7 @@
   function onMouseButton(e: MouseEvent, down: boolean) {
     e.preventDefault();
     canvas?.focus();
+    syncModifiers(e);
     const button = buttons[e.button];
     if (!button) return;
     // A click on the black bars must not land on the partner's screen edge; the release
@@ -826,6 +856,8 @@
   function onKey(e: KeyboardEvent, down: boolean) {
     if (!view?.control || !e.code) return;
     e.preventDefault();
+    // The key's own flag is not yet/still set on its keydown/keyup: check the others only.
+    if (!modifiers.some(([code]) => code === e.code)) syncModifiers(e);
     // Injected keys do not auto-repeat on macOS and Windows: forward this side's repeats
     // (a held arrow keeps moving the cursor). Linux hosts drop them (X repeats by itself).
     if (down) keysDown.add(e.code);
