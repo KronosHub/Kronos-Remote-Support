@@ -442,3 +442,15 @@
   rilascia quelli spariti.
 - Nitidezza (richiesta utente): massimo 2560×1600, soglie per pixel, limite a 1080p se la codifica è lenta, riduzione
   a media d'area con test. Test locali ora possibili con `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
+
+## 2026-10-14 — Audio e HD (v1.3.0, ADR 0044)
+- 1.2.5 provata: "Resync per minuto" e ⌘⇧ dopo lo screenshot funzionano (il Mac di chi controlla era rimasto alla 1.2.4).
+- Pulsante HD: `HighResolution { enabled }`, il loop di codifica limita a 1080p di pixel quando è spento (subito,
+  senza attendere gli intervalli), mantenuto nei riavvii della cattura.
+- Audio: nuovo crate `audio` (cattura ScreenCaptureKit / WASAPI loopback, Opus con il crate `opus`, ricampionamento
+  lineare, riproduzione cpal con coda e mascheramento delle perdite), canale `audio` non ordinato senza
+  ritrasmissioni, pulsante "Audio". Prova da terminale non possibile (manca il permesso Registrazione schermo al
+  terminale); riproduzione avviata correttamente.
+- Il job Windows di checks.yml ora fa clippy e test di `audio` e `stream`: ha fatto emergere due avvisi clippy
+  nell'agente Windows, corretti.
+- Aggiornamenti: controllo all'apertura della sezione e ogni 4 ore.

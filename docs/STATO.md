@@ -1,9 +1,12 @@
 # Stato del progetto
 
 **Ultimo aggiornamento:** 2026-10-14
-**Fase corrente:** v1.2.5 (nitidezza: fino a 2560×1600, riduzione a media d'area; modificatori rilasciati; resync per minuto corretto) — v1.2.4 (clic sul Mac dopo il cambio di schermo, resync per minuto dinamico) — v1.2.3 (cattura che riparte dopo la schermata di accesso/blocco, ripetizione tasti, computer controllato sempre sveglio, statistiche colorate; ADR 0042, 0043) — v1.2.2 (risoluzione ridotta con poca banda, viewer a tutta finestra, statistiche a larghezza fissa; ADR 0041) — v1.2.1 (codice pubblico su `KronosHub/Kronos-Remote-Support`, ADR 0040) — v1.2.0 (revisione di sicurezza prima dell'apertura del codice, ADR 0039) — v1.1.1 (fix rete locale: tutti gli indirizzi, ripiego sul server, ID sessione compatibili con JS) — v1.1.0 barra laterale stile TeamViewer (ADR 0038) — v1.0.0 (chat tra host e guest, ADR 0037; prima release stabile) — v0.13.0 (nomi LAN, popup fine sessione, barra riordinata; ADR 0036) — v0.12.0 (signaling su Cloudflare, ADR 0035) — v0.11.0 (collegamento in rete locale senza server, ADR 0034) — v0.10.0 (agente Windows UAC/lock screen, ADR 0033) — v0.9.3 (installer Windows chiude l'app prima di aggiornare) — v0.9.2 (fix disattivazione password personale) — v0.9.1 cattura condivisa, fix Disconnetti — v0.9.0: finestra separata per sessione, appunti condivisi (testo e file), più controllori (ADR 0032)
+**Fase corrente:** v1.3.0 (audio del computer controllato su Mac e Windows, pulsante HD, controllo aggiornamenti periodico; ADR 0044) — v1.2.5 (nitidezza: fino a 2560×1600, riduzione a media d'area; modificatori rilasciati; resync per minuto corretto) — v1.2.4 (clic sul Mac dopo il cambio di schermo, resync per minuto dinamico) — v1.2.3 (cattura che riparte dopo la schermata di accesso/blocco, ripetizione tasti, computer controllato sempre sveglio, statistiche colorate; ADR 0042, 0043) — v1.2.2 (risoluzione ridotta con poca banda, viewer a tutta finestra, statistiche a larghezza fissa; ADR 0041) — v1.2.1 (codice pubblico su `KronosHub/Kronos-Remote-Support`, ADR 0040) — v1.2.0 (revisione di sicurezza prima dell'apertura del codice, ADR 0039) — v1.1.1 (fix rete locale: tutti gli indirizzi, ripiego sul server, ID sessione compatibili con JS) — v1.1.0 barra laterale stile TeamViewer (ADR 0038) — v1.0.0 (chat tra host e guest, ADR 0037; prima release stabile) — v0.13.0 (nomi LAN, popup fine sessione, barra riordinata; ADR 0036) — v0.12.0 (signaling su Cloudflare, ADR 0035) — v0.11.0 (collegamento in rete locale senza server, ADR 0034) — v0.10.0 (agente Windows UAC/lock screen, ADR 0033) — v0.9.3 (installer Windows chiude l'app prima di aggiornare) — v0.9.2 (fix disattivazione password personale) — v0.9.1 cattura condivisa, fix Disconnetti — v0.9.0: finestra separata per sessione, appunti condivisi (testo e file), più controllori (ADR 0032)
 
 ## Fatto
+- 1.3.0: audio dell'host (ScreenCaptureKit / loopback WASAPI → Opus 48 kHz 64 kbit/s → data channel non ordinato →
+  riproduzione con coda di 60 ms), pulsante "Audio" spento di default e nascosto su Linux (ADR 0044); pulsante "HD"
+  (off = massimo 1080p); aggiornamenti controllati all'apertura della sezione e ogni 4 ore. Da provare sul campo
 - 1.2.5: stream fino a 2560×1600 con soglie per pixel e limite a 1080p sui computer lenti, riduzione a media
   d'area (ADR 0041, aggiornamento); il viewer rilascia ⌘⇧⌃⌥ non più premuti (scorciatoie locali come ⌘⇧4);
   orologio anche nelle finestre di controllo ("Resync per minuto" cala davvero)
@@ -53,6 +56,8 @@
 - Test reali macOS: 1080p@30 ok (~17 ms/frame); Retina 3340x2160 solo ~11 fps (dettagli in DIARIO.md)
 
 ## Prossimo passo
+- **Provare la 1.3.0**: audio da Mac e da Windows (qualità, ritardo, sincronia con il video), pulsante HD; entrambi i
+  computer vanno aggiornati (le versioni precedenti non aprono il canale audio).
 - **Invio sulla schermata di accesso del Mac** (aperto): la password scritta da remoto è giusta (minuscole e numeri,
   i pallini restano), ma l'Invio remoto dà "password errata" mentre l'Invio fisico entra. Ipotesi: tasto simulato
   rifiutato. Prove chieste: clic sulla freccia invece di Invio; password scritta sul Mac e Invio da remoto.
