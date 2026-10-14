@@ -1,9 +1,10 @@
 # Stato del progetto
 
 **Ultimo aggiornamento:** 2026-10-13
-**Fase corrente:** v1.2.1 (codice pubblico su `KronosHub/Kronos-Remote-Support`, ADR 0040) — v1.2.0 (revisione di sicurezza prima dell'apertura del codice, ADR 0039) — v1.1.1 (fix rete locale: tutti gli indirizzi, ripiego sul server, ID sessione compatibili con JS) — v1.1.0 barra laterale stile TeamViewer (ADR 0038) — v1.0.0 (chat tra host e guest, ADR 0037; prima release stabile) — v0.13.0 (nomi LAN, popup fine sessione, barra riordinata; ADR 0036) — v0.12.0 (signaling su Cloudflare, ADR 0035) — v0.11.0 (collegamento in rete locale senza server, ADR 0034) — v0.10.0 (agente Windows UAC/lock screen, ADR 0033) — v0.9.3 (installer Windows chiude l'app prima di aggiornare) — v0.9.2 (fix disattivazione password personale) — v0.9.1 cattura condivisa, fix Disconnetti — v0.9.0: finestra separata per sessione, appunti condivisi (testo e file), più controllori (ADR 0032)
+**Fase corrente:** v1.2.2 (risoluzione ridotta con poca banda, viewer a tutta finestra, statistiche a larghezza fissa; ADR 0041) — v1.2.1 (codice pubblico su `KronosHub/Kronos-Remote-Support`, ADR 0040) — v1.2.0 (revisione di sicurezza prima dell'apertura del codice, ADR 0039) — v1.1.1 (fix rete locale: tutti gli indirizzi, ripiego sul server, ID sessione compatibili con JS) — v1.1.0 barra laterale stile TeamViewer (ADR 0038) — v1.0.0 (chat tra host e guest, ADR 0037; prima release stabile) — v0.13.0 (nomi LAN, popup fine sessione, barra riordinata; ADR 0036) — v0.12.0 (signaling su Cloudflare, ADR 0035) — v0.11.0 (collegamento in rete locale senza server, ADR 0034) — v0.10.0 (agente Windows UAC/lock screen, ADR 0033) — v0.9.3 (installer Windows chiude l'app prima di aggiornare) — v0.9.2 (fix disattivazione password personale) — v0.9.1 cattura condivisa, fix Disconnetti — v0.9.0: finestra separata per sessione, appunti condivisi (testo e file), più controllori (ADR 0032)
 
 ## Fatto
+- Risoluzione ridotta sotto 0,8/0,45 Mbit/s (75/50 %), viewer che riempie la finestra, statistiche fisse; changelog nell'app (ADR 0041)
 - Worker Cloudflare con i limiti della revisione di sicurezza in produzione (verificato con due peer)
 - Codice aperto (MIT): repository pubblico unico `KronosHub/Kronos-Remote-Support` con sorgente, CI e release; l'updater
   della 1.2.1 cerca prima lì e poi nel vecchio repository delle release (ADR 0040)
@@ -52,7 +53,7 @@
 4. **Firma del codice** (rimandata, per ora nessun acquisto): Authenticode per Windows (WithSecure ha bloccato l'installer 0.8.0
    come sospetto) — Azure Trusted Signing o certificato OV/EV — e Apple Developer per macOS. Alternative gratuite:
    SignPath Foundation (progetti open source), Microsoft Store (MSIX firmato da Microsoft). Intanto: segnalazione falso positivo.
-5. Migliorie: risoluzione ridotta a banda molto bassa; avvio cattura lento su monitor molto grandi; apertura più rapida in relay; dominio per nascondere l'IP;
+5. Migliorie: avvio cattura lento su monitor molto grandi; apertura più rapida in relay; dominio per nascondere l'IP;
    Apple Developer per eliminare l'avviso Gatekeeper.
 
 ## Da fare per l'open source (ADR 0039, 0040)

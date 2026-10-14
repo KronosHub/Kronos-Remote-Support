@@ -400,3 +400,11 @@
 - Changelog nell'app (richiesta utente): `CHANGELOG.md` → note della release → l'app mostra solo le versioni più
   nuove di quella installata (dalla 1.2.2).
 
+## 2026-10-14 — Risoluzione adattiva e viewer (v1.2.2, ADR 0041)
+- Sfondo nero durante la sessione: misurato (x264, 1080p) e scartato, risparmio solo su keyframe e spostamento
+  finestre; su Windows richiederebbe di cambiare lo sfondo dell'utente.
+- Risoluzione ridotta con poca banda: 75 % sotto 0,8 Mbit/s, 50 % sotto 0,45, isteresi e intervalli minimi; nuovo
+  encoder alla nuova dimensione e `StreamStarted` al viewer. Lo schermo dell'host non cambia mai.
+- Viewer: canvas a tutta finestra con proporzioni mantenute, clic sulle bande nere ignorati; statistiche a larghezza
+  fissa. checks.yml verde sul ramo; non ancora provato nell'app compilata.
+
