@@ -94,6 +94,17 @@ pub enum ControlMsg {
     AudioUnavailable {
         message: String,
     },
+    /// Viewer → host: block the host's own mouse and keyboard during the session, or not.
+    BlockInput {
+        enabled: bool,
+    },
+    /// Host → viewer: whether the host's own input is blocked now (after a request, or when
+    /// the person at the host released it with Esc ×3); `message` explains a failure.
+    InputBlocked {
+        blocked: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

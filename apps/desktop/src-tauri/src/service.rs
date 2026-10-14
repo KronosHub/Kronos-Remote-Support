@@ -88,6 +88,8 @@ pub enum UiEvent {
     ViewOpened {
         session: SessionId,
         peer: String,
+        /// The partner's user name, if it set one.
+        peer_name: Option<String>,
     },
     ViewSize {
         session: SessionId,
@@ -174,6 +176,16 @@ pub enum UiEvent {
     HostingStarted {
         session: SessionId,
         peer: String,
+    },
+    /// The partner blocked (or unblocked) this computer's own mouse and keyboard.
+    HostingInputBlocked {
+        session: SessionId,
+        blocked: bool,
+    },
+    /// The partner's own mouse and keyboard are (no longer) blocked.
+    ViewInputBlocked {
+        session: SessionId,
+        blocked: bool,
     },
     HostingEnded {
         session: SessionId,
@@ -318,6 +330,8 @@ struct Shared {
     unattended: Mutex<HashSet<SessionId>>,
     /// Derived personal secret of this device (unattended access), if enabled.
     personal: Mutex<Option<String>>,
+    /// Our user name, shown to partners (none: they see only our id).
+    display_name: Mutex<Option<String>>,
     /// Outgoing sessions still connecting/authenticating: cancel them with a reason.
     connecting: Mutex<HashMap<SessionId, oneshot::Sender<String>>>,
     /// LAN discovery (peers on the local network), when this device's id is known.
@@ -475,6 +489,7 @@ impl Service {
             hosting: Mutex::new(HashMap::new()),
             unattended: Mutex::new(HashSet::new()),
             personal: Mutex::new(personal),
+            display_name: Mutex::new(store.display_name()),
             connecting: Mutex::new(HashMap::new()),
             lan: Mutex::new(None),
             store,
@@ -742,6 +757,27 @@ impl Service {
     pub fn send_input(&self, session: SessionId, event: protocol::InputEvent) {
         if let Some(viewer) = self.shared.viewers.lock().unwrap().get(&session) {
             let _ = viewer.commands.send(ViewerCommand::Input(event));
+        }
+    }
+
+    pub fn display_name(&self) -> Option<String> {
+        self.shared.display_name.lock().unwrap().clone()
+    }
+
+    /// Sets (empty: removes) our user name; returns it as partners will see it.
+    pub fn set_display_name(&self, name: &str) -> Option<String> {
+        let name = transport::handshake::clean_name(name);
+        // Quick Support keeps it for this run only (it writes no files).
+        if let Err(e) = self.shared.store.set_display_name(name.as_deref()) {
+            tracing::debug!("user name not saved: {e}");
+        }
+        *self.shared.display_name.lock().unwrap() = name.clone();
+        name
+    }
+
+    pub fn set_block_input(&self, session: SessionId, enabled: bool) {
+        if let Some(viewer) = self.shared.viewers.lock().unwrap().get(&session) {
+            let _ = viewer.commands.send(ViewerCommand::BlockInput(enabled));
         }
     }
 
@@ -1483,25 +1519,41 @@ async fn serve_partner(
     };
     // Guesses made in parallel all check the same password: one that is right but was
     // replaced meanwhile (after wrong guesses) no longer counts.
-    let approve = async {
-        if shared.password() != temporary {
-            return false;
+    let approve = |name: Option<String>| {
+        let who = peer_label(&from, name.as_deref());
+        let temporary = &temporary;
+        async move {
+            if shared.password() != *temporary {
+                return false;
+            }
+            ask_user(app, shared, session, &who).await
         }
-        ask_user(app, shared, session, &from).await
     };
+    let my_name = shared.display_name.lock().unwrap().clone();
     let personal = shared.personal.lock().unwrap().clone();
     let secrets = handshake::HostSecrets {
         temporary: &temporary,
         personal: personal.as_deref(),
     };
-    let result =
-        handshake::authenticate_host(&channel, secrets, transcript, refuse_early, approve).await;
-    let unattended = matches!(result, Ok(Access::Unattended));
+    let result = handshake::authenticate_host(
+        &channel,
+        secrets,
+        transcript,
+        refuse_early,
+        approve,
+        my_name.as_deref(),
+    )
+    .await;
+    let unattended = matches!(result, Ok((Access::Unattended, _)));
+    // From here on the partner is shown with its name, if it set one.
+    let peer_name = result.as_ref().ok().and_then(|(_, name)| name.clone());
+    let who = peer_label(&from, peer_name.as_deref());
+    let result = result.map(|(access, _)| access);
     match result {
         Ok(Access::Approved) => {}
         // Same for parallel guesses of the personal password.
         Ok(Access::Unattended) if shared.personal_locked_out() => {
-            log(app, "warn", format!("{from}: troppi tentativi falliti"));
+            log(app, "warn", format!("{who}: troppi tentativi falliti"));
             return;
         }
         Ok(Access::Unattended) => {
@@ -1509,18 +1561,18 @@ async fn serve_partner(
             log(
                 app,
                 "info",
-                format!("{from} connesso con la password personale (accesso non presidiato)"),
+                format!("{who} connesso con la password personale (accesso non presidiato)"),
             );
         }
         Err(HandshakeError::BadPassword) => {
             let personal = personal_attempt.load(Ordering::Relaxed);
             shared.record_failure(app, personal);
-            log(app, "warn", format!("{from}: password errata"));
+            log(app, "warn", format!("{who}: password errata"));
             linger(&channel).await;
             return;
         }
         Err(e) => {
-            log(app, "warn", format!("{from}: {e}"));
+            log(app, "warn", format!("{who}: {e}"));
             linger(&channel).await;
             return;
         }
@@ -1533,7 +1585,7 @@ async fn serve_partner(
             log(
                 app,
                 "warn",
-                format!("{from}: password personale non più valida"),
+                format!("{who}: password personale non più valida"),
             );
             return;
         }
@@ -1545,7 +1597,7 @@ async fn serve_partner(
         app,
         UiEvent::HostingStarted {
             session,
-            peer: from.to_string(),
+            peer: who.clone(),
         },
     );
     let hosting_since = Instant::now();
@@ -1567,23 +1619,23 @@ async fn serve_partner(
             HostEvent::Started { width, height } => log(
                 app,
                 "info",
-                format!("schermo condiviso con {from} ({width}x{height})"),
+                format!("schermo condiviso con {who} ({width}x{height})"),
             ),
             HostEvent::Failed(e) => log(app, "error", capture_error_message(&e)),
             HostEvent::ControlUnavailable(e) => log(
                 app,
                 "warn",
-                format!("{from} può vedere ma non controllare: {e}"),
+                format!("{who} può vedere ma non controllare: {e}"),
             ),
             HostEvent::ControlActive => log(
                 app,
                 "info",
-                format!("{from} sta controllando mouse e tastiera"),
+                format!("{who} sta controllando mouse e tastiera"),
             ),
             HostEvent::ControlFailing(e) => log(
                 app,
                 "warn",
-                format!("il controllo remoto da {from} non funziona: {e}"),
+                format!("il controllo remoto da {who} non funziona: {e}"),
             ),
             HostEvent::Chat(text) => {
                 let Some(text) = chat.accept(text) else {
@@ -1596,20 +1648,29 @@ async fn serve_partner(
                     app,
                     UiEvent::HostChat {
                         session,
-                        peer: from.to_string(),
+                        peer: who.clone(),
                         text,
                     },
                 );
             }
             // Logged to file by the stream crate; too frequent for the activity list.
             HostEvent::Quality { .. } => {}
+            HostEvent::InputBlocked(blocked) => {
+                let message = if blocked {
+                    format!("{who} ha bloccato mouse e tastiera di questo computer (Esc tre volte per riprenderli)")
+                } else {
+                    format!("mouse e tastiera di nuovo attivi ({who})")
+                };
+                log(app, "info", message);
+                emit(app, UiEvent::HostingInputBlocked { session, blocked });
+            }
             HostEvent::Clipboard(message) => {
-                log(app, "info", format!("appunti con {from}: {message}"))
+                log(app, "info", format!("appunti con {who}: {message}"))
             }
             HostEvent::Ended(reason) => log(
                 app,
                 "info",
-                format!("condivisione con {from} terminata: {reason}"),
+                format!("condivisione con {who} terminata: {reason}"),
             ),
         },
     )
@@ -1620,7 +1681,7 @@ async fn serve_partner(
         app,
         UiEvent::HostingEnded {
             session,
-            peer: from.to_string(),
+            peer: who.clone(),
             duration_secs: hosting_since.elapsed().as_secs(),
         },
     );
@@ -1636,6 +1697,14 @@ async fn serve_partner(
 }
 
 /// Turns capture errors into something the user can act on.
+/// How a partner is shown: "Name (123 456 789)" if it set a name, else its id.
+fn peer_label(id: &PeerId, name: Option<&str>) -> String {
+    match name {
+        Some(name) => format!("{name} ({id})"),
+        None => id.to_string(),
+    }
+}
+
 fn capture_error_message(error: &str) -> String {
     let lower = error.to_lowercase();
     if lower.contains("permission") || lower.contains("tcc") || lower.contains("permessi") {
@@ -1659,12 +1728,7 @@ async fn linger(channel: &Arc<dyn DataChannel>) {
 }
 
 /// Shows the approval popup and waits for the answer (rejects on timeout).
-async fn ask_user(
-    app: &AppHandle,
-    shared: &Arc<Shared>,
-    session: SessionId,
-    from: &PeerId,
-) -> bool {
+async fn ask_user(app: &AppHandle, shared: &Arc<Shared>, session: SessionId, from: &str) -> bool {
     let (tx, rx) = oneshot::channel();
     shared.approvals.lock().unwrap().insert(session, tx);
     crate::show_main_window(app);
@@ -1707,6 +1771,7 @@ async fn view_partner(
     } = channels;
     let (cancel_tx, cancel_rx) = oneshot::channel::<String>();
     shared.connecting.lock().unwrap().insert(session, cancel_tx);
+    let my_name = shared.display_name.lock().unwrap().clone();
     let timeout = if credential.personal {
         PERSONAL_AUTH_TIMEOUT
     } else {
@@ -1733,11 +1798,12 @@ async fn view_partner(
                 &credential.secret,
                 credential.personal,
                 transcript,
+                my_name.as_deref(),
             ),
         )
         .await
         {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(name)) => Ok(name),
             Ok(Err(e)) => Err(e.to_string()),
             Err(_) => Err("nessuna risposta dal partner".to_owned()),
         }
@@ -1747,10 +1813,13 @@ async fn view_partner(
         reason = cancel_rx => Err(reason.unwrap_or_else(|_| "connessione interrotta".into())),
     };
     shared.connecting.lock().unwrap().remove(&session);
-    if let Err(message) = outcome {
-        log(app, "error", message);
-        return;
-    }
+    let peer_name = match outcome {
+        Ok(name) => name,
+        Err(message) => {
+            log(app, "error", message);
+            return;
+        }
+    };
 
     let (commands_tx, commands) = mpsc::unbounded_channel();
     shared.viewers.lock().unwrap().insert(
@@ -1767,6 +1836,7 @@ async fn view_partner(
     let opened = UiEvent::ViewOpened {
         session,
         peer: partner.to_string(),
+        peer_name,
     };
     // The main window stops its "connecting" spinner; the viewer window gets it on attach.
     emit(app, opened.clone());
@@ -1850,6 +1920,13 @@ async fn view_partner(
             ViewerEvent::Clipboard(message) => {
                 log(app, "info", format!("appunti con {partner}: {message}"));
                 shared.view_event(app, session, UiEvent::ViewNotice { session, message });
+            }
+            ViewerEvent::InputBlocked { blocked, message } => {
+                shared.view_event(app, session, UiEvent::ViewInputBlocked { session, blocked });
+                if let Some(message) = message {
+                    log(app, "info", format!("blocco input del partner: {message}"));
+                    shared.view_event(app, session, UiEvent::ViewNotice { session, message });
+                }
             }
             ViewerEvent::AudioUnavailable(message) => {
                 log(app, "warn", format!("audio non disponibile: {message}"));

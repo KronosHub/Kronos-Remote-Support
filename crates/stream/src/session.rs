@@ -117,6 +117,8 @@ pub enum HostEvent {
         fps: u32,
         limited: bool,
     },
+    /// The viewer blocked (or unblocked) this computer's own mouse and keyboard.
+    InputBlocked(bool),
     Ended(String),
 }
 
@@ -210,6 +212,10 @@ pub async fn serve_host(
     let mut clipboard = ClipboardShare::new(files);
     // No display sleep or screen lock while someone is controlling this machine.
     let awake = crate::awake::KeepAwake::new();
+    // This computer's own mouse and keyboard, blocked on the viewer's request; `released`
+    // fires when the person here takes them back (Esc ×3).
+    let mut local_block: Option<input::block::LocalBlock> = None;
+    let (released_tx, mut released) = mpsc::unbounded_channel::<()>();
     // Sound: off until the viewer asks for it.
     let mut sound = crate::sound::HostSound::new(audio);
     // HD on by default; the viewer may limit the stream to 1080p (kept across restarts).
@@ -237,6 +243,12 @@ pub async fn serve_host(
                     send(&channel, &ControlMsg::InputUnavailable { message: error.clone() }).await;
                     on_event(HostEvent::ControlFailing(error));
                 }
+            }
+            Some(()) = released.recv() => {
+                local_block = None;
+                on_event(HostEvent::InputBlocked(false));
+                let message = Some("sbloccati da chi è davanti al computer (Esc ×3)".to_owned());
+                send(&channel, &ControlMsg::InputBlocked { blocked: false, message }).await;
             }
             change = handle.changed(), if restart_at.is_none() => match change {
                 StreamChange::Resized { width, height } => {
@@ -292,6 +304,35 @@ pub async fn serve_host(
                     }
                 }
                 Some(ControlMsg::Clipboard { text }) => clipboard.remote_text(text),
+                Some(ControlMsg::BlockInput { enabled }) => {
+                    let (blocked, message) = if !enabled {
+                        local_block = None;
+                        (false, None)
+                    } else if local_block.is_some() {
+                        (true, None)
+                    } else if input.is_none() {
+                        (false, Some("controllo remoto non attivo su questo computer".to_owned()))
+                    } else {
+                        let tx = released_tx.clone();
+                        let started = tokio::task::spawn_blocking(move || {
+                            input::block::LocalBlock::start(move || {
+                                let _ = tx.send(());
+                            })
+                        })
+                        .await;
+                        match started {
+                            Ok(Ok(block)) => {
+                                local_block = Some(block);
+                                (true, None)
+                            }
+                            Ok(Err(e)) => (false, Some(format!("{e:#}"))),
+                            Err(e) => (false, Some(e.to_string())),
+                        }
+                    };
+                    tracing::info!(blocked, ?message, "local input block");
+                    on_event(HostEvent::InputBlocked(blocked));
+                    send(&channel, &ControlMsg::InputBlocked { blocked, message }).await;
+                }
                 Some(ControlMsg::Audio { enabled }) => {
                     if let Err(message) = sound.set_enabled(enabled).await {
                         send(&channel, &ControlMsg::AudioUnavailable { message }).await;
@@ -549,6 +590,11 @@ pub enum ViewerEvent {
     },
     /// The host's sound cannot be played (here or on the host); the button goes off.
     AudioUnavailable(String),
+    /// Whether the host's own mouse and keyboard are blocked, and why not if it failed.
+    InputBlocked {
+        blocked: bool,
+        message: Option<String>,
+    },
     Ended(String),
 }
 
@@ -565,6 +611,8 @@ pub enum ViewerCommand {
     HighResolution(bool),
     /// Play the host's sound or not (off by default).
     Audio(bool),
+    /// Block the host's own mouse and keyboard or not.
+    BlockInput(bool),
     Stop,
 }
 
@@ -644,6 +692,9 @@ pub async fn run_viewer(
                     on_event(ViewerEvent::ClipboardEnabled(false));
                 }
                 Some(ControlMsg::Chat { text }) => on_event(ViewerEvent::Chat(text)),
+                Some(ControlMsg::InputBlocked { blocked, message }) => {
+                    on_event(ViewerEvent::InputBlocked { blocked, message });
+                }
                 Some(ControlMsg::AudioUnavailable { message }) => {
                     let _ = sound.set_enabled(false).await;
                     on_event(ViewerEvent::AudioUnavailable(message));
@@ -681,6 +732,9 @@ pub async fn run_viewer(
                 Some(ViewerCommand::SelectDisplay(id)) => send(&channel, &ControlMsg::SelectDisplay { id }).await,
                 Some(ViewerCommand::HighResolution(enabled)) => {
                     send(&channel, &ControlMsg::HighResolution { enabled }).await;
+                }
+                Some(ViewerCommand::BlockInput(enabled)) => {
+                    send(&channel, &ControlMsg::BlockInput { enabled }).await;
                 }
                 Some(ViewerCommand::Audio(enabled)) => {
                     // Speakers first, so the first packets are not lost; host last on stop.

@@ -44,6 +44,9 @@ struct Prefs {
     /// Names the user gave to devices seen on the local network, by device id.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     lan_names: std::collections::BTreeMap<String, String>,
+    /// The user's name, shown to partners.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
 }
 
 pub struct Store {
@@ -144,6 +147,16 @@ impl Store {
         } else {
             prefs.lan_names.insert(id.to_owned(), name.to_owned());
         }
+        self.write(PREFS_FILE, &prefs)
+    }
+
+    pub fn display_name(&self) -> Option<String> {
+        self.read::<Prefs>(PREFS_FILE).and_then(|p| p.display_name)
+    }
+
+    pub fn set_display_name(&self, name: Option<&str>) -> std::io::Result<()> {
+        let mut prefs = self.read::<Prefs>(PREFS_FILE).unwrap_or_default();
+        prefs.display_name = name.map(str::to_owned);
         self.write(PREFS_FILE, &prefs)
     }
 

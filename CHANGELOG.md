@@ -2,8 +2,17 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
-## 1.3.1 — 2026-10-14
-- "Resync per minuto" compare solo quando nell'ultimo minuto c'è stato almeno un resync (come "Qualità ridotta").
+## 1.4.0 — 2026-10-14
+- Il tuo nome: impostalo in "Consenti il controllo". Chi ti controlla lo vede nella richiesta di accesso e durante
+  la sessione; chi controlli lo vede in alto, prima del tuo ID (va aggiornato anche il partner).
+- Blocca input partner: chi controlla può bloccare mouse e tastiera del computer controllato (Mac e Windows), così
+  chi è davanti non interferisce. Chi è davanti al computer lo vede segnalato e può riprenderli premendo Esc tre
+  volte; il blocco finisce comunque con la sessione.
+- Pallino di stato accanto al tipo di connessione: verde se va tutto bene, giallo se c'è almeno un avviso, rosso se
+  c'è un valore critico (passandoci sopra si vede il motivo).
+- Barra della finestra di controllo su due righe: nome, ID e pulsanti sopra, connessione e statistiche sotto (più
+  leggibile sugli schermi piccoli).
+- "Resync per minuto" compare solo quando nell'ultimo minuto c'è stato almeno un resync.
 
 ## 1.3.0 — 2026-10-14
 - Audio: pulsante "Audio" nella barra per ascoltare il suono del computer controllato (Mac e Windows). È spento

@@ -4,6 +4,7 @@
 //! async side only queues events. Keys and buttons still held when the session ends are
 //! released, so a dropped connection never leaves e.g. Shift stuck down.
 
+pub mod block;
 mod keymap;
 
 use std::collections::HashSet;
@@ -197,7 +198,7 @@ impl Replayer {
                 "sessione Wayland: il controllo remoto non è ancora supportato (usa una sessione Xorg)"
             ));
         }
-        let enigo = Enigo::new(&Settings::default()).map_err(|e| match e {
+        let enigo = Enigo::new(&settings()).map_err(|e| match e {
             enigo::NewConError::NoPermission => anyhow!(
                 "permesso Accessibilità mancante: concedilo a Kronos Remote Support in Impostazioni di \
                  Sistema > Privacy e sicurezza > Accessibilità"
@@ -275,7 +276,7 @@ impl Replayer {
     /// clicks went nowhere while the pointer still moved: start a fresh enigo.
     #[cfg(target_os = "macos")]
     fn refresh_display(&mut self) {
-        match Enigo::new(&Settings::default()) {
+        match Enigo::new(&settings()) {
             Ok(enigo) => self.enigo = enigo,
             Err(e) => tracing::warn!("cannot refresh the display used for clicks: {e}"),
         }
@@ -330,6 +331,16 @@ impl Replayer {
     }
 }
 
+/// enigo settings: on macOS our events carry [`block::MARK`], so a local input block lets
+/// them through.
+fn settings() -> Settings {
+    Settings {
+        #[cfg(target_os = "macos")]
+        event_source_user_data: Some(block::MARK),
+        ..Settings::default()
+    }
+}
+
 /// Size of the area mouse coordinates refer to; must match what the capture streams.
 #[cfg(not(target_os = "linux"))]
 fn display_size(enigo: &Enigo) -> Result<(i32, i32)> {
@@ -381,7 +392,7 @@ impl X11Pointer {
 pub fn prompt_accessibility() {
     #[cfg(target_os = "macos")]
     {
-        let _ = Enigo::new(&Settings::default());
+        let _ = Enigo::new(&settings());
     }
 }
 

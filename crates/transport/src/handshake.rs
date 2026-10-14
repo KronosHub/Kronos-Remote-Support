@@ -61,13 +61,40 @@ enum AuthMsg {
     },
     Proof {
         mac: String,
+        /// The viewer's user name (1.4+): sent only once the password checked out, so a
+        /// stranger guessing passwords never learns it. Older hosts ignore it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
     },
     Accepted {
         mac: String,
+        /// The host's user name (1.4+).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
     },
     Denied {
         reason: String,
     },
+}
+
+/// Longest user name shown to the partner.
+pub const MAX_NAME_CHARS: usize = 40;
+
+/// A user name fit to show: trimmed, without control characters, at most
+/// [`MAX_NAME_CHARS`]; `None` if nothing is left. Applied to our own name before sending and
+/// to the partner's on arrival (it comes from the other side).
+pub fn clean_name(name: &str) -> Option<String> {
+    let name: String = name
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(MAX_NAME_CHARS)
+        .collect();
+    (!name.is_empty()).then_some(name)
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -142,12 +169,14 @@ fn unexpected(what: &str, got: &AuthMsg) -> HandshakeError {
 
 /// Viewer side. Resolves once the host verified the password and, for the temporary
 /// password, its user accepted. With `personal`, `password` is the derived personal secret.
+/// Returns the host's user name, if it set one. `name` is ours, sent once the password checked out.
 pub async fn authenticate_viewer(
     channel: &Arc<dyn DataChannel>,
     password: &str,
     personal: bool,
     transcript: Transcript,
-) -> Result<(), HandshakeError> {
+    name: Option<&str>,
+) -> Result<Option<String>, HandshakeError> {
     let (handshake, msg) = Handshake::start(password, Side::Viewer);
     send(
         channel,
@@ -169,14 +198,17 @@ pub async fn authenticate_viewer(
         channel,
         &AuthMsg::Proof {
             mac: hex(&key.proof()),
+            name: name.and_then(clean_name),
         },
     )
     .await?;
 
     match recv(channel).await? {
-        AuthMsg::Accepted { mac } => key
-            .verify_peer(&unhex(&mac)?)
-            .map_err(|_| HandshakeError::BadHostProof),
+        AuthMsg::Accepted { mac, name } => {
+            key.verify_peer(&unhex(&mac)?)
+                .map_err(|_| HandshakeError::BadHostProof)?;
+            Ok(name.as_deref().and_then(clean_name))
+        }
         AuthMsg::Denied { reason } if reason == "password errata" => {
             Err(HandshakeError::BadPassword)
         }
@@ -186,17 +218,20 @@ pub async fn authenticate_viewer(
 }
 
 /// Host side. `refuse_early` is told whether the viewer uses the personal password and may
-/// block before any crypto (rate limiting); `approve` is awaited only for the temporary
-/// password, after it checked out.
-pub async fn authenticate_host<R, F>(
+/// block before any crypto (rate limiting); `approve` (given the viewer's user name) is
+/// awaited only for the temporary password, after it checked out. `name` is ours, sent
+/// with the acceptance. Returns the access granted and the viewer's user name.
+pub async fn authenticate_host<R, A, F>(
     channel: &Arc<dyn DataChannel>,
     secrets: HostSecrets<'_>,
     transcript: Transcript,
     refuse_early: R,
-    approve: F,
-) -> Result<Access, HandshakeError>
+    approve: A,
+    name: Option<&str>,
+) -> Result<(Access, Option<String>), HandshakeError>
 where
     R: FnOnce(bool) -> Option<Refusal>,
+    A: FnOnce(Option<String>) -> F,
     F: Future<Output = bool>,
 {
     let (peer_msg, personal) = match recv(channel).await? {
@@ -228,8 +263,8 @@ where
     )
     .await?;
 
-    let proof = match recv(channel).await? {
-        AuthMsg::Proof { mac } => unhex(&mac)?,
+    let (proof, peer_name) = match recv(channel).await? {
+        AuthMsg::Proof { mac, name } => (unhex(&mac)?, name.as_deref().and_then(clean_name)),
         other => return Err(unexpected("proof", &other)),
     };
     if key.verify_peer(&proof).is_err() {
@@ -239,7 +274,7 @@ where
 
     let access = if personal {
         Access::Unattended
-    } else if approve.await {
+    } else if approve(peer_name.clone()).await {
         Access::Approved
     } else {
         deny(channel, Refusal::Rejected.reason()).await;
@@ -249,10 +284,11 @@ where
         channel,
         &AuthMsg::Accepted {
             mac: hex(&key.proof()),
+            name: name.and_then(clean_name),
         },
     )
     .await?;
-    Ok(access)
+    Ok((access, peer_name))
 }
 
 async fn deny(channel: &Arc<dyn DataChannel>, reason: &str) {
@@ -313,5 +349,29 @@ mod tests {
         })
         .unwrap();
         assert_eq!(personal, r#"{"t":"spake","msg":"00","personal":true}"#);
+        // Names are optional both ways: older peers neither send nor expect them.
+        let old: AuthMsg = serde_json::from_str(r#"{"t":"proof","mac":"00"}"#).unwrap();
+        assert!(matches!(old, AuthMsg::Proof { name: None, .. }));
+        let unnamed = AuthMsg::Accepted {
+            mac: "00".into(),
+            name: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&unnamed).unwrap(),
+            r#"{"t":"accepted","mac":"00"}"#
+        );
+    }
+
+    #[test]
+    fn names_are_cleaned() {
+        assert_eq!(
+            clean_name("  Alberto \n Cioffi\t").as_deref(),
+            Some("Alberto Cioffi")
+        );
+        assert_eq!(clean_name(" \u{7}  "), None);
+        assert_eq!(
+            clean_name(&"x".repeat(100)).map(|n| n.len()),
+            Some(MAX_NAME_CHARS)
+        );
     }
 }

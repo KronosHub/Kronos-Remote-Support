@@ -308,9 +308,15 @@ async fn serve(
             temporary: &password,
             personal: personal.as_deref(),
         };
-        let access =
-            handshake::authenticate_host(&channel, secrets, transcript, |_| None, async { true })
-                .await?;
+        let access = handshake::authenticate_host(
+            &channel,
+            secrets,
+            transcript,
+            |_| None,
+            |_| async { true },
+            None,
+        )
+        .await?;
         anyhow::Ok(access)
     }
     .await;
@@ -340,6 +346,7 @@ async fn serve(
             HostEvent::Started { width, height } => println!("Streaming {width}x{height}"),
             HostEvent::Failed(e) => println!("Cannot stream: {e}"),
             HostEvent::ControlUnavailable(e) => println!("Remote control unavailable: {e}"),
+            HostEvent::InputBlocked(blocked) => println!("Local input blocked: {blocked}"),
             HostEvent::ControlActive => println!("Remote control active"),
             HostEvent::ControlFailing(e) => println!("Remote control failing: {e}"),
             HostEvent::Chat(text) => println!("Chat from viewer: {text}"),
@@ -449,7 +456,7 @@ async fn view(
         .await
         .context("missing DTLS fingerprints")?;
     let (password, personal) = password;
-    handshake::authenticate_viewer(&channel, &password, personal, transcript).await?;
+    handshake::authenticate_viewer(&channel, &password, personal, transcript, None).await?;
     println!("Authenticated");
     match info.connection_path().await {
         Some(path) => println!("Connection path: {path:?}"),
@@ -555,6 +562,12 @@ async fn view(
             }
             ViewerEvent::ControlUnavailable(e) => println!("Host cannot be controlled: {e}"),
             ViewerEvent::AudioUnavailable(e) => println!("Sound unavailable: {e}"),
+            ViewerEvent::InputBlocked { blocked, message } => {
+                println!(
+                    "Host input blocked: {blocked} {}",
+                    message.unwrap_or_default()
+                )
+            }
             ViewerEvent::Displays { displays, current } => {
                 for d in displays {
                     let mark = if d.id == current { "*" } else { " " };

@@ -19,7 +19,7 @@
     | { kind: "log"; level: "info" | "warn" | "error"; message: string }
     | { kind: "approval_request"; session: number; peer: string; timeout_secs: number }
     | { kind: "approval_closed"; session: number }
-    | { kind: "view_opened"; session: number; peer: string }
+    | { kind: "view_opened"; session: number; peer: string; peer_name: string | null }
     | { kind: "view_size"; session: number; width: number; height: number }
     | { kind: "view_rtt"; session: number; ms: number }
     | { kind: "view_resync"; session: number }
@@ -35,6 +35,8 @@
     | { kind: "view_quality"; session: number; kbps: number; fps: number; limited: boolean }
     | { kind: "view_clipboard"; session: number; enabled: boolean }
     | { kind: "view_audio"; session: number; enabled: boolean }
+    | { kind: "view_input_blocked"; session: number; blocked: boolean }
+    | { kind: "hosting_input_blocked"; session: number; blocked: boolean }
     | { kind: "view_notice"; session: number; message: string }
     | { kind: "view_chat"; session: number; text: string }
     | { kind: "host_chat"; session: number; peer: string; text: string }
@@ -68,6 +70,10 @@
     hd: boolean;
     /** The partner's sound plays here (off by default). */
     audio: boolean;
+    /** The partner's own mouse and keyboard are blocked. */
+    inputBlocked: boolean;
+    /** Name the partner set in their app, if any. */
+    peerName: string | null;
     path: Path | null;
     /** Session traffic, kbit/s. */
     net: { rx: number; tx: number } | null;
@@ -99,6 +105,8 @@
     chat: ChatMsg[];
     showChat: boolean;
     unread: number;
+    /** The partner blocked this computer's own mouse and keyboard. */
+    blocked: boolean;
   };
   type DisplayInfo = { id: number; name: string; width: number; height: number; primary: boolean };
   type LogLine = { time: string; level: string; message: string };
@@ -148,6 +156,9 @@
   let uacBusy = $state(false);
   let update = $state<UpdateState>({ kind: "idle" });
   let autostart = $state(false);
+  /** Our user name as partners see it, and the text being edited. */
+  let displayName = $state<string | null>(null);
+  let nameDraft = $state("");
   let usePersonal = $state(false);
   let saveAs = $state("");
   /** Personal password dialog (set / change). */
@@ -204,6 +215,22 @@
   const worst = (...levels: Level[]): Level =>
     levels.includes("critical") ? "critical" : levels.includes("caution") ? "caution" : "";
   const RESYNC_WINDOW_MS = 60_000;
+
+  /** Overall state for the dot next to the connection type: the worst of the statistics. */
+  function connectionLevel(v: View): { level: "ok" | Level; reasons: string[] } {
+    const checks: [Level, string][] = [
+      [level(v.rtt, 150, 300), `Latenza ${v.rtt?.toFixed(0)} ms`],
+      [level(v.local?.cpu, 50, 80), `CPU tua ${v.local?.cpu.toFixed(0)} %`],
+      [level(v.partner?.cpu, 50, 80), `CPU partner ${v.partner?.cpu.toFixed(0)} %`],
+      [level(v.local?.ram, 800, 1500), `Memoria tua ${v.local?.ram} MB`],
+      [level(v.partner?.ram, 800, 1500), `Memoria partner ${v.partner?.ram} MB`],
+      [v.limited ? (v.limited.kbps < 450 ? "critical" : "caution") : "", "Qualità ridotta per la banda"],
+      [level(recentResyncs(v), 2, 5), `${recentResyncs(v)} resync nell'ultimo minuto`],
+    ];
+    const found = checks.filter(([l]) => l !== "");
+    const overall = worst(...found.map(([l]) => l));
+    return { level: overall || "ok", reasons: found.map(([l, why]) => `${l === "critical" ? "Critico" : "Attenzione"}: ${why}`) };
+  }
   // Reads the reactive `now`, so the count drops as resyncs get older than a minute.
   const recentResyncs = (v: View) => v.resyncs.filter((t) => now - t < RESYNC_WINDOW_MS).length;
   const mb = (ram: number) => (ram >= 1000 ? `${decimal(ram / 1000, 1)} GB` : `${ram} MB`);
@@ -253,7 +280,10 @@
       case "view_opened":
         busy = false;
         viewedPeers.set(event.session, event.peer);
-        if (view?.session === event.session) view.peer = event.peer;
+        if (view?.session === event.session) {
+          view.peer = event.peer;
+          view.peerName = event.peer_name;
+        }
         break;
       case "view_size":
         if (view?.session === event.session) {
@@ -320,6 +350,12 @@
       case "view_clipboard":
         if (view?.session === event.session) view.clipboard = event.enabled;
         break;
+      case "view_input_blocked":
+        if (view?.session === event.session) view.inputBlocked = event.blocked;
+        break;
+      case "hosting_input_blocked":
+        hosting = hosting.map((h) => (h.session === event.session ? { ...h, blocked: event.blocked } : h));
+        break;
       case "view_audio":
         if (view?.session === event.session) view.audio = event.enabled;
         break;
@@ -332,7 +368,7 @@
       case "hosting_started":
         hosting = [
           ...hosting,
-          { session: event.session, peer: event.peer, path: null, chat: [], showChat: false, unread: 0 },
+          { session: event.session, peer: event.peer, path: null, chat: [], showChat: false, unread: 0, blocked: false },
         ];
         break;
       case "host_chat": {
@@ -381,6 +417,10 @@
     invoke<Status>("get_status").then((s) => (status = s));
     invoke<Device[]>("list_devices").then((d) => (devices = d));
     invoke<boolean>("get_autostart").then((a) => (autostart = a));
+    invoke<string | null>("display_name").then((n) => {
+      displayName = n;
+      nameDraft = n ?? "";
+    });
     invoke<string>("app_version").then((v) => (appVersion = v));
     const refreshPermissions = () => {
       invoke<Permissions>("get_permissions").then((p) => (permissions = p));
@@ -604,6 +644,12 @@
     addLog("info", "accesso non presidiato disattivato");
   }
 
+  async function saveName() {
+    if (nameDraft.trim() === (displayName ?? "")) return;
+    displayName = await invoke<string | null>("set_display_name", { name: nameDraft });
+    nameDraft = displayName ?? "";
+  }
+
   async function toggleAutostart() {
     try {
       autostart = await invoke<boolean>("set_autostart", { enabled: !autostart });
@@ -652,6 +698,8 @@
       resyncStarted: false,
       hd: true,
       audio: false,
+      inputBlocked: false,
+      peerName: null,
       path: null,
       limited: null,
       net: null,
@@ -900,6 +948,12 @@
   /** This machine can play the partner's sound (not on Linux). */
   let audioSupported = $state(false);
 
+  function toggleBlockInput() {
+    if (!view) return;
+    // Shown once the partner confirms (it may refuse, e.g. on Linux).
+    invoke("set_block_input", { session: view.session, enabled: !view.inputBlocked });
+  }
+
   function toggleAudio() {
     if (!view) return;
     view.audio = !view.audio;
@@ -972,105 +1026,124 @@
 {#if viewSession !== null && view}
   <div class="viewer">
     <div class="toolbar">
-      <span class="mono strong peer">{view.peer}</span>
-      {#if view.path}
-        <span class="badge path {view.path}" title={pathHint[view.path]}>{pathLabel[view.path]}</span>
-      {/if}
-
-      {#if view.width}
-        <span class="stat {level(view.rtt, 150, 300)}"
-          title="Risoluzione, fotogrammi al secondo e latenza (giallo da 150 ms, rosso da 300 ms)">
-          <span class="stat-k">Video</span>
-          <span class="stat-v mono" style="min-width: 28ch">{pad(`${view.width}×${view.height}`, 9)} · {pad(view.fps === null ? "–" : view.fps.toFixed(0), 2)} fps · {pad(view.rtt === null ? "–" : view.rtt.toFixed(0), 4)} ms</span>
-        </span>
-      {/if}
-      {#if view.net}
-        <span class="stat" title="Traffico della sessione: ricevuto ↓ / inviato ↑">
-          <span class="stat-k">Rete</span>
-          <span class="stat-v mono" style="min-width: 29ch">↓ {pad(rate(view.net.rx), 11)} · ↑ {pad(rate(view.net.tx), 11)}</span>
-        </span>
-      {/if}
-      {#if view.local || view.partner}
-        <span
-          class="stat {worst(
-            level(view.local?.cpu, 50, 80),
-            level(view.partner?.cpu, 50, 80),
-            level(view.local?.ram, 800, 1500),
-            level(view.partner?.ram, 800, 1500),
-          )}"
-          title="Risorse usate dall'app: tu / partner (cattura e codifica avvengono sul partner). Giallo da 50 % di CPU o 800 MB, rosso da 80 % o 1,5 GB">
-          <span class="stat-k">Risorse</span>
-          <span class="stat-v mono" style="min-width: 42ch">Tu {view.local ? `${pad(pct(view.local.cpu), 4)} · ${pad(mb(view.local.ram), 7)}` : pad("–", 14)} · Partner {view.partner ? `${pad(pct(view.partner.cpu), 4)} · ${pad(mb(view.partner.ram), 7)}` : pad("–", 14)}</span>
-        </span>
-      {/if}
-      {#if view.limited}
-        <span class="stat {view.limited.kbps < 450 ? 'critical' : 'caution'}"
-          title="Banda insufficiente: il partner ha ridotto qualità e fotogrammi ({view.limited.fps} fps max) e, sotto 0,8 Mbit/s, la risoluzione. Torna al massimo quando la rete migliora.">
-          <span class="stat-k">Qualità ridotta</span>
-          <span class="stat-v mono" style="min-width: 15ch">{pad(rate(view.limited.kbps), 11)}</span>
-        </span>
-      {/if}
-      {#if recentResyncs(view) > 0}
-        {@const count = recentResyncs(view)}
-        <span class="stat {level(count, 2, 5)}"
-          title="Volte nell'ultimo minuto in cui l'immagine è stata ricostruita da capo perché si erano persi dati in rete (giallo da 2, rosso da 5)">
-          <span class="stat-k">Resync per minuto</span>
-          <span class="stat-v mono" style="min-width: 3ch">{pad(count, 3)}</span>
-        </span>
-      {/if}
-      <span class="spacer"></span>
-      {#if view.displays.length > 1}
-        <select
-          class="displays"
-          value={view.currentDisplay}
-          onchange={(e) => selectDisplay(Number(e.currentTarget.value))}
-          title="Schermo del partner da visualizzare"
-        >
-          {#each view.displays as d (d.id)}
-            <option value={d.id}>
-              {d.name} · {d.width}×{d.height}{d.primary ? " · principale" : ""}
-            </option>
-          {/each}
-        </select>
-      {/if}
-      {#if view.clipboard !== null && !view.ended}
-        <button class:active={view.clipboard} onclick={toggleClipboard}
-          title="Testo e file copiati su un computer si possono incollare sull'altro">
-          Appunti {view.clipboard ? "condivisi" : "spenti"}
-        </button>
-      {/if}
-      {#if view.ended}
-        <span class="badge warn">Sessione terminata</span>
-      {:else if view.controlError}
-        <span class="badge warn" title={view.controlError}>Solo visione</span>
-      {:else}
-        <button class:active={view.control} onclick={toggleControl}
-          title="Invia mouse e tastiera al partner">
-          Controllo {view.control ? "attivo" : "spento"}
-        </button>
-      {/if}
-      {#if !view.ended}
-        <button class:active={view.showChat} onclick={() => view && toggleChat(view)} title="Scrivi al partner">
-          Chat{#if view.unread > 0} <span class="chat-badge">{view.unread}</span>{/if}
-        </button>
-      {/if}
-      {#if !view.ended && audioSupported}
-        <button
-          class:active={view.audio}
-          onclick={toggleAudio}
-          title={view.audio ? "Audio del partner attivo. Clic per spegnerlo" : "Ascolta l'audio del partner (circa 64 kbit/s)"}
-          >Audio</button>
-      {/if}
-      {#if !view.ended}
-        <button
-          class:active={view.hd}
-          onclick={toggleHd}
-          title={view.hd
-            ? "HD attivo: con la rete buona fino a 2560×1600. Clic per limitare a 1080p (meno banda e CPU)"
-            : "HD spento: al massimo 1080p. Clic per riattivarlo"}>HD</button>
-      {/if}
-      <button onclick={toggleFullscreen}>Schermo intero</button>
-      <button class="danger" onclick={disconnect}>{view.ended ? "Chiudi" : "Disconnetti"}</button>
+      <div class="toolbar-row">
+        {#if view.peerName}
+          <span class="strong peer-name" title="Nome impostato dal partner">{view.peerName}</span>
+          <span class="muted">·</span>
+        {/if}
+        <span class="mono strong peer">{view.peer}</span>
+        <span class="spacer"></span>
+        {#if view.displays.length > 1}
+          <select
+            class="displays"
+            value={view.currentDisplay}
+            onchange={(e) => selectDisplay(Number(e.currentTarget.value))}
+            title="Schermo del partner da visualizzare"
+          >
+            {#each view.displays as d (d.id)}
+              <option value={d.id}>
+                {d.name} · {d.width}×{d.height}{d.primary ? " · principale" : ""}
+              </option>
+            {/each}
+          </select>
+        {/if}
+        {#if view.clipboard !== null && !view.ended}
+          <button class:active={view.clipboard} onclick={toggleClipboard}
+            title="Testo e file copiati su un computer si possono incollare sull'altro">
+            Appunti {view.clipboard ? "condivisi" : "spenti"}
+          </button>
+        {/if}
+        {#if view.ended}
+          <span class="badge warn">Sessione terminata</span>
+        {:else if view.controlError}
+          <span class="badge warn" title={view.controlError}>Solo visione</span>
+        {:else}
+          <button class:active={view.control} onclick={toggleControl}
+            title="Invia mouse e tastiera al partner">
+            Controllo {view.control ? "attivo" : "spento"}
+          </button>
+        {/if}
+        {#if !view.ended && view.control && !view.controlError}
+          <button
+            class:active={view.inputBlocked}
+            onclick={toggleBlockInput}
+            title={view.inputBlocked
+              ? "Mouse e tastiera del partner bloccati: chi è davanti al suo computer non può usarli (può sbloccarli premendo Esc tre volte). Clic per sbloccarli"
+              : "Blocca mouse e tastiera del partner, così chi è davanti al suo computer non interferisce"}>
+            {view.inputBlocked ? "Input partner bloccato" : "Blocca input partner"}
+          </button>
+        {/if}
+        {#if !view.ended}
+          <button class:active={view.showChat} onclick={() => view && toggleChat(view)} title="Scrivi al partner">
+            Chat{#if view.unread > 0} <span class="chat-badge">{view.unread}</span>{/if}
+          </button>
+        {/if}
+        {#if !view.ended && audioSupported}
+          <button
+            class:active={view.audio}
+            onclick={toggleAudio}
+            title={view.audio ? "Audio del partner attivo. Clic per spegnerlo" : "Ascolta l'audio del partner (circa 64 kbit/s)"}
+            >Audio</button>
+        {/if}
+        {#if !view.ended}
+          <button
+            class:active={view.hd}
+            onclick={toggleHd}
+            title={view.hd
+              ? "HD attivo: con la rete buona fino a 2560×1600. Clic per limitare a 1080p (meno banda e CPU)"
+              : "HD spento: al massimo 1080p. Clic per riattivarlo"}>HD</button>
+        {/if}
+        <button onclick={toggleFullscreen}>Schermo intero</button>
+        <button class="danger" onclick={disconnect}>{view.ended ? "Chiudi" : "Disconnetti"}</button>
+      </div>
+      <div class="toolbar-row stats">
+        <span class="health {connectionLevel(view).level}" title={connectionLevel(view).reasons.join("\n") ||
+            "Connessione in buone condizioni"}></span>
+        {#if view.path}
+          <span class="badge path {view.path}" title={pathHint[view.path]}>{pathLabel[view.path]}</span>
+        {/if}
+        {#if view.width}
+          <span class="stat {level(view.rtt, 150, 300)}"
+            title="Risoluzione, fotogrammi al secondo e latenza (giallo da 150 ms, rosso da 300 ms)">
+            <span class="stat-k">Video</span>
+            <span class="stat-v mono" style="min-width: 28ch">{pad(`${view.width}×${view.height}`, 9)} · {pad(view.fps === null ? "–" : view.fps.toFixed(0), 2)} fps · {pad(view.rtt === null ? "–" : view.rtt.toFixed(0), 4)} ms</span>
+          </span>
+        {/if}
+        {#if view.net}
+          <span class="stat" title="Traffico della sessione: ricevuto ↓ / inviato ↑">
+            <span class="stat-k">Rete</span>
+            <span class="stat-v mono" style="min-width: 29ch">↓ {pad(rate(view.net.rx), 11)} · ↑ {pad(rate(view.net.tx), 11)}</span>
+          </span>
+        {/if}
+        {#if view.local || view.partner}
+          <span
+            class="stat {worst(
+              level(view.local?.cpu, 50, 80),
+              level(view.partner?.cpu, 50, 80),
+              level(view.local?.ram, 800, 1500),
+              level(view.partner?.ram, 800, 1500),
+            )}"
+            title="Risorse usate dall'app: tu / partner (cattura e codifica avvengono sul partner). Giallo da 50 % di CPU o 800 MB, rosso da 80 % o 1,5 GB">
+            <span class="stat-k">Risorse</span>
+            <span class="stat-v mono" style="min-width: 42ch">Tu {view.local ? `${pad(pct(view.local.cpu), 4)} · ${pad(mb(view.local.ram), 7)}` : pad("–", 14)} · Partner {view.partner ? `${pad(pct(view.partner.cpu), 4)} · ${pad(mb(view.partner.ram), 7)}` : pad("–", 14)}</span>
+          </span>
+        {/if}
+        {#if view.limited}
+          <span class="stat {view.limited.kbps < 450 ? 'critical' : 'caution'}"
+            title="Banda insufficiente: il partner ha ridotto qualità e fotogrammi ({view.limited.fps} fps max) e, sotto 0,8 Mbit/s, la risoluzione. Torna al massimo quando la rete migliora.">
+            <span class="stat-k">Qualità ridotta</span>
+            <span class="stat-v mono" style="min-width: 15ch">{pad(rate(view.limited.kbps), 11)}</span>
+          </span>
+        {/if}
+        {#if recentResyncs(view) > 0}
+          {@const count = recentResyncs(view)}
+          <span class="stat {level(count, 2, 5)}"
+            title="Volte nell'ultimo minuto in cui l'immagine è stata ricostruita da capo perché si erano persi dati in rete (giallo da 2, rosso da 5)">
+            <span class="stat-k">Resync per minuto</span>
+            <span class="stat-v mono" style="min-width: 3ch">{pad(count, 3)}</span>
+          </span>
+        {/if}
+      </div>
     </div>
     <div class="screen">
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -1161,6 +1234,11 @@
       {#if h.path}
         <span class="badge path {h.path}" title={pathHint[h.path]}>{pathLabel[h.path]}</span>
       {/if}
+      {#if h.blocked}
+        <span class="badge warn" title="Chi ti controlla ha bloccato mouse e tastiera di questo computer">
+          Mouse e tastiera bloccati · premi Esc tre volte per riprenderli
+        </span>
+      {/if}
       <span class="spacer"></span>
       <button class="icon-btn" onclick={() => openHostChat(h.session)} title="Scrivi a chi ti controlla">
         Chat{#if h.unread > 0} <span class="chat-badge">{h.unread}</span>{/if}
@@ -1193,6 +1271,18 @@
         <button class="icon-btn" onclick={newPassword} title="Genera una nuova password">Nuova</button>
       </div>
       <p class="hint small">Con questa password ogni connessione va confermata da te.</p>
+
+      <label class="label" for="display-name">Il tuo nome</label>
+      <input
+        id="display-name"
+        class="name-input"
+        maxlength="40"
+        placeholder="es. Alberto – Kronos"
+        bind:value={nameDraft}
+        onblur={saveName}
+        onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+      />
+      <p class="hint small">Lo vede chi ti controlla e chi controlli, accanto al tuo ID.</p>
 
       {#if permissions?.required && (!permissions.screen || !permissions.accessibility)}
         <div class="permissions">
@@ -2035,15 +2125,41 @@
   }
   .toolbar {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 12px;
+    flex-direction: column;
+    gap: 6px;
     padding: 6px 12px;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
   }
   .toolbar .peer {
     font-size: 15px;
+  }
+  .toolbar-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    width: 100%;
+  }
+  .name-input {
+    max-width: 320px;
+  }
+  .toolbar .peer-name {
+    font-size: 15px;
+  }
+  /* Overall connection state, always shown: green, yellow (attention), red (critical). */
+  .health {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex: none;
+    background: var(--ok);
+  }
+  .health.caution {
+    background: var(--caution);
+  }
+  .health.critical {
+    background: var(--err);
   }
   .stat {
     display: inline-flex;

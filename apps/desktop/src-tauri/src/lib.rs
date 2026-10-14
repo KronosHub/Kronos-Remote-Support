@@ -246,6 +246,21 @@ fn send_input(service: State<'_, Service>, session: u64, event: protocol::InputE
 }
 
 #[tauri::command]
+fn display_name(service: State<'_, Service>) -> Option<String> {
+    service.display_name()
+}
+
+#[tauri::command]
+fn set_display_name(service: State<'_, Service>, name: String) -> Option<String> {
+    service.set_display_name(&name)
+}
+
+#[tauri::command]
+fn set_block_input(service: State<'_, Service>, session: u64, enabled: bool) {
+    service.set_block_input(session, enabled);
+}
+
+#[tauri::command]
 fn set_audio(service: State<'_, Service>, session: u64, enabled: bool) {
     service.set_audio(session, enabled);
 }
@@ -569,6 +584,9 @@ pub fn run() {
             select_display,
             set_high_resolution,
             set_audio,
+            set_block_input,
+            display_name,
+            set_display_name,
             audio_supported,
             close_view,
             stop_hosting
