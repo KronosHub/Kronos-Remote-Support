@@ -454,3 +454,13 @@
 - Il job Windows di checks.yml ora fa clippy e test di `audio` e `stream`: ha fatto emergere due avvisi clippy
   nell'agente Windows, corretti.
 - Aggiornamenti: controllo all'apertura della sezione e ogni 4 ore.
+
+## 2026-10-14 — Nome utente, blocco input, stato (v1.4.0, ADR 0045)
+- Richieste utente: pallino verde/giallo/rosso accanto al tipo di connessione, blocco di mouse e tastiera del
+  computer controllato, nome utente per entrambi, barra su due righe; "Resync per minuto" di nuovo solo se > 0.
+- Nome: in `Proof`/`Accepted` dell'handshake, quindi solo dopo la password verificata; `clean_name` su entrambi i lati.
+- Blocco: `input::block` (macOS event tap con marcatore sugli eventi di enigo, Windows hook di basso livello),
+  Esc ×3 per riprendere il controllo; messaggi `BlockInput`/`InputBlocked`.
+- Sessioni dell'host rimaste aperte dopo la chiusura dal viewer (log: niente `Bye`, niente `leave`, WebRTC sempre
+  connesso): causa lato viewer da chiarire; aggiunto timeout di 20 s senza messaggi su entrambi i lati.
+- CI: un avviso di codice inutilizzato su Linux e la stampa di peer-poc cambiata facevano fallire i test, corretti.
