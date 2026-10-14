@@ -464,3 +464,12 @@
 - Sessioni dell'host rimaste aperte dopo la chiusura dal viewer (log: niente `Bye`, niente `leave`, WebRTC sempre
   connesso): causa lato viewer da chiarire; aggiunto timeout di 20 s senza messaggi su entrambi i lati.
 - CI: un avviso di codice inutilizzato su Linux e la stampa di peer-poc cambiata facevano fallire i test, corretti.
+
+## 2026-10-14 — Avanzamento file e chat flottante (v1.5.0)
+- Domanda utente sul limite del copia/incolla: 500 MB e 10.000 file per copia, testo fino a 1 MB.
+- Barra di avanzamento con velocità: contatore sui chunk inviati e scritti, al massimo ogni 250 ms, velocità
+  smussata; "finished" quando il contatore viene rilasciato (anche su errore o annullamento).
+- Chat: lampeggio del pulsante con messaggi non letti; sul computer controllato la finestra principale non viene più
+  portata davanti, si apre invece una finestrella di chat (capability estesa a `chat-*`); i messaggi scritti in una
+  finestra compaiono nelle altre (`HostChatSent`).
+- Regola dall'utente: release minori (x.y.Z) per le modifiche piccole.
