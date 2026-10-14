@@ -11,12 +11,14 @@ use tokio::task::JoinHandle;
 use transport::{DataChannel, DataChannelEvent};
 
 use crate::clipboard::{self, Change, ClipboardSync};
-use crate::files::{self, FileReceiver, Incoming};
+use crate::files::{self, FileReceiver, Incoming, ProgressReporter, TransferProgress};
 
 pub(crate) enum ClipEvent {
     Local(Option<Change>),
     FilesChannel(Option<Arc<dyn DataChannel>>),
     Received(Option<anyhow::Result<Incoming>>),
+    /// A file transfer moved on (for the progress bar; not passed to `handle`).
+    Progress(TransferProgress),
 }
 
 pub(crate) struct ClipboardShare {
@@ -32,6 +34,9 @@ pub(crate) struct ClipboardShare {
     received_dir: Arc<Mutex<Option<PathBuf>>>,
     /// Whether the reader keeps what the peer sends: only while sharing is on here.
     accepting: Arc<AtomicBool>,
+    /// Progress of the files we send and receive.
+    progress_tx: mpsc::UnboundedSender<TransferProgress>,
+    progress: mpsc::UnboundedReceiver<TransferProgress>,
 }
 
 fn megabytes(bytes: u64) -> String {
@@ -48,7 +53,10 @@ fn items(n: usize) -> String {
 
 impl ClipboardShare {
     pub(crate) fn new(files: oneshot::Receiver<Arc<dyn DataChannel>>) -> Self {
+        let (progress_tx, progress) = mpsc::unbounded_channel();
         Self {
+            progress_tx,
+            progress,
             sync: None,
             files_pending: Some(files),
             files: None,
@@ -103,9 +111,15 @@ impl ClipboardShare {
     }
 
     pub(crate) async fn next(&mut self) -> ClipEvent {
-        let (sync, pending, incoming) =
-            (&mut self.sync, &mut self.files_pending, &mut self.incoming);
+        let (sync, pending, incoming, progress) = (
+            &mut self.sync,
+            &mut self.files_pending,
+            &mut self.incoming,
+            &mut self.progress,
+        );
         tokio::select! {
+            // Never closes: this struct keeps a sender.
+            Some(progress) = progress.recv() => ClipEvent::Progress(progress),
             change = async {
                 match sync {
                     Some(sync) => sync.changes.recv().await,
@@ -190,6 +204,7 @@ impl ClipboardShare {
                 self.remote_text(text);
                 None
             }
+            ClipEvent::Progress(_) => None,
             ClipEvent::Received(Some(Ok(Incoming::Files(received)))) => {
                 let sync = self.sync.as_ref()?;
                 let n = received.items.len();
@@ -222,8 +237,13 @@ impl ClipboardShare {
         if let Some(previous) = self.sending.take() {
             previous.abort();
         }
+        let progress = ProgressReporter::new(
+            self.progress_tx.clone(),
+            true,
+            outgoing.manifest.total_bytes(),
+        );
         self.sending = Some(tokio::spawn(async move {
-            if let Err(e) = files::send(channel, outgoing).await {
+            if let Err(e) = files::send(channel, outgoing, Some(progress)).await {
                 tracing::warn!("clipboard files not sent: {e:#}");
             }
         }));
@@ -238,7 +258,8 @@ impl ClipboardShare {
 
     fn start_reader(&mut self, channel: Arc<dyn DataChannel>) {
         let (tx, rx) = mpsc::unbounded_channel();
-        let mut receiver = FileReceiver::private(self.received_dir.clone());
+        let mut receiver = FileReceiver::private(self.received_dir.clone())
+            .with_progress(self.progress_tx.clone());
         let accepting = self.accepting.clone();
         self.incoming = Some(rx);
         self.reader = Some(tokio::spawn(async move {

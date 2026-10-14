@@ -164,8 +164,91 @@ async fn wait_for_room(channel: &Arc<dyn DataChannel>) {
     }
 }
 
+/// Progress of a file transfer, for a progress bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransferProgress {
+    /// We send (else we receive).
+    pub sending: bool,
+    pub done: u64,
+    pub total: u64,
+    /// Recent speed.
+    pub bytes_per_sec: u64,
+    /// Last report of this transfer (completed, failed or cancelled).
+    pub finished: bool,
+}
+
+/// How often progress is reported at most.
+const PROGRESS_EVERY: Duration = Duration::from_millis(250);
+
+/// Counts the bytes of one transfer and reports them now and then; reports `finished`
+/// when dropped (also on failure or cancellation).
+pub struct ProgressReporter {
+    tx: tokio::sync::mpsc::UnboundedSender<TransferProgress>,
+    sending: bool,
+    done: u64,
+    total: u64,
+    /// Bytes and time at the previous report, for the speed.
+    last: (u64, std::time::Instant),
+    bytes_per_sec: u64,
+}
+
+impl ProgressReporter {
+    pub fn new(
+        tx: tokio::sync::mpsc::UnboundedSender<TransferProgress>,
+        sending: bool,
+        total: u64,
+    ) -> Self {
+        let reporter = Self {
+            tx,
+            sending,
+            done: 0,
+            total,
+            last: (0, std::time::Instant::now()),
+            bytes_per_sec: 0,
+        };
+        reporter.report(false);
+        reporter
+    }
+
+    pub fn advance(&mut self, bytes: u64) {
+        self.done = (self.done + bytes).min(self.total);
+        let elapsed = self.last.1.elapsed();
+        if elapsed >= PROGRESS_EVERY {
+            let rate = (self.done - self.last.0) as f64 / elapsed.as_secs_f64();
+            // Smoothed, so the number does not jump at every report.
+            self.bytes_per_sec = if self.bytes_per_sec == 0 {
+                rate as u64
+            } else {
+                (self.bytes_per_sec as f64 * 0.6 + rate * 0.4) as u64
+            };
+            self.last = (self.done, std::time::Instant::now());
+            self.report(false);
+        }
+    }
+
+    fn report(&self, finished: bool) {
+        let _ = self.tx.send(TransferProgress {
+            sending: self.sending,
+            done: self.done,
+            total: self.total,
+            bytes_per_sec: self.bytes_per_sec,
+            finished,
+        });
+    }
+}
+
+impl Drop for ProgressReporter {
+    fn drop(&mut self) {
+        self.report(true);
+    }
+}
+
 /// Sends a whole transfer. Abort the task to cancel (the receiver drops unfinished ones).
-pub async fn send(channel: Arc<dyn DataChannel>, outgoing: Outgoing) -> Result<()> {
+pub async fn send(
+    channel: Arc<dyn DataChannel>,
+    outgoing: Outgoing,
+    mut progress: Option<ProgressReporter>,
+) -> Result<()> {
     let transfer = outgoing.manifest.transfer;
     for part in manifest_messages(&outgoing.manifest)? {
         channel.send(part).await?;
@@ -195,6 +278,9 @@ pub async fn send(channel: Arc<dyn DataChannel>, outgoing: Outgoing) -> Result<(
             channel
                 .send(frame(b'C', transfer, Some(index as u32), &buffer[..n]))
                 .await?;
+            if let Some(progress) = &mut progress {
+                progress.advance(n as u64);
+            }
         }
     }
     channel.send(frame(b'D', transfer, None, &[])).await?;
@@ -248,6 +334,9 @@ pub struct FileReceiver {
     text: Option<(u32, Vec<u8>)>,
     /// Manifest JSON received so far (`m` messages).
     manifest: Vec<u8>,
+    /// Where to report the progress of incoming files, if anyone listens.
+    progress_tx: Option<tokio::sync::mpsc::UnboundedSender<TransferProgress>>,
+    progress: Option<ProgressReporter>,
 }
 
 /// A remote-supplied relative path as safe components (no `..`, no absolute or drive
@@ -386,7 +475,18 @@ impl FileReceiver {
             current: None,
             text: None,
             manifest: Vec::new(),
+            progress_tx: None,
+            progress: None,
         }
+    }
+
+    /// Reports the progress of incoming files to `tx`.
+    pub fn with_progress(
+        mut self,
+        tx: tokio::sync::mpsc::UnboundedSender<TransferProgress>,
+    ) -> Self {
+        self.progress_tx = Some(tx);
+        self
     }
 
     fn root(&mut self) -> Result<PathBuf> {
@@ -407,6 +507,7 @@ impl FileReceiver {
     /// Forgets anything partly received and deletes the files of the last transfer
     /// (sharing was turned off here).
     pub fn discard(&mut self) {
+        self.progress = None;
         if let Some(previous) = self.current.take() {
             let _ = std::fs::remove_dir_all(&previous.dir);
         }
@@ -490,6 +591,10 @@ impl FileReceiver {
                 return Err(e);
             }
         };
+        self.progress = self
+            .progress_tx
+            .clone()
+            .map(|tx| ProgressReporter::new(tx, false, manifest.total_bytes()));
         self.current = Some(IncomingFiles {
             written: vec![0; manifest.entries.len()],
             manifest,
@@ -527,11 +632,16 @@ impl FileReceiver {
         let (_, file) = incoming.open.as_mut().expect("just opened");
         file.write_all(bytes)?;
         incoming.written[i] += bytes.len() as u64;
+        if let Some(progress) = &mut self.progress {
+            progress.advance(bytes.len() as u64);
+        }
         Ok(())
     }
 
     /// The completed transfer; `None` for one superseded or discarded meanwhile.
     fn finish(&mut self, transfer: u32) -> Result<Option<Received>> {
+        // Done (or failing below): the bar goes away either way.
+        self.progress = None;
         let Some(incoming) = self
             .current
             .as_mut()
@@ -591,6 +701,23 @@ fn encode(outgoing: &Outgoing) -> Vec<BytesMut> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn progress_reports_start_and_finish() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut progress = ProgressReporter::new(tx, true, 100);
+        progress.advance(60);
+        progress.advance(80); // capped at the total
+        drop(progress);
+        let reports: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert_eq!(
+            reports.first().map(|p| (p.done, p.finished)),
+            Some((0, false))
+        );
+        let last = reports.last().unwrap();
+        assert!(last.finished && last.sending);
+        assert_eq!((last.done, last.total), (100, 100));
+    }
     use super::*;
 
     fn temp(name: &str) -> PathBuf {

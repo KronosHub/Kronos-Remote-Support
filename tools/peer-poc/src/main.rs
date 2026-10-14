@@ -350,6 +350,7 @@ async fn serve(
             HostEvent::Failed(e) => println!("Cannot stream: {e}"),
             HostEvent::ControlUnavailable(e) => println!("Remote control unavailable: {e}"),
             HostEvent::InputBlocked(blocked) => println!("Local input blocked: {blocked}"),
+            HostEvent::Transfer(p) => println!("Transfer: {}/{} bytes", p.done, p.total),
             HostEvent::ControlActive => println!("Remote control active"),
             HostEvent::ControlFailing(e) => println!("Remote control failing: {e}"),
             HostEvent::Chat(text) => println!("Chat from viewer: {text}"),
@@ -565,6 +566,7 @@ async fn view(
             }
             ViewerEvent::ControlUnavailable(e) => println!("Host cannot be controlled: {e}"),
             ViewerEvent::AudioUnavailable(e) => println!("Sound unavailable: {e}"),
+            ViewerEvent::Transfer(p) => println!("Transfer: {}/{} bytes", p.done, p.total),
             ViewerEvent::InputBlocked { blocked, message } => {
                 println!(
                     "Host input blocked: {blocked} {}",

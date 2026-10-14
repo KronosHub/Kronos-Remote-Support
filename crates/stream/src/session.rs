@@ -130,6 +130,8 @@ pub enum HostEvent {
     },
     /// The viewer blocked (or unblocked) this computer's own mouse and keyboard.
     InputBlocked(bool),
+    /// A clipboard file transfer moved on.
+    Transfer(crate::files::TransferProgress),
     Ended(String),
 }
 
@@ -239,11 +241,16 @@ pub async fn serve_host(
     let mut restart_at: Option<tokio::time::Instant> = None;
     let reason = loop {
         tokio::select! {
-            event = clipboard.next() => {
-                if let Some(message) = clipboard.handle(event, &channel).await {
-                    on_event(HostEvent::Clipboard(message));
+            event = clipboard.next() => match event {
+                crate::sharing::ClipEvent::Progress(progress) => {
+                    on_event(HostEvent::Transfer(progress));
                 }
-            }
+                event => {
+                    if let Some(message) = clipboard.handle(event, &channel).await {
+                        on_event(HostEvent::Clipboard(message));
+                    }
+                }
+            },
             _ = health_check.tick(), if input.is_some() => {
                 let Some(health) = input.as_ref().map(HostInput::health) else { continue };
                 if health.applied > 0 && !reported_active {
@@ -611,6 +618,8 @@ pub enum ViewerEvent {
     },
     /// The host's sound cannot be played (here or on the host); the button goes off.
     AudioUnavailable(String),
+    /// A clipboard file transfer moved on.
+    Transfer(crate::files::TransferProgress),
     /// Whether the host's own mouse and keyboard are blocked, and why not if it failed.
     InputBlocked {
         blocked: bool,
@@ -777,11 +786,16 @@ pub async fn run_viewer(
                     break "disconnesso".to_owned();
                 }
             },
-            event = clipboard.next() => {
-                if let Some(message) = clipboard.handle(event, &channel).await {
-                    on_event(ViewerEvent::Clipboard(message));
+            event = clipboard.next() => match event {
+                crate::sharing::ClipEvent::Progress(progress) => {
+                    on_event(ViewerEvent::Transfer(progress));
                 }
-            }
+                event => {
+                    if let Some(message) = clipboard.handle(event, &channel).await {
+                        on_event(ViewerEvent::Clipboard(message));
+                    }
+                }
+            },
             _ = ping.tick() => {
                 let now = packets.get();
                 send(&channel, &ControlMsg::Report {

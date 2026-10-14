@@ -202,8 +202,62 @@ fn set_clipboard(service: State<'_, Service>, session: u64, enabled: bool) {
 }
 
 #[tauri::command]
-fn send_chat(service: State<'_, Service>, session: u64, text: String) -> bool {
-    service.send_chat(session, text)
+fn send_chat(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    service: State<'_, Service>,
+    session: u64,
+    text: String,
+) -> bool {
+    service.send_chat(&app, session, text, window.label().to_owned())
+}
+
+#[tauri::command]
+fn host_chat_history(service: State<'_, Service>, session: u64) -> Vec<service::ChatLine> {
+    service.host_chat_history(session)
+}
+
+/// Size of the floating chat window on the shared computer.
+const CHAT_POPUP_SIZE: (f64, f64) = (360.0, 320.0);
+
+/// Shows the floating chat of a shared session, top right and above everything, without
+/// taking the keyboard from the user (the page knows the session from `chat-<session>`).
+pub(crate) fn open_chat_popup(app: &AppHandle, session: u64, peer: &str) {
+    let label = format!("chat-{session}");
+    if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.unminimize();
+        let _ = window.show();
+        return;
+    }
+    let (width, height) = CHAT_POPUP_SIZE;
+    // Top right of the main screen, below the macOS menu bar.
+    let position = app.primary_monitor().ok().flatten().map(|monitor| {
+        let scale = monitor.scale_factor();
+        let screen = monitor.size().to_logical::<f64>(scale);
+        let origin = monitor.position().to_logical::<f64>(scale);
+        (origin.x + screen.width - width - 16.0, origin.y + 48.0)
+    });
+    let url = tauri::WebviewUrl::App("index.html".into());
+    let mut builder = tauri::WebviewWindowBuilder::new(app, &label, url)
+        .title(format!("Chat con {peer}"))
+        .inner_size(width, height)
+        .min_inner_size(280.0, 220.0)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .skip_taskbar(true)
+        .focused(false);
+    if let Some((x, y)) = position {
+        builder = builder.position(x, y);
+    }
+    if let Err(e) = builder.build() {
+        tracing::warn!(session, "cannot open the chat window: {e}");
+    }
+}
+
+pub(crate) fn close_chat_popup(app: &AppHandle, session: u64) {
+    if let Some(window) = app.get_webview_window(&format!("chat-{session}")) {
+        let _ = window.close();
+    }
 }
 
 /// Opens (or focuses) the window for a remote session's screen. The page knows which
@@ -578,6 +632,7 @@ pub fn run() {
             attach_view,
             set_clipboard,
             send_chat,
+            host_chat_history,
             request_keyframe,
             frames_consumed,
             send_input,

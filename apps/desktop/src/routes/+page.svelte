@@ -40,6 +40,16 @@
     | { kind: "view_notice"; session: number; message: string }
     | { kind: "view_chat"; session: number; text: string }
     | { kind: "host_chat"; session: number; peer: string; text: string }
+    | { kind: "host_chat_sent"; session: number; text: string; window: string }
+    | {
+        kind: "transfer";
+        session: number;
+        sending: boolean;
+        done: number;
+        total: number;
+        bytes_per_sec: number;
+        finished: boolean;
+      }
     | { kind: "view_control_unavailable"; session: number; message: string }
     | { kind: "view_displays"; session: number; displays: DisplayInfo[]; current: number }
     | { kind: "view_closed"; session: number; reason: string; duration_secs: number }
@@ -74,6 +84,7 @@
     inputBlocked: boolean;
     /** Name the partner set in their app, if any. */
     peerName: string | null;
+    transfer: Transfer | null;
     path: Path | null;
     /** Session traffic, kbit/s. */
     net: { rx: number; tx: number } | null;
@@ -98,6 +109,8 @@
     | { k: "wheel"; dx: number; dy: number }
     | { k: "key"; code: string; down: boolean };
   type ChatMsg = { mine: boolean; text: string; time: string };
+  /** A clipboard file transfer under way (progress bar). */
+  type Transfer = { sending: boolean; done: number; total: number; rate: number };
   type Hosting = {
     session: number;
     peer: string;
@@ -107,6 +120,7 @@
     unread: number;
     /** The partner blocked this computer's own mouse and keyboard. */
     blocked: boolean;
+    transfer: Transfer | null;
   };
   type DisplayInfo = { id: number; name: string; width: number; height: number; primary: boolean };
   type LogLine = { time: string; level: string; message: string };
@@ -177,6 +191,13 @@
     const label = getCurrentWindow().label;
     return label.startsWith("view-") ? Number(label.slice(5)) : null;
   })();
+  /** This window is the floating chat of a shared session (`chat-<session>`). */
+  const chatPopupSession = (() => {
+    const label = getCurrentWindow().label;
+    return label.startsWith("chat-") ? Number(label.slice(5)) : null;
+  })();
+  let popupChat = $state<ChatMsg[]>([]);
+  let popupPeer = $state("");
   let hosting = $state<Hosting[]>([]);
   let canvas = $state<HTMLCanvasElement | null>(null);
   let remote: RemoteVideo | null = null;
@@ -368,10 +389,33 @@
       case "hosting_started":
         hosting = [
           ...hosting,
-          { session: event.session, peer: event.peer, path: null, chat: [], showChat: false, unread: 0, blocked: false },
+          { session: event.session, peer: event.peer, path: null, chat: [], showChat: false, unread: 0, blocked: false, transfer: null },
         ];
         break;
+      case "host_chat_sent": {
+        // Written in another window: show it here too.
+        if (event.window === getCurrentWindow().label) break;
+        if (chatPopupSession === event.session) {
+          popupChat.push({ mine: true, text: event.text, time: nowTime() });
+        }
+        const h = hosting.find((x) => x.session === event.session);
+        if (h) h.chat.push({ mine: true, text: event.text, time: nowTime() });
+        break;
+      }
+      case "transfer": {
+        const t = event.finished
+          ? null
+          : { sending: event.sending, done: event.done, total: event.total, rate: event.bytes_per_sec };
+        if (view?.session === event.session) view.transfer = t;
+        hosting = hosting.map((h) => (h.session === event.session ? { ...h, transfer: t } : h));
+        break;
+      }
       case "host_chat": {
+        if (chatPopupSession === event.session) {
+          popupPeer = event.peer;
+          popupChat.push({ mine: false, text: event.text, time: nowTime() });
+          scrollPopup();
+        }
         const h = hosting.find((x) => x.session === event.session);
         if (h) receiveChat(h, event.text);
         break;
@@ -403,6 +447,19 @@
 
   onMount(() => {
     const unlisten = listen<UiEvent>("service", (e) => handle(e.payload));
+    if (chatPopupSession !== null) {
+      invoke<{ mine: boolean; text: string }[]>("host_chat_history", { session: chatPopupSession }).then((lines) => {
+        // The history already holds whatever arrived while this window was loading.
+        popupChat = lines.map((l) => ({ ...l, time: "" }));
+        scrollPopup();
+      });
+      getCurrentWindow()
+        .title()
+        .then((t) => (popupPeer = t.replace(/^Chat con /, "")));
+      return () => {
+        unlisten.then((f) => f());
+      };
+    }
     // Clock for countdowns and the resyncs of the last minute (session windows too).
     const timer = setInterval(() => (now = Date.now()), 250);
     if (viewSession !== null) {
@@ -700,6 +757,7 @@
       audio: false,
       inputBlocked: false,
       peerName: null,
+      transfer: null,
       path: null,
       limited: null,
       net: null,
@@ -737,6 +795,28 @@
     target.showChat = !target.showChat;
     if (target.showChat) target.unread = 0;
     chatDraft = "";
+  }
+
+  let popupLog = $state<HTMLDivElement | null>(null);
+  function scrollPopup() {
+    tick().then(() => popupLog?.scrollTo({ top: popupLog.scrollHeight }));
+  }
+  let popupDraft = $state("");
+  async function sendPopupChat(event: SubmitEvent) {
+    event.preventDefault();
+    const text = popupDraft.trim();
+    if (!text || chatPopupSession === null) return;
+    popupDraft = "";
+    popupChat.push({ mine: true, text, time: nowTime() });
+    scrollPopup();
+    await invoke("send_chat", { session: chatPopupSession, text });
+  }
+
+  /** "12,3 MB di 40,0 MB · 3,1 MB/s · 31 %" */
+  function transferText(t: Transfer) {
+    const mbs = (b: number) => `${decimal(b / 1_000_000, 1)} MB`;
+    const pctDone = t.total > 0 ? Math.floor((t.done / t.total) * 100) : 0;
+    return `${t.sending ? "Invio" : "Ricezione"} file · ${pctDone} % · ${mbs(t.done)} di ${mbs(t.total)} · ${mbs(t.rate)}/s`;
   }
 
   /** Hosted session whose chat the Chat page shows (null: the first one). */
@@ -1023,7 +1103,23 @@
   });
 </script>
 
-{#if viewSession !== null && view}
+{#if chatPopupSession !== null}
+  <div class="popup-chat">
+    <div class="chat-log" bind:this={popupLog}>
+      {#each popupChat as m}
+        <div class="chat-msg" class:mine={m.mine}>
+          <span class="chat-text">{m.text}</span>
+          {#if m.time}<span class="chat-time">{m.time}</span>{/if}
+        </div>
+      {/each}
+    </div>
+    <form class="chat-input" onsubmit={sendPopupChat}>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input placeholder="Rispondi a {popupPeer}…" bind:value={popupDraft} maxlength="2000" />
+      <button class="primary" type="submit">Invia</button>
+    </form>
+  </div>
+{:else if viewSession !== null && view}
   <div class="viewer">
     <div class="toolbar">
       <div class="toolbar-row">
@@ -1074,7 +1170,11 @@
           </button>
         {/if}
         {#if !view.ended}
-          <button class:active={view.showChat} onclick={() => view && toggleChat(view)} title="Scrivi al partner">
+          <button
+            class:active={view.showChat}
+            class:blink={view.unread > 0 && !view.showChat}
+            onclick={() => view && toggleChat(view)}
+            title="Scrivi al partner">
             Chat{#if view.unread > 0} <span class="chat-badge">{view.unread}</span>{/if}
           </button>
         {/if}
@@ -1144,6 +1244,12 @@
           </span>
         {/if}
       </div>
+      {#if view.transfer}
+        <div class="toolbar-row transfer">
+          <progress max={view.transfer.total || 1} value={view.transfer.done}></progress>
+          <span class="mono small">{transferText(view.transfer)}</span>
+        </div>
+      {/if}
     </div>
     <div class="screen">
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -1193,7 +1299,7 @@
       {/if}
     </div>
   </div>
-{:else if viewSession === null}
+{:else if viewSession === null && chatPopupSession === null}
 <div class="app" class:quick>
   <nav class="sidebar">
     <div class="brand">
@@ -1233,6 +1339,10 @@
       Il tuo schermo è condiviso con <strong class="mono">{h.peer}</strong>
       {#if h.path}
         <span class="badge path {h.path}" title={pathHint[h.path]}>{pathLabel[h.path]}</span>
+      {/if}
+      {#if h.transfer}
+        <progress class="banner-progress" max={h.transfer.total || 1} value={h.transfer.done}></progress>
+        <span class="mono small">{transferText(h.transfer)}</span>
       {/if}
       {#if h.blocked}
         <span class="badge warn" title="Chi ti controlla ha bloccato mouse e tastiera di questo computer">
@@ -2411,6 +2521,31 @@
     font-size: 11px;
     font-weight: 700;
     text-align: center;
+  }
+  .popup-chat {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+  }
+  .popup-chat .chat-log {
+    flex: 1;
+  }
+  .toolbar-row.transfer progress,
+  .banner-progress {
+    width: 180px;
+    accent-color: var(--accent);
+  }
+  /* New chat message while the chat is closed: the button pulses. */
+  button.blink {
+    animation: blink 1s ease-in-out infinite;
+  }
+  @keyframes blink {
+    50% {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-text);
+    }
   }
   .chat-panel {
     position: absolute;

@@ -2,6 +2,12 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.5.0 — 2026-10-14
+- Copia/incolla di file: barra di avanzamento in alto con percentuale, dati trasferiti e velocità (nella finestra di
+  controllo e, sul computer controllato, nella barra della condivisione). Limite: 500 MB e 10.000 file per copia.
+- Chat più visibile: il pulsante "Chat" lampeggia quando arriva un messaggio; sul computer controllato si apre una
+  piccola finestra di chat in alto a destra, sempre in primo piano, per leggere e rispondere senza cercare l'app.
+
 ## 1.4.0 — 2026-10-14
 - Il tuo nome: impostalo in "Consenti il controllo". Chi ti controlla lo vede nella richiesta di accesso e durante
   la sessione; chi controlli lo vede in alto, prima del tuo ID (va aggiornato anche il partner).

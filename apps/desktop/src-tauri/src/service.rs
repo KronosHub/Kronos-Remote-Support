@@ -144,6 +144,12 @@ pub enum UiEvent {
         peer: String,
         text: String,
     },
+    /// We wrote in the chat of a shared session from `window` (the others show it too).
+    HostChatSent {
+        session: SessionId,
+        text: String,
+        window: String,
+    },
     /// Devices of this app found on the local network (connectable without the server).
     LanPeers {
         peers: Vec<LanPeerView>,
@@ -176,6 +182,15 @@ pub enum UiEvent {
     HostingStarted {
         session: SessionId,
         peer: String,
+    },
+    /// A clipboard file transfer of this session moved on (viewer window or main window).
+    Transfer {
+        session: SessionId,
+        sending: bool,
+        done: u64,
+        total: u64,
+        bytes_per_sec: u64,
+        finished: bool,
     },
     /// The partner blocked (or unblocked) this computer's own mouse and keyboard.
     HostingInputBlocked {
@@ -271,15 +286,22 @@ const MAX_CHAT_CHARS: usize = 4000;
 /// Chat messages accepted from a partner per [`CHAT_WINDOW`]; more are dropped.
 const MAX_CHAT_MESSAGES: u32 = 20;
 const CHAT_WINDOW: Duration = Duration::from_secs(10);
-/// A chat message brings the main window forward at most this often.
-const CHAT_RAISE_EVERY: Duration = Duration::from_secs(30);
 
-/// Keeps a partner from flooding the chat or stealing the focus with it.
+/// One line of a shared session's chat.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatLine {
+    pub mine: bool,
+    pub text: String,
+}
+
+/// Chat lines kept per shared session (for the floating chat window).
+const MAX_CHAT_HISTORY: usize = 200;
+
+/// Keeps a partner from flooding the chat with it.
 #[derive(Default)]
 struct ChatLimiter {
     window: Option<Instant>,
     count: u32,
-    raised: Option<Instant>,
 }
 
 impl ChatLimiter {
@@ -297,15 +319,6 @@ impl ChatLimiter {
             text.truncate(end);
         }
         Some(text)
-    }
-
-    /// True if the main window may come forward for a new message.
-    fn may_raise(&mut self) -> bool {
-        if self.raised.is_some_and(|t| t.elapsed() < CHAT_RAISE_EVERY) {
-            return false;
-        }
-        self.raised = Some(Instant::now());
-        true
     }
 }
 
@@ -325,6 +338,8 @@ struct Shared {
     attempts: Mutex<Attempts>,
     viewers: Mutex<HashMap<SessionId, ViewerCtl>>,
     hosting: Mutex<HashMap<SessionId, UnboundedSender<HostCommand>>>,
+    /// Chat of each shared session, for the floating chat window opened later.
+    host_chats: Mutex<HashMap<SessionId, Vec<ChatLine>>>,
     /// Hosting sessions opened with the personal password: ended when it is removed or
     /// changed.
     unattended: Mutex<HashSet<SessionId>>,
@@ -396,6 +411,19 @@ impl Shared {
     }
 
     /// Emits an event for a viewer window, or keeps it until the window attaches.
+    /// Keeps the last lines of a shared session's chat.
+    fn host_chat_line(&self, session: SessionId, mine: bool, text: &str) {
+        let mut chats = self.host_chats.lock().unwrap();
+        let lines = chats.entry(session).or_default();
+        if lines.len() >= MAX_CHAT_HISTORY {
+            lines.remove(0);
+        }
+        lines.push(ChatLine {
+            mine,
+            text: text.to_owned(),
+        });
+    }
+
     fn view_event(&self, app: &AppHandle, session: SessionId, event: UiEvent) {
         if let Some(viewer) = self.viewers.lock().unwrap().get_mut(&session)
             && viewer.frames.is_none()
@@ -487,6 +515,7 @@ impl Service {
             attempts: Mutex::new(Attempts::default()),
             viewers: Mutex::new(HashMap::new()),
             hosting: Mutex::new(HashMap::new()),
+            host_chats: Mutex::new(HashMap::new()),
             unattended: Mutex::new(HashSet::new()),
             personal: Mutex::new(personal),
             display_name: Mutex::new(store.display_name()),
@@ -733,15 +762,47 @@ impl Service {
         }
     }
 
-    /// Sends a chat message on a session we view (viewer window) or share (main window).
-    pub fn send_chat(&self, session: SessionId, text: String) -> bool {
+    /// Sends a chat message on a session we view (viewer window) or share (main window or
+    /// floating chat, named by `window`).
+    pub fn send_chat(
+        &self,
+        app: &AppHandle,
+        session: SessionId,
+        text: String,
+        window: String,
+    ) -> bool {
         if let Some(viewer) = self.shared.viewers.lock().unwrap().get(&session) {
             return viewer.commands.send(ViewerCommand::Chat(text)).is_ok();
         }
-        if let Some(host) = self.shared.hosting.lock().unwrap().get(&session) {
-            return host.send(HostCommand::Chat(text)).is_ok();
+        let sent = self
+            .shared
+            .hosting
+            .lock()
+            .unwrap()
+            .get(&session)
+            .is_some_and(|host| host.send(HostCommand::Chat(text.clone())).is_ok());
+        if sent {
+            self.shared.host_chat_line(session, true, &text);
+            emit(
+                app,
+                UiEvent::HostChatSent {
+                    session,
+                    text,
+                    window,
+                },
+            );
         }
-        false
+        sent
+    }
+
+    pub fn host_chat_history(&self, session: SessionId) -> Vec<ChatLine> {
+        self.shared
+            .host_chats
+            .lock()
+            .unwrap()
+            .get(&session)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn frames_consumed(&self, session: SessionId, count: u32) {
@@ -1641,9 +1702,10 @@ async fn serve_partner(
                 let Some(text) = chat.accept(text) else {
                     return;
                 };
-                if chat.may_raise() {
-                    crate::show_main_window(app);
-                }
+                shared.host_chat_line(session, false, &text);
+                // A small window on top, top right: seen even over full-screen apps,
+                // without taking the keyboard away from what the user is doing.
+                crate::open_chat_popup(app, session, &who);
                 emit(
                     app,
                     UiEvent::HostChat {
@@ -1655,6 +1717,7 @@ async fn serve_partner(
             }
             // Logged to file by the stream crate; too frequent for the activity list.
             HostEvent::Quality { .. } => {}
+            HostEvent::Transfer(p) => emit(app, transfer_event(session, p)),
             HostEvent::InputBlocked(blocked) => {
                 let message = if blocked {
                     format!("{who} ha bloccato mouse e tastiera di questo computer (Esc tre volte per riprenderli)")
@@ -1677,6 +1740,8 @@ async fn serve_partner(
     .await;
     shared.hosting.lock().unwrap().remove(&session);
     shared.unattended.lock().unwrap().remove(&session);
+    shared.host_chats.lock().unwrap().remove(&session);
+    crate::close_chat_popup(app, session);
     emit(
         app,
         UiEvent::HostingEnded {
@@ -1697,6 +1762,17 @@ async fn serve_partner(
 }
 
 /// Turns capture errors into something the user can act on.
+fn transfer_event(session: SessionId, p: stream::files::TransferProgress) -> UiEvent {
+    UiEvent::Transfer {
+        session,
+        sending: p.sending,
+        done: p.done,
+        total: p.total,
+        bytes_per_sec: p.bytes_per_sec,
+        finished: p.finished,
+    }
+}
+
 /// How a partner is shown: "Name (123 456 789)" if it set a name, else its id.
 fn peer_label(id: &PeerId, name: Option<&str>) -> String {
     match name {
@@ -1921,6 +1997,7 @@ async fn view_partner(
                 log(app, "info", format!("appunti con {partner}: {message}"));
                 shared.view_event(app, session, UiEvent::ViewNotice { session, message });
             }
+            ViewerEvent::Transfer(p) => shared.view_event(app, session, transfer_event(session, p)),
             ViewerEvent::InputBlocked { blocked, message } => {
                 shared.view_event(app, session, UiEvent::ViewInputBlocked { session, blocked });
                 if let Some(message) = message {
