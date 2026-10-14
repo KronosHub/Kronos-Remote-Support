@@ -246,6 +246,11 @@ fn send_input(service: State<'_, Service>, session: u64, event: protocol::InputE
 }
 
 #[tauri::command]
+fn set_high_resolution(service: State<'_, Service>, session: u64, enabled: bool) {
+    service.set_high_resolution(session, enabled);
+}
+
+#[tauri::command]
 fn select_display(service: State<'_, Service>, session: u64, id: u32) {
     service.select_display(session, id);
 }
@@ -551,6 +556,7 @@ pub fn run() {
             frames_consumed,
             send_input,
             select_display,
+            set_high_resolution,
             close_view,
             stop_hosting
         ])

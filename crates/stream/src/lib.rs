@@ -89,6 +89,7 @@ pub struct StreamHandle {
     stop: Arc<AtomicBool>,
     keyframe: Arc<AtomicBool>,
     bitrate: Arc<AtomicU32>,
+    high_resolution: Arc<AtomicBool>,
     size: watch::Receiver<(u32, u32)>,
     thread: Option<JoinHandle<()>>,
 }
@@ -114,6 +115,11 @@ impl StreamHandle {
     /// frame rate follows ([`rate::fps_for`]).
     pub fn set_bitrate(&self, bps: u32) {
         self.bitrate.store(bps, Ordering::Relaxed);
+    }
+
+    /// HD on (the default): up to the captured size; off: at most 1080p.
+    pub fn set_high_resolution(&self, enabled: bool) {
+        self.high_resolution.store(enabled, Ordering::Relaxed);
     }
 
     /// The next frame sent will be an IDR (viewer joined, lost packets or decoder error).
@@ -144,7 +150,7 @@ impl Drop for StreamHandle {
 }
 
 /// Average encoding time above this share of the frame interval: the machine struggles
-/// with a large screen, so it is held to [`rate::HEAVY_PIXELS`] for the rest of the session.
+/// with a large screen, so it is held to [`rate::FULL_HD_PIXELS`] for the rest of the session.
 const HEAVY_ENCODE: f64 = 0.6;
 /// Frames encoded before judging the encoding time (the first ones include warm-up).
 const HEAVY_SAMPLE: u32 = 60;
@@ -210,6 +216,7 @@ pub async fn start(config: StreamConfig, video: Arc<VideoSender>) -> Result<Stre
     let stop = Arc::new(AtomicBool::new(false));
     let keyframe = Arc::new(AtomicBool::new(true));
     let bitrate = Arc::new(AtomicU32::new(config.bitrate_bps));
+    let high_resolution = Arc::new(AtomicBool::new(true));
     let (ready_tx, ready_rx) = oneshot::channel::<Result<SourceInfo>>();
     // Small queue: if the network side falls behind, drop and resync with a keyframe
     // rather than building latency.
@@ -221,6 +228,7 @@ pub async fn start(config: StreamConfig, video: Arc<VideoSender>) -> Result<Stre
             stop: stop.clone(),
             keyframe: keyframe.clone(),
             bitrate: bitrate.clone(),
+            high_resolution: high_resolution.clone(),
             size: size_tx,
         };
         std::thread::Builder::new()
@@ -255,6 +263,7 @@ pub async fn start(config: StreamConfig, video: Arc<VideoSender>) -> Result<Stre
         stop,
         keyframe,
         bitrate,
+        high_resolution,
         size: size_rx,
         thread: Some(thread),
     })
@@ -265,6 +274,7 @@ struct Controls {
     stop: Arc<AtomicBool>,
     keyframe: Arc<AtomicBool>,
     bitrate: Arc<AtomicU32>,
+    high_resolution: Arc<AtomicBool>,
     size: watch::Sender<(u32, u32)>,
 }
 
@@ -278,6 +288,7 @@ fn encode_loop(
         stop,
         keyframe,
         bitrate,
+        high_resolution,
         size,
     } = controls;
     let new_encoder = |(width, height): (u32, u32)| {
@@ -318,6 +329,9 @@ fn encode_loop(
     let mut cpu_cap = 100;
     let mut encode_avg: Option<Duration> = None;
     let mut encoded_frames = 0u32;
+    // Limit chosen by the viewer (HD off: 1080p), applied without waiting for the gaps.
+    let full_hd = rate::scale_to_fit(captured_pixels, rate::FULL_HD_PIXELS);
+    let mut user_cap = 100;
     let mut last_rescale: Option<Instant> = None;
     let start = Instant::now();
     let mut last_keyframe: Option<Instant> = None;
@@ -337,7 +351,18 @@ fn encode_loop(
             encoder.set_rate(target, fps);
             interval = Duration::from_secs(1) / fps;
         }
-        let wanted = rate::scale_for(applied_bitrate, scale, captured_pixels).min(cpu_cap);
+        let cap = if high_resolution.load(Ordering::Relaxed) {
+            100
+        } else {
+            full_hd
+        };
+        if cap != user_cap {
+            user_cap = cap;
+            last_rescale = None;
+        }
+        let wanted = rate::scale_for(applied_bitrate, scale, captured_pixels)
+            .min(cpu_cap)
+            .min(user_cap);
         let gap = if wanted < scale {
             rate::SCALE_DOWN_GAP
         } else {
@@ -432,10 +457,10 @@ fn encode_loop(
         let full_rate = Duration::from_secs(1) / config.fps.max(1);
         if cpu_cap == 100
             && encoded_frames >= HEAVY_SAMPLE
-            && u64::from(width) * u64::from(height) > rate::HEAVY_PIXELS
+            && u64::from(width) * u64::from(height) > rate::FULL_HD_PIXELS
             && encode_avg.is_some_and(|avg| avg > full_rate.mul_f64(HEAVY_ENCODE))
         {
-            cpu_cap = rate::scale_to_fit(captured_pixels, rate::HEAVY_PIXELS);
+            cpu_cap = rate::scale_to_fit(captured_pixels, rate::FULL_HD_PIXELS);
             tracing::warn!(
                 avg_ms = encode_avg.map(|a| a.as_millis()),
                 size = ?(width, height),

@@ -81,6 +81,11 @@ pub enum ControlMsg {
         fps: u32,
         limited: bool,
     },
+    /// Viewer → host: send up to the full size (on, the default) or at most 1920×1080
+    /// (off). Older hosts ignore it.
+    HighResolution {
+        enabled: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -157,6 +162,9 @@ mod tests {
             ControlMsg::RequestKeyframe.to_json(),
             r#"{"t":"request_keyframe"}"#
         );
+        let hd = ControlMsg::HighResolution { enabled: false };
+        assert_eq!(hd.to_json(), r#"{"t":"high_resolution","enabled":false}"#);
+        assert_eq!(ControlMsg::from_json(hd.to_json().as_bytes()), Some(hd));
     }
 
     #[test]

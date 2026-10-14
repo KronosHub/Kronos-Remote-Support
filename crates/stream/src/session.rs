@@ -209,6 +209,8 @@ pub async fn serve_host(
     let mut clipboard = ClipboardShare::new(files);
     // No display sleep or screen lock while someone is controlling this machine.
     let awake = crate::awake::KeepAwake::new();
+    // HD on by default; the viewer may limit the stream to 1080p (kept across restarts).
+    let mut high_resolution = true;
     // Set while the capture is down and must be started again.
     let mut restart_at: Option<tokio::time::Instant> = None;
     let reason = loop {
@@ -254,6 +256,7 @@ pub async fn serve_host(
                         restart_at = None;
                         tracing::info!(size = ?(handle.width, handle.height), "screen capture restarted");
                         handle.set_bitrate(rate.bitrate());
+                        handle.set_high_resolution(high_resolution);
                         if let Some(sink) = &input {
                             sink.set_area(area(handle.bounds));
                         }
@@ -286,6 +289,11 @@ pub async fn serve_host(
                     }
                 }
                 Some(ControlMsg::Clipboard { text }) => clipboard.remote_text(text),
+                Some(ControlMsg::HighResolution { enabled }) => {
+                    tracing::info!(enabled, "viewer set HD");
+                    high_resolution = enabled;
+                    handle.set_high_resolution(enabled);
+                }
                 Some(ControlMsg::Report { received, lost, rtt_ms }) => {
                     let report = rate::Report {
                         received,
@@ -313,6 +321,7 @@ pub async fn serve_host(
                     match switch_display(&config, &video, &mut handle, id).await {
                         Ok(()) => {
                             handle.set_bitrate(rate.bitrate());
+                            handle.set_high_resolution(high_resolution);
                             if let Some(sink) = &input {
                                 sink.set_area(area(handle.bounds));
                             }
@@ -542,6 +551,8 @@ pub enum ViewerCommand {
     Clipboard(bool),
     Input(protocol::InputEvent),
     SelectDisplay(u32),
+    /// HD on (up to the host's full size) or off (at most 1080p).
+    HighResolution(bool),
     Stop,
 }
 
@@ -649,6 +660,9 @@ pub async fn run_viewer(
                 }
                 Some(ViewerCommand::Input(event)) => send(&channel, &ControlMsg::Input { event }).await,
                 Some(ViewerCommand::SelectDisplay(id)) => send(&channel, &ControlMsg::SelectDisplay { id }).await,
+                Some(ViewerCommand::HighResolution(enabled)) => {
+                    send(&channel, &ControlMsg::HighResolution { enabled }).await;
+                }
                 Some(ViewerCommand::Stop) | None => {
                     send(&channel, &ControlMsg::Bye { reason: "il partner si è disconnesso".into() }).await;
                     break "disconnesso".to_owned();

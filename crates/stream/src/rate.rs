@@ -135,8 +135,8 @@ const PIXEL_BUDGETS: [(u32, u64); 3] = [
     (800_000, 1440 * 810),
     (1_500_000, 1920 * 1080),
 ];
-/// Pixels a machine that encodes too slowly is limited to (1080p).
-pub const HEAVY_PIXELS: u64 = 1920 * 1080;
+/// Pixels of 1080p: the limit for machines that encode too slowly and with HD turned off.
+pub const FULL_HD_PIXELS: u64 = 1920 * 1080;
 /// Before going back up, the bitrate must exceed the step's threshold by this much (in
 /// percent): each resolution change costs a keyframe, so it must not flap.
 const SCALE_UP_MARGIN: u32 = 125;

@@ -63,6 +63,8 @@
     resyncs: number[];
     /** The first resync is the decoder starting up: not shown. */
     resyncStarted: boolean;
+    /** HD: the partner sends up to its full size (on) or at most 1080p (off). */
+    hd: boolean;
     path: Path | null;
     /** Session traffic, kbit/s. */
     net: { rx: number; tx: number } | null;
@@ -628,6 +630,7 @@
       currentDisplay: null,
       resyncs: [],
       resyncStarted: false,
+      hd: true,
       path: null,
       limited: null,
       net: null,
@@ -873,6 +876,12 @@
     buttonsDown.clear();
   }
 
+  function toggleHd() {
+    if (!view) return;
+    view.hd = !view.hd;
+    invoke("set_high_resolution", { session: view.session, enabled: view.hd });
+  }
+
   async function selectDisplay(id: number) {
     if (!view || id === view.currentDisplay) return;
     releaseKeys();
@@ -1014,6 +1023,14 @@
         <button class:active={view.showChat} onclick={() => view && toggleChat(view)} title="Scrivi al partner">
           Chat{#if view.unread > 0} <span class="chat-badge">{view.unread}</span>{/if}
         </button>
+      {/if}
+      {#if !view.ended}
+        <button
+          class:active={view.hd}
+          onclick={toggleHd}
+          title={view.hd
+            ? "HD attivo: con la rete buona fino a 2560×1600. Clic per limitare a 1080p (meno banda e CPU)"
+            : "HD spento: al massimo 1080p. Clic per riattivarlo"}>HD</button>
       {/if}
       <button onclick={toggleFullscreen}>Schermo intero</button>
       <button class="danger" onclick={disconnect}>{view.ended ? "Chiudi" : "Disconnetti"}</button>

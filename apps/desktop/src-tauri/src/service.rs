@@ -740,6 +740,12 @@ impl Service {
         }
     }
 
+    pub fn set_high_resolution(&self, session: SessionId, enabled: bool) {
+        if let Some(viewer) = self.shared.viewers.lock().unwrap().get(&session) {
+            let _ = viewer.commands.send(ViewerCommand::HighResolution(enabled));
+        }
+    }
+
     pub fn select_display(&self, session: SessionId, id: u32) {
         if let Some(viewer) = self.shared.viewers.lock().unwrap().get(&session) {
             let _ = viewer.commands.send(ViewerCommand::SelectDisplay(id));
