@@ -321,7 +321,10 @@ async fn serve(
     }
     .await;
     match result {
-        Ok(access) => println!("Viewer authenticated ({access:?})"),
+        Ok((access, name)) => match name {
+            Some(name) => println!("Viewer authenticated ({access:?}) as {name}"),
+            None => println!("Viewer authenticated ({access:?})"),
+        },
         Err(e) => {
             println!("Authentication failed: {e:#}");
             return;
