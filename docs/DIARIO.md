@@ -479,3 +479,8 @@
   pulsante della finestra).
 - Più qualità senza banda in più a schermo fermo: bitrate massimo proporzionale ai pixel oltre il 1080p (fino a
   6 Mbit/s), keyframe periodico ogni 60 s invece di 10 s.
+
+## 2026-10-14 — Interrompere i trasferimenti (v1.5.2)
+- 1.5.1 includeva anche "Modifica/Salva" per il nome (richiesta arrivata mentre la release era in coda).
+- ✕ accanto alla barra di avanzamento: `ClipboardShare::cancel_transfer` ferma l'invio (task annullato) e/o
+  fa scartare al lettore il trasferimento in arrivo (`Notify`); il partner riceve `TransferCancelled` e fa lo stesso.
