@@ -1370,7 +1370,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-remoto"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "agent",
  "anyhow",
@@ -5281,6 +5281,7 @@ dependencies = [
  "tokio",
  "tracing",
  "transport",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

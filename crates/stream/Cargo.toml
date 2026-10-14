@@ -20,3 +20,6 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tokio.workspace = true
 tracing.workspace = true
 transport.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Power"] }

@@ -8,7 +8,9 @@
   `key {code, down}` con `code` = `KeyboardEvent.code` W3C (posizione fisica).
 - **Tasti per posizione fisica**: crate `input`, tabella `code` → kVK macOS / scancode Windows (E0 = esteso) /
   evdev Linux (X11 = evdev+8). Il layout dell'host decide il carattere, come una tastiera vera.
-  Niente auto-repeat inviato: lo genera il sistema dell'host.
+  Auto-repeat: dalla 1.2.3 il viewer inoltra le ripetizioni come nuovi "key down" (su macOS e Windows i tasti
+  simulati non si ripetono da soli: tenendo premuta una freccia il cursore si spostava di un solo carattere);
+  l'host Linux le scarta perché X ripete da sé i tasti premuti.
 - **Iniezione**: thread dedicato (`InputSink`). `enigo` 0.6 per mouse ovunque e tasti su macOS/X11; tasti Windows
   con `SendInput` + `KEYEVENTF_SCANCODE` (gestione estesi più chiara che in `enigo::raw`).
 - **Sicurezza**: alla fine della sessione si rilasciano tasti e pulsanti ancora premuti; la UI rilascia i tasti se

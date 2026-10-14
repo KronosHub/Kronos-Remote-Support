@@ -1,6 +1,7 @@
 //! macOS backend built on ScreenCaptureKit (macOS 14+).
 
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use screencapturekit::cm::SCFrameStatus;
@@ -12,6 +13,11 @@ use crate::{CaptureConfig, CaptureError, Capturer, Display, Frame, Result};
 /// Frames buffered between the ScreenCaptureKit callback and the consumer.
 /// Kept tiny on purpose: for remote control a fresh frame beats a complete history.
 const CHANNEL_DEPTH: usize = 2;
+
+/// Without frames for this long, check that the display still exists: logging in from the
+/// login window can replace it with another one (new id, other size) and the old stream
+/// then just goes quiet.
+const DISPLAY_CHECK: Duration = Duration::from_secs(2);
 
 fn backend(err: impl std::fmt::Display) -> CaptureError {
     CaptureError::Backend(err.to_string())
@@ -82,6 +88,9 @@ pub fn displays() -> Result<Vec<Display>> {
 pub struct MacCapturer {
     stream: SCStream,
     frames: Receiver<Frame>,
+    /// Why the system stopped the stream, if it did.
+    stopped: Arc<Mutex<Option<String>>>,
+    last_check: Instant,
     size: (u32, u32),
     display_id: u32,
     bounds: crate::Rect,
@@ -112,8 +121,13 @@ impl MacCapturer {
             .with_queue_depth(3);
 
         let (tx, rx) = mpsc::sync_channel(CHANNEL_DEPTH);
+        let stopped = Arc::new(Mutex::new(None));
+        let watcher = StopWatcher {
+            stopped: stopped.clone(),
+        };
+        let filter = display_filter(&display)?;
         let mut stream =
-            SCStream::new(&display_filter(&display)?, &stream_config).map_err(backend)?;
+            SCStream::new_with_delegate(&filter, &stream_config, watcher).map_err(backend)?;
         stream
             .add_output_handler(FrameSink { tx }, SCStreamOutputType::Screen)
             .map_err(backend)?;
@@ -130,6 +144,8 @@ impl MacCapturer {
         Ok(Self {
             stream,
             frames: rx,
+            stopped,
+            last_check: Instant::now(),
             size: (width, height),
             display_id: info.id,
             bounds: info.bounds,
@@ -152,10 +168,45 @@ impl Capturer for MacCapturer {
 
     fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>> {
         match self.frames.recv_timeout(timeout) {
-            Ok(frame) => Ok(Some(frame)),
-            Err(RecvTimeoutError::Timeout) => Ok(None),
+            Ok(frame) => {
+                self.last_check = Instant::now();
+                Ok(Some(frame))
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                if let Some(error) = self.stopped.lock().unwrap().take() {
+                    return Err(CaptureError::Backend(format!(
+                        "stopped by the system: {error}"
+                    )));
+                }
+                if self.last_check.elapsed() >= DISPLAY_CHECK {
+                    self.last_check = Instant::now();
+                    if !display_present(self.display_id) {
+                        return Err(CaptureError::DisplayNotFound(self.display_id));
+                    }
+                }
+                Ok(None)
+            }
             Err(RecvTimeoutError::Disconnected) => Err(CaptureError::Stopped),
         }
+    }
+}
+
+/// Unknown (e.g. the query failed) counts as present: keep waiting rather than restart.
+fn display_present(id: u32) -> bool {
+    shareable_displays().map_or(true, |displays| {
+        displays.iter().any(|d| d.display_id() == id)
+    })
+}
+
+/// Records why ScreenCaptureKit stopped the stream (display removed, session switch...).
+struct StopWatcher {
+    stopped: Arc<Mutex<Option<String>>>,
+}
+
+impl SCStreamDelegateTrait for StopWatcher {
+    fn did_stop_with_error(&self, error: SCError) {
+        tracing::warn!("ScreenCaptureKit stopped the stream: {error}");
+        *self.stopped.lock().unwrap() = Some(error.to_string());
     }
 }
 

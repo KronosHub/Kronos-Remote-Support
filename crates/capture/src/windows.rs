@@ -2,6 +2,7 @@
 //!
 //! Notes: the mouse pointer is not part of duplicated frames; the secure desktop (UAC
 //! prompts, lock screen) cannot be captured from a user process and shows as access lost.
+//! A lost or failed duplication is reopened until it works again: the stream only pauses.
 
 use std::time::{Duration, Instant};
 
@@ -152,6 +153,9 @@ impl Capturer for WinCapturer {
             // Lost earlier (e.g. secure desktop): retry opening now.
             std::thread::sleep(timeout);
             self.duplication = self.reopen();
+            if self.duplication.is_some() {
+                tracing::info!("desktop duplication reopened");
+            }
             return Ok(None);
         };
         let timeout_ms = timeout.as_millis().min(u32::MAX as u128) as u32;
@@ -162,23 +166,39 @@ impl Capturer for WinCapturer {
                     return Ok(None);
                 }
                 let captured_at = Instant::now();
-                let buffer = frame.buffer().map_err(backend)?;
-                let (w, h) = (buffer.width(), buffer.height());
-                let pixels = buffer.as_nopadding_buffer(&mut self.scratch).to_vec();
-                Ok((pixels, w, h, captured_at))
+                frame.buffer().map(|buffer| {
+                    let (w, h) = (buffer.width(), buffer.height());
+                    let pixels = buffer.as_nopadding_buffer(&mut self.scratch).to_vec();
+                    (pixels, w, h, captured_at)
+                })
             }
             Err(Error::Timeout) => return Ok(None),
-            Err(Error::AccessLost) => Err(()),
-            Err(e) => return Err(backend(e)),
+            Err(e) => Err(e),
         };
-        let Ok((pixels, w, h, captured_at)) = result else {
-            tracing::info!("desktop duplication access lost, recreating");
-            self.duplication = self.duplication.take().and_then(|d| d.recreate().ok());
-            return Ok(None);
+        let (pixels, w, h, captured_at) = match result {
+            Ok(frame) => frame,
+            Err(Error::AccessLost) => {
+                tracing::info!("desktop duplication access lost, recreating");
+                self.duplication = self
+                    .duplication
+                    .take()
+                    .and_then(|d| d.recreate_options(&[DxgiDuplicationFormat::Bgra8]).ok());
+                return Ok(None);
+            }
+            // Other failures happen too while Windows moves between the lock screen and the
+            // desktop: never end the stream for them, open a new duplication instead.
+            Err(e) => {
+                tracing::warn!("desktop duplication failed, reopening: {e}");
+                self.duplication = None;
+                return Ok(None);
+            }
         };
         if (w, h) != (self.display.width, self.display.height) {
-            tracing::warn!(size = ?(w, h), "monitor size changed");
-            return Ok(None);
+            // E.g. the desktop after login runs at another resolution than the lock screen:
+            // end here so the stream starts again at the new size.
+            return Err(CaptureError::Backend(format!(
+                "monitor size changed to {w}x{h}"
+            )));
         }
         let data = crate::scale::scale_bgra(&pixels, w, h, self.output.0, self.output.1);
         Ok(Some(Frame {

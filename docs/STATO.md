@@ -1,9 +1,13 @@
 # Stato del progetto
 
-**Ultimo aggiornamento:** 2026-10-13
-**Fase corrente:** v1.2.2 (risoluzione ridotta con poca banda, viewer a tutta finestra, statistiche a larghezza fissa; ADR 0041) — v1.2.1 (codice pubblico su `KronosHub/Kronos-Remote-Support`, ADR 0040) — v1.2.0 (revisione di sicurezza prima dell'apertura del codice, ADR 0039) — v1.1.1 (fix rete locale: tutti gli indirizzi, ripiego sul server, ID sessione compatibili con JS) — v1.1.0 barra laterale stile TeamViewer (ADR 0038) — v1.0.0 (chat tra host e guest, ADR 0037; prima release stabile) — v0.13.0 (nomi LAN, popup fine sessione, barra riordinata; ADR 0036) — v0.12.0 (signaling su Cloudflare, ADR 0035) — v0.11.0 (collegamento in rete locale senza server, ADR 0034) — v0.10.0 (agente Windows UAC/lock screen, ADR 0033) — v0.9.3 (installer Windows chiude l'app prima di aggiornare) — v0.9.2 (fix disattivazione password personale) — v0.9.1 cattura condivisa, fix Disconnetti — v0.9.0: finestra separata per sessione, appunti condivisi (testo e file), più controllori (ADR 0032)
+**Ultimo aggiornamento:** 2026-10-14
+**Fase corrente:** v1.2.3 (cattura che riparte dopo la schermata di accesso/blocco, ripetizione tasti, computer controllato sempre sveglio, statistiche colorate; ADR 0042, 0043) — v1.2.2 (risoluzione ridotta con poca banda, viewer a tutta finestra, statistiche a larghezza fissa; ADR 0041) — v1.2.1 (codice pubblico su `KronosHub/Kronos-Remote-Support`, ADR 0040) — v1.2.0 (revisione di sicurezza prima dell'apertura del codice, ADR 0039) — v1.1.1 (fix rete locale: tutti gli indirizzi, ripiego sul server, ID sessione compatibili con JS) — v1.1.0 barra laterale stile TeamViewer (ADR 0038) — v1.0.0 (chat tra host e guest, ADR 0037; prima release stabile) — v0.13.0 (nomi LAN, popup fine sessione, barra riordinata; ADR 0036) — v0.12.0 (signaling su Cloudflare, ADR 0035) — v0.11.0 (collegamento in rete locale senza server, ADR 0034) — v0.10.0 (agente Windows UAC/lock screen, ADR 0033) — v0.9.3 (installer Windows chiude l'app prima di aggiornare) — v0.9.2 (fix disattivazione password personale) — v0.9.1 cattura condivisa, fix Disconnetti — v0.9.0: finestra separata per sessione, appunti condivisi (testo e file), più controllori (ADR 0032)
 
 ## Fatto
+- 1.2.3: la cattura riparte da sola se si ferma (Mac: display sostituito uscendo dalla finestra di accesso; Windows:
+  errori della duplicazione allo sblocco), ripetizione dei tasti tenuti premuti, host sveglio durante la sessione,
+  statistiche con contorno giallo/rosso e "Resync per minuto", puntatore a freccia (ADR 0042, 0043; da provare
+  nell'app compilata)
 - Risoluzione ridotta sotto 0,8/0,45 Mbit/s (75/50 %), viewer che riempie la finestra, statistiche fisse; changelog nell'app (ADR 0041)
 - Worker Cloudflare con i limiti della revisione di sicurezza in produzione (verificato con due peer)
 - Codice aperto (MIT): repository pubblico unico `KronosHub/Kronos-Remote-Support` con sorgente, CI e release; l'updater
@@ -43,6 +47,9 @@
 - Test reali macOS: 1080p@30 ok (~17 ms/frame); Retina 3340x2160 solo ~11 fps (dettagli in DIARIO.md)
 
 ## Prossimo passo
+- **Provare la 1.2.3 su Mac**: collegarsi a un Mac sulla finestra di accesso e sulla schermata di blocco, inserire la
+  password (l'immagine deve riprendere in pochi secondi); tenere premuta una freccia nel Terminale; lasciare la
+  sessione aperta oltre il tempo di stop del monitor. Poi le stesse prove su Windows.
 - **Apertura del codice (in corso, ADR 0039)** — mancano: vedi "Da fare per l'open source" sotto.
 0. Provare la 1.1.1 dall'aggiornamento: barra laterale; connessione in rete locale con conferma (prima risultava "rifiutata"); PC con VPN o macchine virtuali. Sui Mac controllare Privacy e sicurezza → Rete locale.
 1. Verificare su host Windows (anche multi-monitor) e macOS reali le funzioni della 0.8.0: CPU/RAM/rete in alto; blocchi,

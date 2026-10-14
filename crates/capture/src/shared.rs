@@ -40,6 +40,8 @@ struct Shared {
     last: Mutex<Option<Frame>>,
     /// Why the capture stopped, for the sessions.
     error: Mutex<Option<String>>,
+    /// Set (with `subscribers` locked) when the capture thread ends.
+    ended: AtomicBool,
 }
 
 /// A running capture; stops when the last session lets go of it.
@@ -79,7 +81,12 @@ fn subscribe_with(
     // Held while a capture starts, so two sessions starting together share it.
     let mut registry = registry().lock().unwrap();
     registry.retain(|_, hub| hub.strong_count() > 0);
-    let hub = match registry.get(&key).and_then(Weak::upgrade) {
+    // A capture that ended (error) may still be held by sessions about to let it go.
+    let hub = match registry
+        .get(&key)
+        .and_then(Weak::upgrade)
+        .filter(|hub| !hub.shared.ended.load(Ordering::Relaxed))
+    {
         Some(hub) => hub,
         None => {
             let hub = Arc::new(start_hub(start(config)?));
@@ -93,7 +100,12 @@ fn subscribe_with(
     if let Some(frame) = hub.shared.last.lock().unwrap().clone() {
         let _ = tx.try_send(frame);
     }
-    hub.shared.subscribers.lock().unwrap().push(tx);
+    let mut subscribers = hub.shared.subscribers.lock().unwrap();
+    // Ended meanwhile: dropping `tx` reports the error to this session at once.
+    if !hub.shared.ended.load(Ordering::Relaxed) {
+        subscribers.push(tx);
+    }
+    drop(subscribers);
     Ok(Box::new(Subscriber { hub, frames: rx }))
 }
 
@@ -102,6 +114,7 @@ fn start_hub(mut capturer: Box<dyn Capturer>) -> Hub {
         subscribers: Mutex::new(Vec::new()),
         last: Mutex::new(None),
         error: Mutex::new(None),
+        ended: AtomicBool::new(false),
     });
     let stop = Arc::new(AtomicBool::new(false));
     let (output, display_id, bounds) = (
@@ -135,7 +148,9 @@ fn start_hub(mut capturer: Box<dyn Capturer>) -> Hub {
                     }
                 }
                 // Wakes the sessions up with "disconnected".
-                shared.subscribers.lock().unwrap().clear();
+                let mut subscribers = shared.subscribers.lock().unwrap();
+                shared.ended.store(true, Ordering::Relaxed);
+                subscribers.clear();
             })
             .expect("spawning the capture thread")
     };
@@ -218,5 +233,46 @@ mod tests {
         drop(second);
         STARTS.store(0, Ordering::SeqCst);
         assert!(subscribe_with(&config, exclusive_pattern).is_ok());
+    }
+
+    static BROKEN_STARTS: AtomicUsize = AtomicUsize::new(0);
+
+    /// A capture that fails at once (e.g. the monitor changed size).
+    struct Broken;
+
+    impl Capturer for Broken {
+        fn output_size(&self) -> (u32, u32) {
+            (2, 2)
+        }
+        fn display_id(&self) -> u32 {
+            7
+        }
+        fn bounds(&self) -> Rect {
+            Rect::default()
+        }
+        fn next_frame(&mut self, _timeout: Duration) -> crate::Result<Option<Frame>> {
+            Err(CaptureError::Backend("broken".into()))
+        }
+    }
+
+    fn broken(_config: &CaptureConfig) -> crate::Result<Box<dyn Capturer>> {
+        BROKEN_STARTS.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(Broken))
+    }
+
+    #[test]
+    fn an_ended_capture_is_started_again() {
+        let config = CaptureConfig {
+            display_id: Some(7),
+            ..CaptureConfig::default()
+        };
+        let mut first = subscribe_with(&config, broken).unwrap();
+        assert!(matches!(
+            first.next_frame(Duration::from_secs(1)),
+            Err(CaptureError::Backend(_))
+        ));
+        // `first` still holds the ended capture: a new session must not join it.
+        let _second = subscribe_with(&config, broken).unwrap();
+        assert_eq!(BROKEN_STARTS.load(Ordering::SeqCst), 2);
     }
 }

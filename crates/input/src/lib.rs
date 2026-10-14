@@ -249,6 +249,11 @@ impl Replayer {
                 }
             }
             InputEvent::Key { code, down } => {
+                // The viewer forwards auto-repeat as extra key downs: needed on macOS and
+                // Windows, where injected keys never repeat; X repeats held keys itself.
+                if cfg!(target_os = "linux") && *down && self.keys_down.contains(code) {
+                    return Ok(());
+                }
                 let keys = lookup(code).with_context(|| format!("unknown key {code}"))?;
                 self.key(keys, *down)?;
                 if *down {

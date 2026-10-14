@@ -2,6 +2,17 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.2.3 — 2026-10-14
+- Collegandosi a un computer fermo sulla schermata di accesso o di blocco, dopo aver inserito la password
+  l'immagine riprende da sola, senza doversi riconnettere (Mac e Windows).
+- Se lo schermo del partner cambia risoluzione o la cattura si interrompe, la trasmissione riparte da sola.
+- Tenendo premuto un tasto (es. una freccia) il tasto si ripete anche sul computer controllato.
+- Durante il controllo remoto il computer controllato non va più in stop né si blocca per inattività.
+- Barra delle statistiche: contorno giallo quando un valore merita attenzione, rosso quando è critico; i valori
+  non vengono più troncati con i puntini; "Risinc." diventa "Resync per minuto"
+  (quante volte nell'ultimo minuto l'immagine è stata ricostruita per dati persi in rete).
+- Puntatore del mouse normale (freccia) al posto del mirino sullo schermo del partner.
+
 ## 1.2.2 — 2026-10-14
 - Con poca banda (sotto 0,8 Mbit/s) lo schermo del partner viene trasmesso a risoluzione ridotta, così il testo
   resta leggibile; torna piena quando la rete migliora.

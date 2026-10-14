@@ -11,12 +11,14 @@ use transport::{DataChannel, DataChannelEvent, TrackRemote};
 
 use crate::rate::{self, RateController};
 use crate::sharing::ClipboardShare;
-use crate::{StreamConfig, StreamHandle};
+use crate::{StreamChange, StreamConfig, StreamHandle};
 
 const PING_INTERVAL: Duration = Duration::from_secs(1);
 const USAGE_INTERVAL: Duration = Duration::from_secs(2);
 /// Do not flood the host with keyframe requests while packets keep getting lost.
 const MIN_KEYFRAME_REQUEST_GAP: Duration = Duration::from_millis(500);
+/// Pause between attempts to restart a stream whose capture stopped.
+const RESTART_RETRY: Duration = Duration::from_secs(2);
 
 /// The injector for this host session: the local one, or the SYSTEM agent on Windows
 /// (so remote control reaches UAC prompts and the lock screen).
@@ -205,6 +207,10 @@ pub async fn serve_host(
     let mut reported_error: Option<String> = None;
     // Shared only once the viewer turns it on (`ClipboardMode`).
     let mut clipboard = ClipboardShare::new(files);
+    // No display sleep or screen lock while someone is controlling this machine.
+    let awake = crate::awake::KeepAwake::new();
+    // Set while the capture is down and must be started again.
+    let mut restart_at: Option<tokio::time::Instant> = None;
     let reason = loop {
         tokio::select! {
             event = clipboard.next() => {
@@ -227,10 +233,43 @@ pub async fn serve_host(
                     on_event(HostEvent::ControlFailing(error));
                 }
             }
-            (width, height) = handle.resized() => {
-                // Resolution lowered or restored for the bandwidth: the viewer restarts
-                // its decoder on the new size, as for another monitor.
-                send(&channel, &ControlMsg::StreamStarted { width, height }).await;
+            change = handle.changed(), if restart_at.is_none() => match change {
+                StreamChange::Resized { width, height } => {
+                    // Resolution lowered or restored for the bandwidth: the viewer restarts
+                    // its decoder on the new size, as for another monitor.
+                    send(&channel, &ControlMsg::StreamStarted { width, height }).await;
+                }
+                StreamChange::Ended => {
+                    // E.g. leaving the login or lock screen replaced the display or changed its
+                    // size: without a restart the viewer would keep a frozen picture.
+                    tracing::warn!("screen capture stopped, restarting it");
+                    restart_at = Some(tokio::time::Instant::now());
+                }
+            },
+            _ = tokio::time::sleep_until(restart_at.unwrap_or_else(tokio::time::Instant::now)),
+                if restart_at.is_some() =>
+            {
+                match restart_stream(&config, &video, &mut handle).await {
+                    Ok(()) => {
+                        restart_at = None;
+                        tracing::info!(size = ?(handle.width, handle.height), "screen capture restarted");
+                        handle.set_bitrate(rate.bitrate());
+                        if let Some(sink) = &input {
+                            sink.set_area(area(handle.bounds));
+                        }
+                        send(&channel, &ControlMsg::StreamStarted {
+                            width: handle.width,
+                            height: handle.height,
+                        })
+                        .await;
+                        send_displays(&channel, &config, handle.display_id).await;
+                        on_event(HostEvent::Started { width: handle.width, height: handle.height });
+                    }
+                    Err(e) => {
+                        tracing::warn!("cannot restart the screen capture: {e:#}");
+                        restart_at = Some(tokio::time::Instant::now() + RESTART_RETRY);
+                    }
+                }
             }
             msg = recv(&channel) => match msg {
                 Some(ControlMsg::Ping { seq, sent_us }) => {
@@ -266,6 +305,7 @@ pub async fn serve_host(
                 }
                 Some(ControlMsg::Input { event }) => {
                     if let Some(sink) = &input {
+                        awake.user_active();
                         sink.send(event);
                     }
                 }
@@ -413,6 +453,33 @@ async fn switch_display(
             Err(e)
         }
     }
+}
+
+/// Starts the stream again (sizes and placement read afresh): on the same display, or on
+/// the main one if that display is gone (macOS swaps displays when leaving the login window).
+async fn restart_stream(
+    config: &StreamConfig,
+    video: &Arc<VideoSender>,
+    handle: &mut StreamHandle,
+) -> anyhow::Result<()> {
+    let with_display = |display_id| StreamConfig {
+        source: crate::Source::Screen { display_id },
+        ..config.clone()
+    };
+    let id = handle.display_id;
+    stop_and_wait(handle).await;
+    let crate::Source::Screen { .. } = config.source else {
+        *handle = crate::start(config.clone(), video.clone()).await?;
+        return Ok(());
+    };
+    *handle = match crate::start(with_display(Some(id)), video.clone()).await {
+        Ok(new) => new,
+        Err(e) => {
+            tracing::info!("display {id} unavailable ({e:#}), using the main one");
+            crate::start(with_display(None), video.clone()).await?
+        }
+    };
+    Ok(())
 }
 
 async fn stop_and_wait(handle: &mut StreamHandle) {

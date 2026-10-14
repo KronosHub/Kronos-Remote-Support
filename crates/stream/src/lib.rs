@@ -3,6 +3,7 @@
 //! Capture and encoding are blocking and CPU-bound, so they run on a dedicated thread;
 //! an async task forwards encoded frames to the track.
 
+pub mod awake;
 pub mod clipboard;
 pub mod files;
 pub mod rate;
@@ -63,6 +64,17 @@ impl Default for StreamConfig {
     }
 }
 
+/// What [`StreamHandle::changed`] reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamChange {
+    Resized {
+        width: u32,
+        height: u32,
+    },
+    /// The encoder thread exited: no more frames until the stream is started again.
+    Ended,
+}
+
 /// Running stream. Dropping it stops capture and encoding.
 pub struct StreamHandle {
     /// Encoded size: the captured size, or less while the bandwidth is low.
@@ -81,17 +93,17 @@ pub struct StreamHandle {
 
 impl StreamHandle {
     /// Waits until the encoded size changes (resolution lowered or restored for the
-    /// bandwidth) and returns the new one. Never resolves once the stream has stopped.
-    pub async fn resized(&mut self) -> (u32, u32) {
+    /// bandwidth) or the stream stops by itself (capture lost, e.g. the screen changed size).
+    pub async fn changed(&mut self) -> StreamChange {
         loop {
             if self.size.changed().await.is_err() {
-                std::future::pending::<()>().await;
+                return StreamChange::Ended;
             }
             let (width, height) = *self.size.borrow_and_update();
             if (width, height) != (self.width, self.height) {
                 self.width = width;
                 self.height = height;
-                return (width, height);
+                return StreamChange::Resized { width, height };
             }
         }
     }

@@ -408,3 +408,18 @@
 - Viewer: canvas a tutta finestra con proporzioni mantenute, clic sulle bande nere ignorati; statistiche a larghezza
   fissa. checks.yml verde sul ramo; non ancora provato nell'app compilata.
 
+## 2026-10-14 — Ripresa della cattura, tasti, host sveglio (v1.2.3, ADR 0042, 0043)
+- Segnalazione: collegandosi a un Mac sulla finestra di accesso, dopo la password l'immagine resta ferma. Dal log
+  dell'host: display 198 a 1920×1080 sulla finestra di accesso, display 199 a 5376×3360 dopo l'accesso; lo stream
+  ScreenCaptureKit restava legato al display sparito e la sessione non si accorgeva della fine della cattura.
+  Correzioni: delegato di stop e controllo del display su macOS, riavvio dello stream dalla sessione (stesso schermo
+  o principale), duplicazione Windows che non termina sugli errori transitori, cattura condivisa terminata non
+  riusata (con test).
+- Tasti tenuti premuti: il viewer scartava le ripetizioni, ma su macOS e Windows i tasti simulati non si ripetono;
+  ora inoltrate (scartate sugli host Linux, dove X ripete da sé).
+- Mac in blocco schermo durante la sessione: asserzione IOKit contro lo stop del monitor e attività dichiarata a
+  ogni input; su Windows `SetThreadExecutionState`.
+- Statistiche: larghezza minima invece che fissa (i simboli ↓ ↑ · sono più larghi di 1ch e il testo veniva tagliato
+  con i puntini), contorno giallo/rosso con soglie, "Resync per minuto"; puntatore a freccia.
+- Toolchain Rust temporanea nella cartella di lavoro: clippy pulito su macOS e sulla cattura Windows; i test non
+  linkano in locale (manca parte del toolchain Swift), girano in CI.

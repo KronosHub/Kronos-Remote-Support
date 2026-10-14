@@ -59,7 +59,10 @@
     controlError: string | null;
     displays: DisplayInfo[];
     currentDisplay: number | null;
-    resyncs: number;
+    /** When the picture was resynchronised (ms timestamps, last minute only). */
+    resyncs: number[];
+    /** The first resync is the decoder starting up: not shown. */
+    resyncStarted: boolean;
     path: Path | null;
     /** Session traffic, kbit/s. */
     net: { rx: number; tx: number } | null;
@@ -189,6 +192,14 @@
   const rate = (kbps: number) =>
     kbps >= 1000 ? `${decimal(kbps / 1000, 1)} Mbit/s` : `${Math.round(kbps)} kbit/s`;
   const pct = (cpu: number) => `${decimal(cpu, cpu < 10 ? 1 : 0)}%`;
+  /** Toolbar highlight: yellow when a value deserves attention, red when it hurts. */
+  type Level = "" | "caution" | "critical";
+  const level = (value: number | null | undefined, caution: number, critical: number): Level =>
+    value == null ? "" : value >= critical ? "critical" : value >= caution ? "caution" : "";
+  const worst = (...levels: Level[]): Level =>
+    levels.includes("critical") ? "critical" : levels.includes("caution") ? "caution" : "";
+  const RESYNC_WINDOW_MS = 60_000;
+  const recentResyncs = (v: View) => v.resyncs.filter((t) => Date.now() - t < RESYNC_WINDOW_MS).length;
   const mb = (ram: number) => (ram >= 1000 ? `${decimal(ram / 1000, 1)} GB` : `${ram} MB`);
   /** Right-aligns a value in a fixed number of characters (monospaced toolbar stats). */
   const pad = (text: string | number, width: number) => String(text).padStart(width);
@@ -277,7 +288,12 @@
           view.limited = event.limited ? { kbps: event.kbps, fps: event.fps } : null;
         break;
       case "view_resync":
-        if (view?.session === event.session) view.resyncs += 1;
+        if (view?.session === event.session && !view.resyncStarted) {
+          view.resyncStarted = true;
+        } else if (view?.session === event.session) {
+          const now = Date.now();
+          view.resyncs = [...view.resyncs.filter((t) => now - t < RESYNC_WINDOW_MS), now];
+        }
         break;
       case "view_rtt":
         if (view?.session === event.session) view.rtt = event.ms;
@@ -607,7 +623,8 @@
       controlError: null,
       displays: [],
       currentDisplay: null,
-      resyncs: 0,
+      resyncs: [],
+      resyncStarted: false,
       path: null,
       limited: null,
       net: null,
@@ -808,8 +825,8 @@
   function onKey(e: KeyboardEvent, down: boolean) {
     if (!view?.control || !e.code) return;
     e.preventDefault();
-    // The partner's OS generates auto-repeat itself while the key stays down.
-    if (down && e.repeat) return;
+    // Injected keys do not auto-repeat on macOS and Windows: forward this side's repeats
+    // (a held arrow keeps moving the cursor). Linux hosts drop them (X repeats by itself).
     if (down) keysDown.add(e.code);
     else keysDown.delete(e.code);
     sendInput({ k: "key", code: e.code, down });
@@ -889,34 +906,44 @@
       {/if}
 
       {#if view.width}
-        <span class="stat" title="Risoluzione, fotogrammi al secondo e latenza">
+        <span class="stat {level(view.rtt, 150, 300)}"
+          title="Risoluzione, fotogrammi al secondo e latenza (giallo da 150 ms, rosso da 300 ms)">
           <span class="stat-k">Video</span>
-          <span class="stat-v mono" style="width: 28ch">{pad(`${view.width}×${view.height}`, 9)} · {pad(view.fps === null ? "–" : view.fps.toFixed(0), 2)} fps · {pad(view.rtt === null ? "–" : view.rtt.toFixed(0), 4)} ms</span>
+          <span class="stat-v mono" style="min-width: 28ch">{pad(`${view.width}×${view.height}`, 9)} · {pad(view.fps === null ? "–" : view.fps.toFixed(0), 2)} fps · {pad(view.rtt === null ? "–" : view.rtt.toFixed(0), 4)} ms</span>
         </span>
       {/if}
       {#if view.net}
         <span class="stat" title="Traffico della sessione: ricevuto ↓ / inviato ↑">
           <span class="stat-k">Rete</span>
-          <span class="stat-v mono" style="width: 29ch">↓ {pad(rate(view.net.rx), 11)} · ↑ {pad(rate(view.net.tx), 11)}</span>
+          <span class="stat-v mono" style="min-width: 29ch">↓ {pad(rate(view.net.rx), 11)} · ↑ {pad(rate(view.net.tx), 11)}</span>
         </span>
       {/if}
       {#if view.local || view.partner}
-        <span class="stat" title="Risorse usate dall'app: tu / partner (cattura e codifica avvengono sul partner)">
+        <span
+          class="stat {worst(
+            level(view.local?.cpu, 50, 80),
+            level(view.partner?.cpu, 50, 80),
+            level(view.local?.ram, 800, 1500),
+            level(view.partner?.ram, 800, 1500),
+          )}"
+          title="Risorse usate dall'app: tu / partner (cattura e codifica avvengono sul partner). Giallo da 50 % di CPU o 800 MB, rosso da 80 % o 1,5 GB">
           <span class="stat-k">Risorse</span>
-          <span class="stat-v mono" style="width: 42ch">Tu {view.local ? `${pad(pct(view.local.cpu), 4)} · ${pad(mb(view.local.ram), 7)}` : pad("–", 14)} · Partner {view.partner ? `${pad(pct(view.partner.cpu), 4)} · ${pad(mb(view.partner.ram), 7)}` : pad("–", 14)}</span>
+          <span class="stat-v mono" style="min-width: 42ch">Tu {view.local ? `${pad(pct(view.local.cpu), 4)} · ${pad(mb(view.local.ram), 7)}` : pad("–", 14)} · Partner {view.partner ? `${pad(pct(view.partner.cpu), 4)} · ${pad(mb(view.partner.ram), 7)}` : pad("–", 14)}</span>
         </span>
       {/if}
       {#if view.limited}
-        <span class="stat warn-stat"
+        <span class="stat {view.limited.kbps < 450 ? 'critical' : 'caution'}"
           title="Banda insufficiente: il partner ha ridotto qualità e fotogrammi ({view.limited.fps} fps max) e, sotto 0,8 Mbit/s, la risoluzione. Torna al massimo quando la rete migliora.">
           <span class="stat-k">Qualità ridotta</span>
-          <span class="stat-v mono" style="width: 15ch">{pad(rate(view.limited.kbps), 11)}</span>
+          <span class="stat-v mono" style="min-width: 15ch">{pad(rate(view.limited.kbps), 11)}</span>
         </span>
       {/if}
-      {#if view.resyncs > 1}
-        <span class="stat" title="Immagine risincronizzata dopo perdita di pacchetti o rallentamenti">
-          <span class="stat-k">Risinc.</span>
-          <span class="stat-v mono" style="width: 6ch">{pad(view.resyncs, 6)}</span>
+      {#if recentResyncs(view) > 0}
+        {@const count = recentResyncs(view)}
+        <span class="stat {level(count, 2, 5)}"
+          title="Volte nell'ultimo minuto in cui l'immagine è stata ricostruita da capo perché si erano persi dati in rete (giallo da 2, rosso da 5)">
+          <span class="stat-k">Resync per minuto</span>
+          <span class="stat-v mono" style="min-width: 3ch">{pad(count, 3)}</span>
         </span>
       {/if}
       <span class="spacer"></span>
@@ -1517,6 +1544,7 @@
     --accent-text: #ffffff;
     --ok: #16a34a;
     --warn: #d97706;
+    --caution: #eab308;
     --err: #dc2626;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
     font-size: 15px;
@@ -1946,19 +1974,23 @@
     letter-spacing: 0.04em;
     color: var(--muted);
   }
-  /* Fixed width (set per stat) and padded values: the toolbar does not shift as numbers change. */
+  /* Minimum width (set per stat) and padded values: the toolbar does not shift as numbers
+     change, and a value is never cut (some glyphs, e.g. arrows, are wider than 1ch). */
   .stat-v {
     font-size: 12px;
     color: var(--text);
     white-space: pre;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
-  .stat.warn-stat {
-    border-color: color-mix(in srgb, var(--warn) 50%, transparent);
+  .stat.caution {
+    border-color: var(--caution);
+    box-shadow: 0 0 0 1px var(--caution);
   }
-  .stat.warn-stat .stat-v {
-    color: var(--warn);
+  .stat.critical {
+    border-color: var(--err);
+    box-shadow: 0 0 0 1px var(--err);
+  }
+  .stat.critical .stat-v {
+    color: var(--err);
   }
   .toolbar button {
     padding: 5px 12px;
@@ -1984,7 +2016,7 @@
     outline: none;
   }
   .screen canvas.controlling {
-    cursor: crosshair;
+    cursor: default;
   }
   .toolbar button.active {
     background: var(--accent);
