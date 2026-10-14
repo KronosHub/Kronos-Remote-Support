@@ -296,6 +296,7 @@ async fn serve(
     let transport::SessionChannels {
         control: channel,
         files,
+        audio,
     } = channels;
     let result = async {
         diag::wait_open(&channel).await?;
@@ -331,6 +332,7 @@ async fn serve(
     session::serve_host(
         channel,
         files,
+        audio,
         video,
         config,
         commands,
@@ -435,6 +437,7 @@ async fn view(
     let transport::SessionChannels {
         control: channel,
         files,
+        audio,
     } = channels;
     diag::wait_open(&channel).await?;
     println!(
@@ -516,6 +519,7 @@ async fn view(
     session::run_viewer(
         channel,
         files,
+        audio,
         tracks,
         commands,
         share_clipboard,
@@ -550,6 +554,7 @@ async fn view(
                 failure = Some(e);
             }
             ViewerEvent::ControlUnavailable(e) => println!("Host cannot be controlled: {e}"),
+            ViewerEvent::AudioUnavailable(e) => println!("Sound unavailable: {e}"),
             ViewerEvent::Displays { displays, current } => {
                 for d in displays {
                     let mark = if d.id == current { "*" } else { " " };

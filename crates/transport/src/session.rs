@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use signaling_proto::{ClientMessage, IceServer, SessionId, SignalPayload};
 use tokio::sync::{mpsc, watch};
-use webrtc::data_channel::DataChannel;
+use webrtc::data_channel::{DataChannel, RTCDataChannelInit};
 use webrtc::peer_connection::{
     MediaEngine, PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler,
     RTCConfigurationBuilder, RTCIceCandidateInit, RTCIceServer, RTCIceTransportPolicy,
@@ -27,11 +27,17 @@ pub const CONTROL_CHANNEL: &str = "control";
 /// delays input and control messages (each channel is its own SCTP stream).
 pub const FILES_CHANNEL: &str = "files";
 
+/// Label of the unordered, unreliable channel carrying the host's sound (a late audio
+/// packet is worthless; a lost one is concealed by the decoder).
+pub const AUDIO_CHANNEL: &str = "audio";
+
 /// The data channels of an authenticated session.
 pub struct SessionChannels {
     pub control: Arc<dyn DataChannel>,
     /// Resolves once the files channel exists; never (error) with peers that predate it.
     pub files: tokio::sync::oneshot::Receiver<Arc<dyn DataChannel>>,
+    /// Same for the audio channel (peers before 1.3.0 do not open it).
+    pub audio: tokio::sync::oneshot::Receiver<Arc<dyn DataChannel>>,
 }
 
 /// Picks the control and files channels out of a session's channel stream (the remote
@@ -48,9 +54,11 @@ pub async fn sort_channels(
         }
     };
     let (files_tx, files) = tokio::sync::oneshot::channel();
+    let (audio_tx, audio) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
+        let (mut files_tx, mut audio_tx) = (Some(files_tx), Some(audio_tx));
         let mut pending = others.into_iter();
-        loop {
+        while files_tx.is_some() || audio_tx.is_some() {
             let channel = match pending.next() {
                 Some(channel) => channel,
                 None => match channels.recv().await {
@@ -58,13 +66,21 @@ pub async fn sort_channels(
                     None => return,
                 },
             };
-            if channel.label().await.as_deref() == Ok(FILES_CHANNEL) {
-                let _ = files_tx.send(channel);
-                return;
+            let slot = match channel.label().await.as_deref() {
+                Ok(FILES_CHANNEL) => &mut files_tx,
+                Ok(AUDIO_CHANNEL) => &mut audio_tx,
+                _ => continue,
+            };
+            if let Some(tx) = slot.take() {
+                let _ = tx.send(channel);
             }
         }
     });
-    Some(SessionChannels { control, files })
+    Some(SessionChannels {
+        control,
+        files,
+        audio,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -336,6 +352,17 @@ impl PeerSession {
             let _ = channels_tx.send(channel);
             let files = pc.create_data_channel(FILES_CHANNEL, None).await?;
             let _ = channels_tx.send(files);
+            let audio = pc
+                .create_data_channel(
+                    AUDIO_CHANNEL,
+                    Some(RTCDataChannelInit {
+                        ordered: false,
+                        max_retransmits: Some(0),
+                        ..Default::default()
+                    }),
+                )
+                .await?;
+            let _ = channels_tx.send(audio);
 
             let offer = pc.create_offer(None).await?;
             let sdp = offer.sdp.clone();

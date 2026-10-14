@@ -21,6 +21,7 @@ quick-access = []
 anyhow.workspace = true
 rand.workspace = true
 agent.workspace = true
+audio.workspace = true
 input.workspace = true
 protocol.workspace = true
 serde.workspace = true

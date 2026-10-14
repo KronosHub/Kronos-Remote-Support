@@ -4,6 +4,7 @@ members = [
     "apps/desktop/src-tauri",
     "apps/signaling",
     "crates/agent",
+    "crates/audio",
     "crates/auth",
     "crates/capture",
     "crates/codec", "crates/input",
@@ -32,6 +33,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "signal", "fs"] }
 futures-util = "0.3"
 rand = "0.10"
+audio = { path = "crates/audio" }
 auth = { path = "crates/auth" }
 capture = { path = "crates/capture" }
 signaling-proto = { path = "crates/signaling-proto" }

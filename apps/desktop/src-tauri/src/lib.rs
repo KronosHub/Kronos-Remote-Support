@@ -246,6 +246,17 @@ fn send_input(service: State<'_, Service>, session: u64, event: protocol::InputE
 }
 
 #[tauri::command]
+fn set_audio(service: State<'_, Service>, session: u64, enabled: bool) {
+    service.set_audio(session, enabled);
+}
+
+/// This machine can play a partner's sound (macOS, Windows).
+#[tauri::command]
+fn audio_supported() -> bool {
+    audio::playback_supported()
+}
+
+#[tauri::command]
 fn set_high_resolution(service: State<'_, Service>, session: u64, enabled: bool) {
     service.set_high_resolution(session, enabled);
 }
@@ -557,6 +568,8 @@ pub fn run() {
             send_input,
             select_display,
             set_high_resolution,
+            set_audio,
+            audio_supported,
             close_view,
             stop_hosting
         ])

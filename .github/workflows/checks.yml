@@ -87,6 +87,9 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo build --release -p agent -p agent-poc -p windesk
+      # Sound (Opus + WASAPI): the Windows code paths only build here and in the release.
+      - run: cargo clippy -p audio -p stream --all-targets -- -D warnings
+      - run: cargo test --release -p audio
       - run: cargo build --release -p capture-poc
       - run: cargo build --release -p input --example smoke
       - name: Capture (DXGI duplication)

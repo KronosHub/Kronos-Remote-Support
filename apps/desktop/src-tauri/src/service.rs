@@ -121,6 +121,11 @@ pub enum UiEvent {
         session: SessionId,
         enabled: bool,
     },
+    /// The partner's sound is (no longer) playing.
+    ViewAudio {
+        session: SessionId,
+        enabled: bool,
+    },
     /// Short message for the viewer window (e.g. files received on the clipboard).
     ViewNotice {
         session: SessionId,
@@ -737,6 +742,12 @@ impl Service {
     pub fn send_input(&self, session: SessionId, event: protocol::InputEvent) {
         if let Some(viewer) = self.shared.viewers.lock().unwrap().get(&session) {
             let _ = viewer.commands.send(ViewerCommand::Input(event));
+        }
+    }
+
+    pub fn set_audio(&self, session: SessionId, enabled: bool) {
+        if let Some(viewer) = self.shared.viewers.lock().unwrap().get(&session) {
+            let _ = viewer.commands.send(ViewerCommand::Audio(enabled));
         }
     }
 
@@ -1443,6 +1454,7 @@ async fn serve_partner(
     let SessionChannels {
         control: channel,
         files,
+        audio,
     } = channels;
     if !wait_open(&channel).await {
         log(
@@ -1547,6 +1559,7 @@ async fn serve_partner(
     session::serve_host(
         channel,
         files,
+        audio,
         video,
         config,
         stop_rx,
@@ -1690,6 +1703,7 @@ async fn view_partner(
     let SessionChannels {
         control: channel,
         files,
+        audio,
     } = channels;
     let (cancel_tx, cancel_rx) = oneshot::channel::<String>();
     shared.connecting.lock().unwrap().insert(session, cancel_tx);
@@ -1768,6 +1782,7 @@ async fn view_partner(
     session::run_viewer(
         channel,
         files,
+        audio,
         tracks,
         commands,
         true,
@@ -1834,6 +1849,18 @@ async fn view_partner(
             }
             ViewerEvent::Clipboard(message) => {
                 log(app, "info", format!("appunti con {partner}: {message}"));
+                shared.view_event(app, session, UiEvent::ViewNotice { session, message });
+            }
+            ViewerEvent::AudioUnavailable(message) => {
+                log(app, "warn", format!("audio non disponibile: {message}"));
+                shared.view_event(
+                    app,
+                    session,
+                    UiEvent::ViewAudio {
+                        session,
+                        enabled: false,
+                    },
+                );
                 shared.view_event(app, session, UiEvent::ViewNotice { session, message });
             }
             ViewerEvent::ClipboardEnabled(enabled) => {

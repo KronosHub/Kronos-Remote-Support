@@ -10,6 +10,7 @@ anyhow.workspace = true
 arboard = "3"
 bytes = "1"
 agent.workspace = true
+audio.workspace = true
 capture.workspace = true
 codec.workspace = true
 input.workspace = true

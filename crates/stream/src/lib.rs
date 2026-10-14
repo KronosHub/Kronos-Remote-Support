@@ -9,6 +9,7 @@ pub mod files;
 pub mod rate;
 pub mod session;
 mod sharing;
+mod sound;
 pub mod usage;
 
 use std::sync::Arc;

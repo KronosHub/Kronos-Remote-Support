@@ -86,6 +86,14 @@ pub enum ControlMsg {
     HighResolution {
         enabled: bool,
     },
+    /// Viewer → host: send the host's sound (on the audio channel) or stop. Off by default.
+    Audio {
+        enabled: bool,
+    },
+    /// Host → viewer: the sound cannot be sent (unsupported system, capture failed).
+    AudioUnavailable {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -165,6 +173,12 @@ mod tests {
         let hd = ControlMsg::HighResolution { enabled: false };
         assert_eq!(hd.to_json(), r#"{"t":"high_resolution","enabled":false}"#);
         assert_eq!(ControlMsg::from_json(hd.to_json().as_bytes()), Some(hd));
+        let audio = ControlMsg::Audio { enabled: true };
+        assert_eq!(audio.to_json(), r#"{"t":"audio","enabled":true}"#);
+        assert_eq!(
+            ControlMsg::from_json(audio.to_json().as_bytes()),
+            Some(audio)
+        );
     }
 
     #[test]

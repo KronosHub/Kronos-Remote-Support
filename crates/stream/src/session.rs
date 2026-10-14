@@ -130,6 +130,7 @@ pub enum HostCommand {
 pub async fn serve_host(
     channel: Arc<dyn DataChannel>,
     files: tokio::sync::oneshot::Receiver<Arc<dyn DataChannel>>,
+    audio: tokio::sync::oneshot::Receiver<Arc<dyn DataChannel>>,
     video: Arc<VideoSender>,
     config: StreamConfig,
     mut commands: mpsc::UnboundedReceiver<HostCommand>,
@@ -209,6 +210,8 @@ pub async fn serve_host(
     let mut clipboard = ClipboardShare::new(files);
     // No display sleep or screen lock while someone is controlling this machine.
     let awake = crate::awake::KeepAwake::new();
+    // Sound: off until the viewer asks for it.
+    let mut sound = crate::sound::HostSound::new(audio);
     // HD on by default; the viewer may limit the stream to 1080p (kept across restarts).
     let mut high_resolution = true;
     // Set while the capture is down and must be started again.
@@ -289,6 +292,11 @@ pub async fn serve_host(
                     }
                 }
                 Some(ControlMsg::Clipboard { text }) => clipboard.remote_text(text),
+                Some(ControlMsg::Audio { enabled }) => {
+                    if let Err(message) = sound.set_enabled(enabled).await {
+                        send(&channel, &ControlMsg::AudioUnavailable { message }).await;
+                    }
+                }
                 Some(ControlMsg::HighResolution { enabled }) => {
                     tracing::info!(enabled, "viewer set HD");
                     high_resolution = enabled;
@@ -539,6 +547,8 @@ pub enum ViewerEvent {
         displays: Vec<protocol::DisplayInfo>,
         current: u32,
     },
+    /// The host's sound cannot be played (here or on the host); the button goes off.
+    AudioUnavailable(String),
     Ended(String),
 }
 
@@ -553,6 +563,8 @@ pub enum ViewerCommand {
     SelectDisplay(u32),
     /// HD on (up to the host's full size) or off (at most 1080p).
     HighResolution(bool),
+    /// Play the host's sound or not (off by default).
+    Audio(bool),
     Stop,
 }
 
@@ -560,6 +572,7 @@ pub enum ViewerCommand {
 pub async fn run_viewer(
     channel: Arc<dyn DataChannel>,
     files: tokio::sync::oneshot::Receiver<Arc<dyn DataChannel>>,
+    audio: tokio::sync::oneshot::Receiver<Arc<dyn DataChannel>>,
     mut tracks: mpsc::UnboundedReceiver<Arc<dyn TrackRemote>>,
     mut commands: mpsc::UnboundedReceiver<ViewerCommand>,
     share_clipboard: bool,
@@ -582,6 +595,8 @@ pub async fn run_viewer(
         }
     });
 
+    // Sound: off until the user turns it on.
+    let mut sound = crate::sound::ViewerSound::new(audio);
     let start = Instant::now();
     let mut ping = tokio::time::interval(PING_INTERVAL);
     let mut seq = 0u32;
@@ -629,6 +644,10 @@ pub async fn run_viewer(
                     on_event(ViewerEvent::ClipboardEnabled(false));
                 }
                 Some(ControlMsg::Chat { text }) => on_event(ViewerEvent::Chat(text)),
+                Some(ControlMsg::AudioUnavailable { message }) => {
+                    let _ = sound.set_enabled(false).await;
+                    on_event(ViewerEvent::AudioUnavailable(message));
+                }
                 Some(ControlMsg::Usage { cpu, ram_mb }) => {
                     on_event(ViewerEvent::PartnerUsage { cpu, ram_mb })
                 }
@@ -662,6 +681,13 @@ pub async fn run_viewer(
                 Some(ViewerCommand::SelectDisplay(id)) => send(&channel, &ControlMsg::SelectDisplay { id }).await,
                 Some(ViewerCommand::HighResolution(enabled)) => {
                     send(&channel, &ControlMsg::HighResolution { enabled }).await;
+                }
+                Some(ViewerCommand::Audio(enabled)) => {
+                    // Speakers first, so the first packets are not lost; host last on stop.
+                    match sound.set_enabled(enabled).await {
+                        Ok(()) => send(&channel, &ControlMsg::Audio { enabled }).await,
+                        Err(message) => on_event(ViewerEvent::AudioUnavailable(message)),
+                    }
                 }
                 Some(ViewerCommand::Stop) | None => {
                     send(&channel, &ControlMsg::Bye { reason: "il partner si è disconnesso".into() }).await;

@@ -34,6 +34,7 @@
     | { kind: "view_partner_usage"; session: number; cpu: number; ram_mb: number }
     | { kind: "view_quality"; session: number; kbps: number; fps: number; limited: boolean }
     | { kind: "view_clipboard"; session: number; enabled: boolean }
+    | { kind: "view_audio"; session: number; enabled: boolean }
     | { kind: "view_notice"; session: number; message: string }
     | { kind: "view_chat"; session: number; text: string }
     | { kind: "host_chat"; session: number; peer: string; text: string }
@@ -65,6 +66,8 @@
     resyncStarted: boolean;
     /** HD: the partner sends up to its full size (on) or at most 1080p (off). */
     hd: boolean;
+    /** The partner's sound plays here (off by default). */
+    audio: boolean;
     path: Path | null;
     /** Session traffic, kbit/s. */
     net: { rx: number; tx: number } | null;
@@ -317,6 +320,9 @@
       case "view_clipboard":
         if (view?.session === event.session) view.clipboard = event.enabled;
         break;
+      case "view_audio":
+        if (view?.session === event.session) view.audio = event.enabled;
+        break;
       case "view_notice":
         if (view?.session === event.session) showNotice(event.message);
         break;
@@ -364,6 +370,7 @@
     // Clock for countdowns and the resyncs of the last minute (session windows too).
     const timer = setInterval(() => (now = Date.now()), 250);
     if (viewSession !== null) {
+      invoke<boolean>("audio_supported").then((s) => (audioSupported = s));
       openView(viewSession);
       return () => {
         unlisten.then((f) => f());
@@ -395,10 +402,15 @@
     );
     // Quiet check shortly after start; the button shows if something is available.
     const firstCheck = setTimeout(checkUpdate, 4000);
+    // Then every few hours, for apps left open for days (e.g. unattended access).
+    const updateTimer = setInterval(() => {
+      if (update.kind !== "available") checkUpdate();
+    }, UPDATE_CHECK_MS);
     return () => {
       unlisten.then((f) => f());
       unlistenProgress.then((f) => f());
       clearTimeout(firstCheck);
+      clearInterval(updateTimer);
       clearInterval(permissionTimer);
       clearInterval(timer);
     };
@@ -463,6 +475,8 @@
   }
 
   /** Result shown in the Aggiornamenti page; the sidebar marks an available version. */
+  const UPDATE_CHECK_MS = 4 * 60 * 60 * 1000;
+
   async function checkUpdate() {
     if (update.kind === "checking" || update.kind === "installing") return;
     update = { kind: "checking" };
@@ -472,6 +486,12 @@
     } catch (e) {
       update = { kind: "error", message: String(e) };
     }
+  }
+
+  /** Opening the section checks again (an update already found stays shown). */
+  function openUpdates() {
+    section = "updates";
+    if (update.kind !== "available") checkUpdate();
   }
 
   async function installUpdate() {
@@ -631,6 +651,7 @@
       resyncs: [],
       resyncStarted: false,
       hd: true,
+      audio: false,
       path: null,
       limited: null,
       net: null,
@@ -876,6 +897,15 @@
     buttonsDown.clear();
   }
 
+  /** This machine can play the partner's sound (not on Linux). */
+  let audioSupported = $state(false);
+
+  function toggleAudio() {
+    if (!view) return;
+    view.audio = !view.audio;
+    invoke("set_audio", { session: view.session, enabled: view.audio });
+  }
+
   function toggleHd() {
     if (!view) return;
     view.hd = !view.hd;
@@ -1024,6 +1054,13 @@
           Chat{#if view.unread > 0} <span class="chat-badge">{view.unread}</span>{/if}
         </button>
       {/if}
+      {#if !view.ended && audioSupported}
+        <button
+          class:active={view.audio}
+          onclick={toggleAudio}
+          title={view.audio ? "Audio del partner attivo. Clic per spegnerlo" : "Ascolta l'audio del partner (circa 64 kbit/s)"}
+          >Audio</button>
+      {/if}
       {#if !view.ended}
         <button
           class:active={view.hd}
@@ -1102,7 +1139,7 @@
     </div>
     <div class="nav-bottom">
       {#if mode === "full"}
-        <button class="nav-item" class:selected={section === "updates"} onclick={() => (section = "updates")}
+        <button class="nav-item" class:selected={section === "updates"} onclick={openUpdates}
           title="Versione {appVersion}">
           <svg viewBox="0 0 24 24" aria-hidden="true">{@html icons.updates}</svg>
           <span class="nav-label">Aggiornamenti</span>
