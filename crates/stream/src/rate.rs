@@ -127,6 +127,40 @@ pub fn fps_for(bitrate: u32, max_fps: u32) -> u32 {
     fps.min(max_fps).max(1)
 }
 
+/// Resolution steps, in percent of the captured size. Below about 800 kbit/s even 15 fps
+/// of a full-size screen are too blurry to read; fewer pixels keep text legible.
+const SCALE_STEPS: [(u32, u32); 2] = [(450_000, 50), (800_000, 75)];
+/// Before going back up, the bitrate must exceed the step's threshold by this much (in
+/// percent): each resolution change costs a keyframe, so it must not flap.
+const SCALE_UP_MARGIN: u32 = 125;
+/// Minimum time between two resolution changes, down and up.
+pub const SCALE_DOWN_GAP: Duration = Duration::from_secs(2);
+pub const SCALE_UP_GAP: Duration = Duration::from_secs(10);
+
+fn scale_below(bitrate: u32) -> u32 {
+    SCALE_STEPS
+        .iter()
+        .find(|&&(threshold, _)| bitrate < threshold)
+        .map_or(100, |&(_, scale)| scale)
+}
+
+/// Resolution (percent of the captured size) for a bitrate, given the current one: steps
+/// down as soon as the bitrate falls under a threshold, back up only with some margin.
+pub fn scale_for(bitrate: u32, current: u32) -> u32 {
+    let target = scale_below(bitrate);
+    if target < current {
+        return target;
+    }
+    let reduced = u64::from(bitrate) * 100 / u64::from(SCALE_UP_MARGIN);
+    scale_below(reduced as u32).max(current)
+}
+
+/// Output size for a scale, rounded down to even sizes (YUV 4:2:0).
+pub fn scaled_size((width, height): (u32, u32), scale: u32) -> (u32, u32) {
+    let even = |v: u32| ((v * scale / 100) & !1).max(2);
+    (even(width), even(height))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,5 +244,29 @@ mod tests {
         assert_eq!(fps_for(500_000, 30), 15);
         assert_eq!(fps_for(250_000, 30), 10);
         assert_eq!(fps_for(250_000, 5), 5);
+    }
+
+    #[test]
+    fn resolution_steps_down_at_once_and_up_with_margin() {
+        assert_eq!(scale_for(4_000_000, 100), 100);
+        assert_eq!(scale_for(700_000, 100), 75);
+        assert_eq!(scale_for(300_000, 100), 50);
+        assert_eq!(scale_for(300_000, 75), 50);
+        // Just above a threshold is not enough to go back up...
+        assert_eq!(scale_for(500_000, 50), 50);
+        assert_eq!(scale_for(900_000, 75), 75);
+        // ...25 % above is.
+        assert_eq!(scale_for(570_000, 50), 75);
+        assert_eq!(scale_for(1_000_000, 75), 100);
+        assert_eq!(scale_for(1_000_000, 50), 100);
+    }
+
+    #[test]
+    fn scaled_sizes_are_even() {
+        assert_eq!(scaled_size((1920, 1080), 100), (1920, 1080));
+        assert_eq!(scaled_size((1920, 1080), 75), (1440, 810));
+        assert_eq!(scaled_size((1920, 1080), 50), (960, 540));
+        assert_eq!(scaled_size((1366, 768), 75), (1024, 576));
+        assert_eq!(scaled_size((1278, 718), 50), (638, 358));
     }
 }

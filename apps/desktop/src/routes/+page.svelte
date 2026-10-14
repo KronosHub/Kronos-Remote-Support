@@ -190,6 +190,8 @@
     kbps >= 1000 ? `${decimal(kbps / 1000, 1)} Mbit/s` : `${Math.round(kbps)} kbit/s`;
   const pct = (cpu: number) => `${decimal(cpu, cpu < 10 ? 1 : 0)}%`;
   const mb = (ram: number) => (ram >= 1000 ? `${decimal(ram / 1000, 1)} GB` : `${ram} MB`);
+  /** Right-aligns a value in a fixed number of characters (monospaced toolbar stats). */
+  const pad = (text: string | number, width: number) => String(text).padStart(width);
 
   const pathLabel: Record<Path, string> = {
     lan: "Diretta (rete locale)",
@@ -238,8 +240,10 @@
         break;
       case "view_size":
         if (view?.session === event.session) {
-          // A new size means a new stream (other monitor): restart the decoder.
-          if (view.width !== null && (view.width !== event.width || view.height !== event.height)) {
+          // A new size means a new stream (other monitor, or resolution adapted to the
+          // bandwidth): restart the decoder, unless it already shows the new size.
+          const painted = canvas && canvas.width === event.width && canvas.height === event.height;
+          if (view.width !== null && (view.width !== event.width || view.height !== event.height) && !painted) {
             remote?.restart();
           }
           view.width = event.width;
@@ -717,6 +721,8 @@
   // ---- Remote control: viewer input → partner ----------------------------------------
   const buttons = ["left", "middle", "right", "back", "forward"];
   const keysDown = new Set<string>();
+  /** Mouse buttons pressed on the picture, so their release is sent too. */
+  const buttonsDown = new Set<string>();
   let pendingMove: { x: number; y: number } | null = null;
   let moveScheduled = false;
   let wheelAccum = { x: 0, y: 0 };
@@ -726,13 +732,35 @@
     invoke("send_input", { session: view.session, event });
   }
 
-  /** Pointer position normalized to the displayed image (canvas keeps the aspect ratio). */
-  function normalized(e: MouseEvent) {
+  /**
+   * Area of the canvas element showing the picture: the canvas fills the window and the
+   * image is centred in it at the stream's aspect ratio (black bars on the other sides).
+   */
+  function pictureRect() {
     const r = canvas!.getBoundingClientRect();
+    const { width, height } = canvas!;
+    if (!width || !height) return r;
+    const scale = Math.min(r.width / width, r.height / height);
+    const w = width * scale;
+    const h = height * scale;
+    return { left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, width: w, height: h };
+  }
+
+  /** Pointer position normalized to the displayed image. */
+  function normalized(e: MouseEvent) {
+    const r = pictureRect();
     return {
       x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
       y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)),
     };
+  }
+
+  /** Over the picture, not over the black bars around it. */
+  function onPicture(e: MouseEvent) {
+    const r = pictureRect();
+    return (
+      e.clientX >= r.left && e.clientX <= r.left + r.width && e.clientY >= r.top && e.clientY <= r.top + r.height
+    );
   }
 
   function onMouseMove(e: MouseEvent) {
@@ -751,6 +779,14 @@
     canvas?.focus();
     const button = buttons[e.button];
     if (!button) return;
+    // A click on the black bars must not land on the partner's screen edge; the release
+    // of a press made on the picture is always sent, wherever the pointer ends up.
+    if (down) {
+      if (!onPicture(e)) return;
+      buttonsDown.add(button);
+    } else if (!buttonsDown.delete(button)) {
+      return;
+    }
     sendInput({ k: "mouse_move", ...normalized(e) });
     sendInput({ k: "mouse_button", button, down });
   }
@@ -783,6 +819,8 @@
   function releaseKeys() {
     for (const code of keysDown) sendInput({ k: "key", code, down: false });
     keysDown.clear();
+    for (const button of buttonsDown) sendInput({ k: "mouse_button", button, down: false });
+    buttonsDown.clear();
   }
 
   async function selectDisplay(id: number) {
@@ -853,34 +891,32 @@
       {#if view.width}
         <span class="stat" title="Risoluzione, fotogrammi al secondo e latenza">
           <span class="stat-k">Video</span>
-          <span class="stat-v mono">{view.width}×{view.height}{#if view.fps !== null} · {view.fps.toFixed(0)} fps{/if}{#if view.rtt !== null} · {view.rtt.toFixed(0)} ms{/if}</span>
+          <span class="stat-v mono" style="width: 28ch">{pad(`${view.width}×${view.height}`, 9)} · {pad(view.fps === null ? "–" : view.fps.toFixed(0), 2)} fps · {pad(view.rtt === null ? "–" : view.rtt.toFixed(0), 4)} ms</span>
         </span>
       {/if}
       {#if view.net}
         <span class="stat" title="Traffico della sessione: ricevuto ↓ / inviato ↑">
           <span class="stat-k">Rete</span>
-          <span class="stat-v mono">↓ {rate(view.net.rx)} · ↑ {rate(view.net.tx)}</span>
+          <span class="stat-v mono" style="width: 29ch">↓ {pad(rate(view.net.rx), 11)} · ↑ {pad(rate(view.net.tx), 11)}</span>
         </span>
       {/if}
       {#if view.local || view.partner}
         <span class="stat" title="Risorse usate dall'app: tu / partner (cattura e codifica avvengono sul partner)">
           <span class="stat-k">Risorse</span>
-          <span class="stat-v mono">
-            {#if view.local}Tu {pct(view.local.cpu)} · {mb(view.local.ram)}{/if}{#if view.local && view.partner} · {/if}{#if view.partner}Partner {pct(view.partner.cpu)} · {mb(view.partner.ram)}{/if}
-          </span>
+          <span class="stat-v mono" style="width: 42ch">Tu {view.local ? `${pad(pct(view.local.cpu), 4)} · ${pad(mb(view.local.ram), 7)}` : pad("–", 14)} · Partner {view.partner ? `${pad(pct(view.partner.cpu), 4)} · ${pad(mb(view.partner.ram), 7)}` : pad("–", 14)}</span>
         </span>
       {/if}
       {#if view.limited}
         <span class="stat warn-stat"
-          title="Banda insufficiente: il partner ha ridotto qualità e fotogrammi ({view.limited.fps} fps max). Torna al massimo quando la rete migliora.">
+          title="Banda insufficiente: il partner ha ridotto qualità e fotogrammi ({view.limited.fps} fps max) e, sotto 0,8 Mbit/s, la risoluzione. Torna al massimo quando la rete migliora.">
           <span class="stat-k">Qualità ridotta</span>
-          <span class="stat-v mono">{(view.limited.kbps / 1000).toLocaleString("it-IT", { maximumFractionDigits: 1 })} Mbit/s</span>
+          <span class="stat-v mono" style="width: 15ch">{pad(rate(view.limited.kbps), 11)}</span>
         </span>
       {/if}
       {#if view.resyncs > 1}
         <span class="stat" title="Immagine risincronizzata dopo perdita di pacchetti o rallentamenti">
           <span class="stat-k">Risinc.</span>
-          <span class="stat-v mono">{view.resyncs}</span>
+          <span class="stat-v mono" style="width: 6ch">{pad(view.resyncs, 6)}</span>
         </span>
       {/if}
       <span class="spacer"></span>
@@ -1910,9 +1946,13 @@
     letter-spacing: 0.04em;
     color: var(--muted);
   }
+  /* Fixed width (set per stat) and padded values: the toolbar does not shift as numbers change. */
   .stat-v {
     font-size: 12px;
     color: var(--text);
+    white-space: pre;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .stat.warn-stat {
     border-color: color-mix(in srgb, var(--warn) 50%, transparent);
@@ -1934,9 +1974,10 @@
     place-items: center;
     overflow: hidden;
   }
+  /* Fills the window; the picture keeps its aspect ratio (scaled up or down). */
   .screen canvas {
-    max-width: 100%;
-    max-height: 100%;
+    width: 100%;
+    height: 100%;
     object-fit: contain;
   }
   .screen canvas:focus {

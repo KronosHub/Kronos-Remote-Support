@@ -227,6 +227,11 @@ pub async fn serve_host(
                     on_event(HostEvent::ControlFailing(error));
                 }
             }
+            (width, height) = handle.resized() => {
+                // Resolution lowered or restored for the bandwidth: the viewer restarts
+                // its decoder on the new size, as for another monitor.
+                send(&channel, &ControlMsg::StreamStarted { width, height }).await;
+            }
             msg = recv(&channel) => match msg {
                 Some(ControlMsg::Ping { seq, sent_us }) => {
                     send(&channel, &ControlMsg::Pong { seq, sent_us }).await;

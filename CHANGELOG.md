@@ -3,6 +3,10 @@
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
 ## 1.2.2 — in preparazione
+- Con poca banda (sotto 0,8 Mbit/s) lo schermo del partner viene trasmesso a risoluzione ridotta, così il testo
+  resta leggibile; torna piena quando la rete migliora.
+- La finestra di controllo si riempie: allargandola, lo schermo del partner si ingrandisce in proporzione.
+- Barra delle statistiche con campi di larghezza fissa: non si spostano più al cambiare dei valori.
 - Aggiornamenti: l'app mostra le novità di tutte le versioni uscite dopo quella installata.
 
 ## 1.2.1 — 2026-10-13

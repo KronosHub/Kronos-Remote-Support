@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use capture::{CaptureConfig, Capturer, Frame, TestPattern};
 use codec::{EncoderSettings, H264Encoder};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use transport::video::VideoSender;
 
 #[derive(Debug, Clone)]
@@ -65,6 +65,7 @@ impl Default for StreamConfig {
 
 /// Running stream. Dropping it stops capture and encoding.
 pub struct StreamHandle {
+    /// Encoded size: the captured size, or less while the bandwidth is low.
     pub width: u32,
     pub height: u32,
     /// Display actually captured (resolved when the config asked for "primary").
@@ -74,10 +75,27 @@ pub struct StreamHandle {
     stop: Arc<AtomicBool>,
     keyframe: Arc<AtomicBool>,
     bitrate: Arc<AtomicU32>,
+    size: watch::Receiver<(u32, u32)>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl StreamHandle {
+    /// Waits until the encoded size changes (resolution lowered or restored for the
+    /// bandwidth) and returns the new one. Never resolves once the stream has stopped.
+    pub async fn resized(&mut self) -> (u32, u32) {
+        loop {
+            if self.size.changed().await.is_err() {
+                std::future::pending::<()>().await;
+            }
+            let (width, height) = *self.size.borrow_and_update();
+            if (width, height) != (self.width, self.height) {
+                self.width = width;
+                self.height = height;
+                return (width, height);
+            }
+        }
+    }
+
     /// Adaptive quality: target bitrate from now on (capped at the configured one); the
     /// frame rate follows ([`rate::fps_for`]).
     pub fn set_bitrate(&self, bps: u32) {
@@ -176,12 +194,14 @@ pub async fn start(config: StreamConfig, video: Arc<VideoSender>) -> Result<Stre
     // Small queue: if the network side falls behind, drop and resync with a keyframe
     // rather than building latency.
     let (frames_tx, mut frames_rx) = mpsc::channel::<Encoded>(4);
+    let (size_tx, size_rx) = watch::channel((0, 0));
 
     let thread = {
         let controls = Controls {
             stop: stop.clone(),
             keyframe: keyframe.clone(),
             bitrate: bitrate.clone(),
+            size: size_tx,
         };
         std::thread::Builder::new()
             .name("screen-encoder".into())
@@ -215,6 +235,7 @@ pub async fn start(config: StreamConfig, video: Arc<VideoSender>) -> Result<Stre
         stop,
         keyframe,
         bitrate,
+        size: size_rx,
         thread: Some(thread),
     })
 }
@@ -224,6 +245,7 @@ struct Controls {
     stop: Arc<AtomicBool>,
     keyframe: Arc<AtomicBool>,
     bitrate: Arc<AtomicU32>,
+    size: watch::Sender<(u32, u32)>,
 }
 
 fn encode_loop(
@@ -236,15 +258,18 @@ fn encode_loop(
         stop,
         keyframe,
         bitrate,
+        size,
     } = controls;
-    let setup = open_source(&config).and_then(|source| {
-        let (width, height) = source.output_size();
-        let encoder = H264Encoder::new(&EncoderSettings {
+    let new_encoder = |(width, height): (u32, u32)| {
+        H264Encoder::new(&EncoderSettings {
             fps: config.fps,
             bitrate_bps: config.bitrate_bps,
             keyframe_interval: config.keyframe_interval,
             ..EncoderSettings::new(width, height)
-        })?;
+        })
+    };
+    let setup = open_source(&config).and_then(|source| {
+        let encoder = new_encoder(source.output_size())?;
         Ok((source, encoder))
     });
     let (mut source, mut encoder) = match setup {
@@ -264,6 +289,11 @@ fn encode_loop(
         }
     };
 
+    let captured_size = source.output_size();
+    size.send_replace(captured_size);
+    // Resolution in percent of the captured size, lowered while the bandwidth is low.
+    let mut scale = 100;
+    let mut last_rescale: Option<Instant> = None;
     let start = Instant::now();
     let mut last_keyframe: Option<Instant> = None;
     // Kept so a keyframe can be produced even while the screen is static.
@@ -281,6 +311,42 @@ fn encode_loop(
             let fps = rate::fps_for(target, config.fps);
             encoder.set_rate(target, fps);
             interval = Duration::from_secs(1) / fps;
+        }
+        let wanted = rate::scale_for(applied_bitrate, scale);
+        let gap = if wanted < scale {
+            rate::SCALE_DOWN_GAP
+        } else {
+            rate::SCALE_UP_GAP
+        };
+        if wanted != scale && last_rescale.is_none_or(|t| t.elapsed() >= gap) {
+            let encoded_size = rate::scaled_size(captured_size, wanted);
+            match new_encoder(encoded_size) {
+                Ok(mut resized) => {
+                    tracing::info!(scale = wanted, size = ?encoded_size, "resolution changed");
+                    let fps = rate::fps_for(applied_bitrate, config.fps);
+                    resized.set_rate(applied_bitrate, fps);
+                    // A new encoder starts with a keyframe carrying the new size.
+                    encoder = resized;
+                    scale = wanted;
+                    last_rescale = Some(Instant::now());
+                    last_keyframe = Some(Instant::now());
+                    keyframe.store(false, Ordering::Relaxed);
+                    size.send_replace(encoded_size);
+                    // Encode the current picture at once, even if the screen is static.
+                    if pending.is_none()
+                        && let Some(previous) = &last_frame
+                    {
+                        pending = Some(Frame {
+                            captured_at: Instant::now(),
+                            ..previous.clone()
+                        });
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("cannot resize the encoder: {e:#}");
+                    last_rescale = Some(Instant::now());
+                }
+            }
         }
         // Wait for a new frame, or only until the pending one is due.
         let wait = match (&pending, last_encoded) {
@@ -317,10 +383,15 @@ fn encode_loop(
             },
             None => continue,
         };
-        if (frame.width, frame.height) != encoder.size() {
+        if (frame.width, frame.height) != captured_size {
             tracing::warn!(size = ?(frame.width, frame.height), "frame size changed, skipping");
             continue;
         }
+        let (width, height) = encoder.size();
+        let scaled = (scale < 100).then(|| {
+            capture::scale::scale_bgra(&frame.data, frame.width, frame.height, width, height)
+        });
+        let data = scaled.as_deref().unwrap_or(&frame.data);
 
         if want_keyframe {
             encoder.force_keyframe();
@@ -328,7 +399,7 @@ fn encode_loop(
         }
         last_encoded = Some(Instant::now());
         let ts = frame.captured_at.duration_since(start).as_millis() as u64;
-        match encoder.encode_bgra(&frame.data, frame.width, frame.height, ts) {
+        match encoder.encode_bgra(data, width, height, ts) {
             Ok(Some(encoded)) => {
                 let item = Encoded {
                     data: encoded.data,
