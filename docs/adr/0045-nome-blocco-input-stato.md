@@ -32,6 +32,7 @@
 Dal log dell'host (1.2.3–1.3.0): dopo la chiusura dal lato viewer le sessioni dell'host finivano solo quando il
 viewer si ricollegava al server ("peer reconnected") o chiudeva l'app ("peer disconnected"); nessun `Bye`, nessun
 `leave`, e la connessione WebRTC restava "connected". Quindi la sessione restava viva dal lato viewer; causa
-esatta da chiarire con il log del viewer. Rimedio indipendente dalla causa: entrambi i lati chiudono la sessione
+esatta da chiarire con il log del viewer. **Rivisto in ADR 0046:** il log completo mostra che quelle sessioni
+erano vive (Report ogni secondo fino all'ultimo istante) e venivano chiuse proprio dal server. Rimedio indipendente dalla causa: entrambi i lati chiudono la sessione
 se per 20 s non arriva nessun messaggio di controllo (il viewer manda Ping/Report ogni secondo, l'host Pong ogni
 secondo e Usage ogni 2 s).

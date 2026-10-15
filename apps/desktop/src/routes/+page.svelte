@@ -523,13 +523,13 @@
     event.preventDefault();
     formError = "";
     try {
-      await invoke("connect_to", {
+      // False: already connected to that device, its window was brought forward.
+      busy = await invoke<boolean>("connect_to", {
         target: partnerId,
         password: partnerPassword,
         personal: usePersonal,
         saveAs: usePersonal && saveAs.trim() ? saveAs.trim() : null,
       });
-      busy = true;
       if (usePersonal && saveAs.trim()) {
         devices = await invoke<Device[]>("list_devices");
         saveAs = "";
@@ -616,8 +616,7 @@
   async function connectDevice(d: Device) {
     formError = "";
     try {
-      await invoke("connect_device", { id: d.id });
-      busy = true;
+      busy = await invoke<boolean>("connect_device", { id: d.id });
     } catch (e) {
       addLog("error", String(e));
     }

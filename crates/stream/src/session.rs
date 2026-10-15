@@ -137,6 +137,8 @@ pub enum HostEvent {
 
 pub enum HostCommand {
     Stop,
+    /// The viewer left (reported by the server): end without blaming the host's user.
+    PartnerLeft,
     /// A chat message typed on the host, to show on the viewer.
     Chat(String),
     /// Stop the clipboard file transfer under way.
@@ -436,6 +438,7 @@ pub async fn serve_host(
                 Some(HostCommand::Chat(text)) => {
                     send(&channel, &ControlMsg::Chat { text }).await;
                 }
+                Some(HostCommand::PartnerLeft) => break "il partner si è disconnesso".to_owned(),
                 Some(HostCommand::Stop) | None => {
                     send(&channel, &ControlMsg::Bye { reason: "terminata dall'host".into() }).await;
                     break "terminata da te".to_owned();

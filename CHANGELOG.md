@@ -2,6 +2,15 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.5.3 — 2026-10-15
+- Le connessioni non cadono più dopo qualche minuto: quando uno dei due computer perdeva per un attimo il
+  collegamento con il server (succede da solo ogni tanto), la sessione veniva chiusa anche se la connessione
+  diretta funzionava. Ora continua; se il partner sparisce davvero, la sessione si chiude dopo 20 secondi.
+- Collegandosi a un computer già aperto, l'app porta in primo piano la sua finestra invece di aprire una seconda
+  sessione.
+- Sul computer controllato, quando chi controlla si disconnette, il messaggio dice "il partner si è disconnesso"
+  invece di "terminata da te".
+
 ## 1.5.2 — 2026-10-14
 - Pulsante ✕ accanto alla barra di avanzamento per interrompere il trasferimento di un file: lo può fare chi
   invia o chi riceve, l'altro computer viene avvisato e i file arrivati a metà vengono cancellati.

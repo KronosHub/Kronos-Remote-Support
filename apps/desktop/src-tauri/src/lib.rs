@@ -81,16 +81,21 @@ fn parse_target(service: &Service, target: &str) -> Result<PeerId, String> {
 }
 
 /// Connects with the partner's temporary password, or with its personal password
-/// (`personal`, no approval); `save_as` also remembers the device.
+/// (`personal`, no approval); `save_as` also remembers the device. False when a session
+/// to that device was already open: its window is brought forward instead.
 #[tauri::command]
 async fn connect_to(
+    app: AppHandle,
     service: State<'_, Service>,
     target: String,
     password: String,
     personal: bool,
     save_as: Option<String>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let target = parse_target(&service, &target)?;
+    if show_existing_view(&app, &service, &target) {
+        return Ok(false);
+    }
     if personal {
         if password.is_empty() {
             return Err("inserisci la password personale del dispositivo".into());
@@ -98,14 +103,30 @@ async fn connect_to(
         let save_as = save_as
             .map(|n| n.trim().to_owned())
             .filter(|n| !n.is_empty());
-        return service.connect_personal(target, &password, save_as);
+        return service
+            .connect_personal(target, &password, save_as)
+            .map(|()| true);
     }
     let password = transport::normalize_password(&password);
     if password.is_empty() || !password.chars().all(|c| c.is_ascii_alphanumeric()) {
         return Err("password non valida: solo lettere minuscole e cifre".into());
     }
     service.connect(target, password);
-    Ok(())
+    Ok(true)
+}
+
+/// Already viewing `target`: brings that session's window forward instead of opening a
+/// second session to the same device. True if there was one.
+fn show_existing_view(app: &AppHandle, service: &Service, target: &PeerId) -> bool {
+    let Some(session) = service.viewing(target) else {
+        return false;
+    };
+    if let Some(window) = app.get_webview_window(&format!("view-{session}")) {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    true
 }
 
 #[tauri::command]
@@ -134,8 +155,17 @@ fn set_lan_name(
 }
 
 #[tauri::command]
-fn connect_device(service: State<'_, Service>, id: String) -> Result<(), String> {
-    service.connect_device(&id)
+fn connect_device(app: AppHandle, service: State<'_, Service>, id: String) -> Result<bool, String> {
+    if let Ok(target) = id
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .parse()
+        && show_existing_view(&app, &service, &target)
+    {
+        return Ok(false);
+    }
+    service.connect_device(&id).map(|()| true)
 }
 
 #[tauri::command]

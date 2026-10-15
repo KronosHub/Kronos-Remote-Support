@@ -262,6 +262,8 @@ enum Internal {
 /// Control handle of a session we are viewing.
 struct ViewerCtl {
     commands: UnboundedSender<ViewerCommand>,
+    /// The device viewed: a new session to it replaces this one.
+    partner: PeerId,
     /// Binary channel to the UI, attached once the viewer screen is ready.
     frames: Option<Channel<InvokeResponseBody>>,
     /// Frames sent to the UI and not yet acknowledged as processed.
@@ -875,6 +877,15 @@ impl Service {
         }
     }
 
+    /// The session in which we already view `target`, if any.
+    pub fn viewing(&self, target: &PeerId) -> Option<SessionId> {
+        let viewers = self.shared.viewers.lock().unwrap();
+        viewers
+            .iter()
+            .find(|(_, v)| &v.partner == target)
+            .map(|(session, _)| *session)
+    }
+
     /// True while we view or share this session.
     pub fn is_session_active(&self, session: SessionId) -> bool {
         self.shared.viewers.lock().unwrap().contains_key(&session)
@@ -1239,6 +1250,19 @@ async fn handle_server_message(
             }
         }
         ServerMessage::SessionClosed { session, reason } => {
+            // The partner's link to the server dropped or was replaced (Cloudflare recycles
+            // WebSockets every hour or so): an established session does not need the server,
+            // and the partner's Bye, the closed channel or the 20 s liveness check end it if
+            // the partner is really gone. Only an explicit leave ends it from here.
+            let established = ctx.shared.viewers.lock().unwrap().contains_key(&session)
+                || ctx.shared.hosting.lock().unwrap().contains_key(&session);
+            if established && reason != "peer left" {
+                tracing::info!(
+                    session,
+                    "server closed the session ({reason}), keeping the direct connection"
+                );
+                return;
+            }
             // An outgoing session closed while still authenticating: stop waiting now.
             if let Some(cancel) = ctx.shared.connecting.lock().unwrap().remove(&session) {
                 let _ = cancel.send("il partner ha chiuso la connessione".into());
@@ -1255,7 +1279,7 @@ async fn handle_server_message(
                 let _ = viewer.commands.send(ViewerCommand::Stop);
             }
             if let Some(host) = ctx.shared.hosting.lock().unwrap().get(&session) {
-                let _ = host.send(HostCommand::Stop);
+                let _ = host.send(HostCommand::PartnerLeft);
             }
         }
         ServerMessage::Error { message, .. } => {
@@ -1913,16 +1937,25 @@ async fn view_partner(
     };
 
     let (commands_tx, commands) = mpsc::unbounded_channel();
-    shared.viewers.lock().unwrap().insert(
-        session,
-        ViewerCtl {
-            commands: commands_tx,
-            frames: None,
-            in_flight: 0,
-            resyncing: false,
-            backlog: Vec::new(),
-        },
-    );
+    {
+        let mut viewers = shared.viewers.lock().unwrap();
+        // Connecting to a device already on screen brings its window forward (lib.rs); two
+        // connections racing past that check still end up with one session: the newer one.
+        for viewer in viewers.values().filter(|v| v.partner == partner) {
+            let _ = viewer.commands.send(ViewerCommand::Stop);
+        }
+        viewers.insert(
+            session,
+            ViewerCtl {
+                commands: commands_tx,
+                partner: partner.clone(),
+                frames: None,
+                in_flight: 0,
+                resyncing: false,
+                backlog: Vec::new(),
+            },
+        );
+    }
     let viewing_since = Instant::now();
     let opened = UiEvent::ViewOpened {
         session,
