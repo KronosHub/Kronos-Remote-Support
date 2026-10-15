@@ -71,9 +71,10 @@ pub struct Status {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum UiEvent {
     Status(Status),
-    /// Saved devices online now (formatted ids); `None` while unknown.
+    /// Online state of the saved devices asked about so far (id digits → online);
+    /// `None` while unknown.
     Presence {
-        online: Option<Vec<String>>,
+        devices: Option<HashMap<String, bool>>,
     },
     Log {
         level: &'static str,
@@ -347,9 +348,9 @@ struct Attempts {
 /// State shared between the service task, its spawned tasks and Tauri commands.
 struct Shared {
     status: Mutex<Status>,
-    /// Saved devices connected to the server now (formatted ids); `None` while unknown
-    /// (offline, or a server without presence).
-    presence: Mutex<Option<Vec<String>>>,
+    /// Online state of the saved devices (id digits → connected to the server now);
+    /// `None` while unknown (offline, or a server without presence).
+    presence: Mutex<Option<HashMap<String, bool>>>,
     approvals: Mutex<HashMap<SessionId, oneshot::Sender<bool>>>,
     attempts: Mutex<Attempts>,
     viewers: Mutex<HashMap<SessionId, ViewerCtl>>,
@@ -617,9 +618,9 @@ impl Service {
         let _ = self.commands.send(Command::CancelConnect);
     }
 
-    /// Saved devices online now, as last reported by the server; `None` while unknown.
-    /// Asks again in the background (the answer comes as `UiEvent::Presence`).
-    pub fn presence(&self) -> Option<Vec<String>> {
+    /// Online state of the saved devices, as last reported by the server; `None` while
+    /// unknown. Asks again in the background (the answer comes as `UiEvent::Presence`).
+    pub fn presence(&self) -> Option<HashMap<String, bool>> {
         let _ = self.commands.send(Command::RefreshPresence);
         self.shared.presence.lock().unwrap().clone()
     }
@@ -1133,14 +1134,18 @@ async fn online(
     internal: &mut UnboundedReceiver<Internal>,
 ) -> String {
     let mut presence = Presence::new(&client);
-    let mut presence_tick = tokio::time::interval(PRESENCE_REFRESH);
+    let mut presence_tick = tokio::time::interval(Presence::STEP);
     let reason = loop {
         tokio::select! {
-            _ = presence_tick.tick() => presence.ask(ctx, &client),
+            _ = presence_tick.tick() => presence.ask(ctx, &client, false),
             msg = client.recv() => {
                 let Some(msg) = msg else { break "connessione al server persa".to_owned() };
                 if let ServerMessage::Error { code: ErrorCode::Replaced, .. } = msg {
                     break "questo ID è stato collegato da un'altra installazione".to_owned();
+                }
+                if let ServerMessage::Presence { online } = msg {
+                    presence.answer(ctx, &online);
+                    continue;
                 }
                 handle_server_message(ctx, &client, sessions, msg).await;
             }
@@ -1172,7 +1177,7 @@ async fn online(
                     }
                     ctx.log("error", "connessione annullata");
                 }
-                Some(Command::RefreshPresence) => presence.ask(ctx, &client),
+                Some(Command::RefreshPresence) => presence.ask(ctx, &client, true),
                 None => break "chiusura".to_owned(),
             },
             Some(msg) = internal.recv() => handle_internal(ctx, sessions, msg).await,
@@ -1185,16 +1190,26 @@ async fn online(
     reason
 }
 
-/// How often the online state of the saved devices is asked again.
-const PRESENCE_REFRESH: Duration = Duration::from_secs(30);
-
-/// Asks the server which saved devices are online (servers that support it).
+/// Asks the server which saved devices are online (servers that support it), 20 at a
+/// time: longer lists are asked in turns, one group every `STEP`.
 struct Presence {
     supported: bool,
     last: Option<Instant>,
+    /// When the current round over the whole list started.
+    round_started: Option<Instant>,
+    /// Next group of the list to ask about (0: a new round).
+    next: usize,
+    /// The group last asked about, waiting for the answer.
+    asked: Vec<PeerId>,
 }
 
 impl Presence {
+    /// Least time between two asks: a margin over the server's limit, so network delays
+    /// never make two asks look closer.
+    const STEP: Duration = Duration::from_secs(signaling_proto::PRESENCE_INTERVAL_SECS + 2);
+    /// A new round over the whole list at most this often.
+    const ROUND: Duration = Duration::from_secs(30);
+
     fn new(client: &SignalingClient) -> Self {
         Self {
             supported: client
@@ -1202,13 +1217,16 @@ impl Presence {
                 .iter()
                 .any(|f| f == signaling_proto::FEATURE_PRESENCE),
             last: None,
+            round_started: None,
+            next: 0,
+            asked: Vec::new(),
         }
     }
 
-    fn ask(&mut self, ctx: &Ctx, client: &SignalingClient) {
-        // A margin over the server's limit: network delays never make two asks look closer.
-        let interval = Duration::from_secs(signaling_proto::PRESENCE_INTERVAL_SECS + 2);
-        if !self.supported || self.last.is_some_and(|t| t.elapsed() < interval) {
+    /// Asks about the next group. `now`: the list was just shown or changed, so start a
+    /// new round right away (as soon as the server allows).
+    fn ask(&mut self, ctx: &Ctx, client: &SignalingClient, now: bool) {
+        if !self.supported || self.last.is_some_and(|t| t.elapsed() < Self::STEP) {
             return;
         }
         let ids: Vec<PeerId> = ctx
@@ -1217,19 +1235,68 @@ impl Presence {
             .devices()
             .into_iter()
             .filter_map(|d| d.id.parse().ok())
-            .take(signaling_proto::MAX_PRESENCE_IDS)
             .collect();
-        if ids.is_empty() {
+        let groups: Vec<&[PeerId]> = ids.chunks(signaling_proto::MAX_PRESENCE_IDS).collect();
+        let round_age = self.round_started.map(|t| t.elapsed());
+        let Some((index, next)) = next_group(groups.len(), self.next, round_age, now) else {
             return;
+        };
+        if index == 0 {
+            self.round_started = Some(Instant::now());
         }
+        self.next = next;
+        let group = groups[index];
+        self.asked = group.to_vec();
         self.last = Some(Instant::now());
-        client.send(ClientMessage::Presence { ids });
+        client.send(ClientMessage::Presence {
+            ids: self.asked.clone(),
+        });
+    }
+
+    /// The server's answer for the group last asked about.
+    fn answer(&mut self, ctx: &Ctx, online: &[PeerId]) {
+        let devices = {
+            let mut presence = ctx.shared.presence.lock().unwrap();
+            let devices = presence.get_or_insert_with(HashMap::new);
+            for id in self.asked.drain(..) {
+                let on = online.contains(&id);
+                devices.insert(id.as_str().to_owned(), on);
+            }
+            devices.clone()
+        };
+        emit(
+            &ctx.app,
+            UiEvent::Presence {
+                devices: Some(devices),
+            },
+        );
     }
 }
 
-fn set_presence(ctx: &Ctx, online: Option<Vec<String>>) {
-    *ctx.shared.presence.lock().unwrap() = online.clone();
-    emit(&ctx.app, UiEvent::Presence { online });
+/// Which group of the saved devices to ask about, and the one after it: `groups` groups,
+/// `next` the planned one, `round_age` since the current round started; `now` starts a new
+/// round at once. `None`: nothing to ask yet (empty list, or a round done less than
+/// `Presence::ROUND` ago).
+fn next_group(
+    groups: usize,
+    next: usize,
+    round_age: Option<Duration>,
+    now: bool,
+) -> Option<(usize, usize)> {
+    if groups == 0 {
+        return None;
+    }
+    // The list may have shrunk since: start over.
+    let index = if now || next >= groups { 0 } else { next };
+    if index == 0 && !now && round_age.is_some_and(|age| age < Presence::ROUND) {
+        return None;
+    }
+    Some((index, (index + 1) % groups))
+}
+
+fn set_presence(ctx: &Ctx, devices: Option<HashMap<String, bool>>) {
+    *ctx.shared.presence.lock().unwrap() = devices.clone();
+    emit(&ctx.app, UiEvent::Presence { devices });
 }
 
 async fn handle_server_message(
@@ -1363,9 +1430,8 @@ async fn handle_server_message(
             ctx.log("error", message);
         }
         ServerMessage::Registered { .. } => {}
-        ServerMessage::Presence { online } => {
-            set_presence(ctx, Some(online.iter().map(PeerId::to_string).collect()));
-        }
+        // Answered in `online`, which knows what was asked.
+        ServerMessage::Presence { .. } => {}
     }
 }
 
@@ -2187,4 +2253,29 @@ async fn view_partner(
         },
     );
     crate::show_main_window(app);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_device_lists_are_asked_in_turns() {
+        let fresh = Some(Duration::from_secs(1));
+        let old = Some(Presence::ROUND);
+        // 45 devices = 3 groups: 0, 1, 2, then a new round only after ROUND.
+        assert_eq!(next_group(3, 0, None, false), Some((0, 1)));
+        assert_eq!(next_group(3, 1, fresh, false), Some((1, 2)));
+        assert_eq!(next_group(3, 2, fresh, false), Some((2, 0)));
+        assert_eq!(next_group(3, 0, fresh, false), None);
+        assert_eq!(next_group(3, 0, old, false), Some((0, 1)));
+        // Opening the list starts over at once.
+        assert_eq!(next_group(3, 2, fresh, true), Some((0, 1)));
+        // Up to 20 devices: one group, every ROUND.
+        assert_eq!(next_group(1, 0, None, false), Some((0, 0)));
+        assert_eq!(next_group(1, 0, fresh, false), None);
+        // A list that shrank, or none at all.
+        assert_eq!(next_group(2, 5, old, false), Some((0, 1)));
+        assert_eq!(next_group(0, 0, None, true), None);
+    }
 }

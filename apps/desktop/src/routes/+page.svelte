@@ -16,7 +16,7 @@
   type Device = { id: string; name: string };
   type UiEvent =
     | ({ kind: "status" } & Status)
-    | { kind: "presence"; online: string[] | null }
+    | { kind: "presence"; devices: Record<string, boolean> | null }
     | { kind: "log"; level: "info" | "warn" | "error"; message: string }
     | { kind: "approval_request"; session: number; peer: string; timeout_secs: number }
     | { kind: "approval_closed"; session: number }
@@ -140,22 +140,21 @@
   let devices = $state<Device[]>([]);
   /** This app's devices found on the local network (connect without the server). */
   type LanPeer = { id: string; host: string; alias: string | null };
-  /** Saved devices connected to the server now (formatted ids); null while unknown. */
-  let onlineIds = $state<string[] | null>(null);
+  /** Online state of the saved devices (id digits → online); null while unknown. */
+  let presence = $state<Record<string, boolean> | null>(null);
   const digits = (id: string) => id.replace(/\D/g, "");
   /** Online through the server or seen on this network; null when we cannot tell. */
   function deviceOnline(d: Device): boolean | null {
     if (lanPeers.some((p) => digits(p.id) === digits(d.id))) return true;
-    if (onlineIds === null) return null;
-    return onlineIds.some((id) => digits(id) === digits(d.id));
+    return presence?.[digits(d.id)] ?? null;
   }
   // Opening the list asks again (the app also asks every 30 s on its own).
   $effect(() => {
     if (section === "devices") refreshPresence();
   });
   function refreshPresence() {
-    invoke<string[] | null>("device_presence").then((o) => {
-      if (o !== null) onlineIds = o;
+    invoke<Record<string, boolean> | null>("device_presence").then((p) => {
+      if (p !== null) presence = p;
     });
   }
   let lanPeers = $state<LanPeer[]>([]);
@@ -324,7 +323,7 @@
   function handle(event: UiEvent) {
     switch (event.kind) {
       case "presence":
-        onlineIds = event.online;
+        presence = event.devices;
         break;
       case "status": {
         const { kind, ...rest } = event;

@@ -140,9 +140,10 @@ fn list_devices(service: State<'_, Service>) -> Vec<service::DeviceView> {
     service.devices()
 }
 
-/// Saved devices online now (`None` while unknown); also asks the server again.
+/// Online state of the saved devices (id digits → online; `None` while unknown); also
+/// asks the server again.
 #[tauri::command]
-fn device_presence(service: State<'_, Service>) -> Option<Vec<String>> {
+fn device_presence(service: State<'_, Service>) -> Option<std::collections::HashMap<String, bool>> {
     service.presence()
 }
 
