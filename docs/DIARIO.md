@@ -495,3 +495,8 @@
   sull'host quando il partner esce (ADR 0046). ADR 0045 rivisto.
 - Log del viewer: conferma la sequenza (WebSocket perso → ricollegato → host chiude → viewer chiude per silenzio).
   Le due sessioni parallele erano un secondo "Connetti" con la prima finestra ancora aperta: ora "Connetti" porta in primo piano la finestra già aperta (richiesta dell'utente).
+
+## 2026-10-15 — Immagini negli appunti (v1.5.4)
+- Lo screenshot con ⌘⌃⇧4 non arrivava: gli appunti condivisi gestivano solo testo e file. Ora le immagini
+  passano come PNG con `Manifest.image` e arrivano negli appunti come immagine (ADR 0047). Test di codifica e
+  trasferimento; prova reale da fare tra due Mac e tra Mac e Windows.
