@@ -159,7 +159,7 @@ pub async fn serve_host(
 ) {
     let allow_control = config.allow_control;
     // A Mac without a monitor gets a virtual one for the session (ADR 0048).
-    let mut screen_keeper = ScreenKeeper::default();
+    let mut screen_keeper: Option<VirtualScreen> = None;
     ensure_screen(&config, &mut screen_keeper).await;
     // `None` while there is no screen to share: the session stays open (chat, files) and
     // the capture is tried again every few seconds.
@@ -664,17 +664,16 @@ fn screen_unavailable_message(e: &anyhow::Error) -> String {
     }
 }
 
-/// Keeps the virtual monitor of a Mac without one for the session.
+/// The virtual monitor of a Mac without one, kept for the session; none elsewhere.
 #[cfg(target_os = "macos")]
-type ScreenKeeper = Option<Arc<capture::virtual_display::VirtualDisplay>>;
+type VirtualScreen = Arc<capture::virtual_display::VirtualDisplay>;
 #[cfg(not(target_os = "macos"))]
-#[derive(Default)]
-struct ScreenKeeper;
+enum VirtualScreen {}
 
 /// macOS: with no monitor at all, makes a virtual one (kept in `keeper`) so there is
 /// something to share. Elsewhere, nothing (a missing monitor leaves the session waiting).
 #[cfg(target_os = "macos")]
-async fn ensure_screen(config: &StreamConfig, keeper: &mut ScreenKeeper) {
+async fn ensure_screen(config: &StreamConfig, keeper: &mut Option<VirtualScreen>) {
     if keeper.is_some() || !matches!(config.source, crate::Source::Screen { .. }) {
         return;
     }
@@ -698,7 +697,7 @@ async fn ensure_screen(config: &StreamConfig, keeper: &mut ScreenKeeper) {
 }
 
 #[cfg(not(target_os = "macos"))]
-async fn ensure_screen(_config: &StreamConfig, _keeper: &mut ScreenKeeper) {}
+async fn ensure_screen(_config: &StreamConfig, _keeper: &mut Option<VirtualScreen>) {}
 
 #[derive(Debug, Clone)]
 pub enum ViewerEvent {
