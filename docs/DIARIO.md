@@ -523,3 +523,6 @@
   etichetta Online/Offline nella lista dei dispositivi (ADR 0050).
 - Worker provato in locale con `wrangler dev` (Node 26 di Homebrew: wrangler non parte con il Node 20 di nvm): un
   dispositivo online, richiesta troppo ravvicinata rifiutata, dispositivo uscito offline, 21 ID rifiutati.
+- Worker pubblicato in produzione (account kronosweb.cloud) e verificato con la stessa prova.
+- Domanda dell'utente su più di 20 dispositivi: la prima versione chiedeva solo i primi 20 (gli altri sarebbero
+  risultati Offline). Ora gruppi di 20 a rotazione, con test.

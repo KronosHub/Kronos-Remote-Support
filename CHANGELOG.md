@@ -4,7 +4,8 @@ Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, qu
 
 ## 1.7.1 — 2026-10-15
 - Dispositivi: accanto a ogni dispositivo salvato c'è l'etichetta **Online** (verde) o **Offline** (grigia), così
-  vedi subito quali sono accesi e raggiungibili. Si aggiorna da sola ogni 30 secondi e quando apri la sezione.
+  vedi subito quali sono accesi e raggiungibili. Si aggiorna da sola ogni 30 secondi e quando apri la sezione;
+  con più di 20 dispositivi lo stato arriva a gruppi di 20, in pochi secondi.
 
 ## 1.7.0 — 2026-10-15
 - Windows, monitor virtuale: nella sezione **Aggiornamenti** puoi installare uno schermo virtuale da 1920×1080
