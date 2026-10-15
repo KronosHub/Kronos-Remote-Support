@@ -668,7 +668,8 @@ fn screen_unavailable_message(e: &anyhow::Error) -> String {
 #[cfg(target_os = "macos")]
 type ScreenKeeper = Option<Arc<capture::virtual_display::VirtualDisplay>>;
 #[cfg(not(target_os = "macos"))]
-type ScreenKeeper = ();
+#[derive(Default)]
+struct ScreenKeeper;
 
 /// macOS: with no monitor at all, makes a virtual one (kept in `keeper`) so there is
 /// something to share. Elsewhere, nothing (a missing monitor leaves the session waiting).
