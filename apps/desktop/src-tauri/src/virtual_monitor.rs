@@ -114,7 +114,7 @@ mod imp {
         let result =
             std::env::temp_dir().join(format!("kronos-virtual-monitor-{}.txt", std::process::id()));
         let _ = std::fs::remove_file(&result);
-        let status = Command::new(&exe)
+        let exit = Command::new(&exe)
             .arg(if install { "install" } else { "uninstall" })
             .arg("--result")
             .arg(&result)
@@ -125,8 +125,8 @@ mod imp {
             .map(|t| t.trim().to_owned())
             .unwrap_or_default();
         let _ = std::fs::remove_file(&result);
-        tracing::info!(install, code = ?status.code(), "virtual monitor: {text}");
-        match status.code() {
+        tracing::info!(install, code = ?exit.code(), "virtual monitor: {text}");
+        match exit.code() {
             Some(0 | 2) => Ok(VirtualMonitor {
                 message: Some(text).filter(|t| !t.is_empty()),
                 ..status(app)
