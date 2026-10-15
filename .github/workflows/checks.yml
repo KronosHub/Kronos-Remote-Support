@@ -90,6 +90,19 @@ jobs:
       # Sound (Opus + WASAPI): the Windows code paths only build here and in the release.
       - run: cargo clippy -p audio -p stream --all-targets -- -D warnings
       - run: cargo test --release -p audio
+      # Virtual monitor program (ADR 0049) and the app's Windows code, which otherwise only
+      # builds in the release.
+      - name: Virtual monitor and app (Windows)
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools/virtual-monitor/fetch-driver.sh
+          cargo clippy -p virtual-monitor --all-targets -- -D warnings
+          cargo build --release -p virtual-monitor
+          mkdir -p apps/desktop/src-tauri/resources/virtual-monitor apps/desktop/build
+          cp target/release/KronosVirtualMonitor.exe apps/desktop/src-tauri/resources/virtual-monitor/
+          [ -f apps/desktop/build/index.html ] || echo '<!doctype html>' > apps/desktop/build/index.html
+          cargo clippy -p desktop-remoto --all-targets -- -D warnings
       - run: cargo build --release -p capture-poc
       - run: cargo build --release -p input --example smoke
       - name: Capture (DXGI duplication)

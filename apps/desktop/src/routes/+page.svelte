@@ -171,6 +171,17 @@
   type UacSupport = { supported: boolean; active: boolean; toggleable: boolean };
   let uac = $state<UacSupport | null>(null);
   let uacBusy = $state(false);
+  /** Windows: the virtual monitor for PCs without one (ADR 0049). */
+  type VirtualMonitor = {
+    supported: boolean;
+    installed: boolean;
+    version: string | null;
+    bundled: string | null;
+    message: string | null;
+  };
+  let virtualMonitor = $state<VirtualMonitor | null>(null);
+  let virtualMonitorBusy = $state(false);
+  let virtualMonitorError = $state("");
   let update = $state<UpdateState>({ kind: "idle" });
   let autostart = $state(false);
   /** Our user name as partners see it, and the text being edited. */
@@ -596,6 +607,27 @@
   function openUpdates() {
     section = "updates";
     if (update.kind !== "available") checkUpdate();
+    invoke<VirtualMonitor>("virtual_monitor_status").then((v) => (virtualMonitor = v));
+  }
+
+  /** Installs/updates (`install`) or removes the virtual monitor; Windows asks for admin rights. */
+  async function setVirtualMonitor(install: boolean) {
+    if (!install) {
+      const ok = await askConfirm(
+        "Rimuovere il monitor virtuale? Senza monitor collegato, questo PC non avrà più uno schermo da condividere.",
+        "Rimuovi",
+      );
+      if (!ok) return;
+    }
+    virtualMonitorBusy = true;
+    virtualMonitorError = "";
+    try {
+      virtualMonitor = await invoke<VirtualMonitor>("set_virtual_monitor", { install });
+    } catch (e) {
+      virtualMonitorError = String(e);
+    } finally {
+      virtualMonitorBusy = false;
+    }
   }
 
   async function installUpdate() {
@@ -1782,6 +1814,45 @@
         </div>
       {/if}
     </section>
+    {#if virtualMonitor?.supported}
+      <section class="card">
+        <h2>Monitor virtuale</h2>
+        <p class="hint">
+          Per un PC senza monitor collegato: aggiunge uno schermo virtuale 1920×1080, così chi si
+          collega vede e controlla il desktop. Usa Virtual Display Driver (licenza MIT, firmato da
+          SignPath Foundation); Windows chiede il permesso di amministratore.
+        </p>
+        {#if virtualMonitor.installed}
+          <p>
+            Installato{virtualMonitor.version ? ` (versione ${virtualMonitor.version})` : ""}.
+          </p>
+          {#if virtualMonitor.bundled && virtualMonitor.version !== virtualMonitor.bundled}
+            <p>È disponibile la versione <strong>{virtualMonitor.bundled}</strong>.</p>
+          {/if}
+        {:else}
+          <p>Non installato.</p>
+        {/if}
+        {#if virtualMonitor.message}<p class="hint small">{virtualMonitor.message}</p>{/if}
+        {#if virtualMonitorError}<p class="error">{virtualMonitorError}</p>{/if}
+        <div class="row">
+          {#if !virtualMonitor.installed}
+            <button class="primary" disabled={virtualMonitorBusy} onclick={() => setVirtualMonitor(true)}>
+              Installa monitor virtuale
+            </button>
+          {:else}
+            {#if virtualMonitor.bundled && virtualMonitor.version !== virtualMonitor.bundled}
+              <button class="primary" disabled={virtualMonitorBusy} onclick={() => setVirtualMonitor(true)}>
+                Aggiorna
+              </button>
+            {/if}
+            <button class="danger" disabled={virtualMonitorBusy} onclick={() => setVirtualMonitor(false)}>
+              Rimuovi
+            </button>
+          {/if}
+          {#if virtualMonitorBusy}<span class="spinner"></span>{/if}
+        </div>
+      </section>
+    {/if}
   </main>
   {/if}
   {/if}

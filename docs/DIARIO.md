@@ -510,3 +510,10 @@
   permesso di registrazione: la sessione resta aperta e il viewer riceve il messaggio.
 - macOS: schermo virtuale `CGVirtualDisplay` 1920×1080 quando non c'è nessuno schermo attivo; provato su questo Mac
   (creato e tolto). Da provare su un Mac davvero senza monitor. ADR 0048.
+
+## 2026-10-15 — Monitor virtuale su Windows (v1.7.0)
+- Richiesta: un .exe che crei un monitor virtuale 1080p su Windows, installabile e aggiornabile anche dall'app.
+- Scelto Virtual Display Driver (MIT, firmato SignPath Foundation), scaricato e verificato in compilazione;
+  `KronosVirtualMonitor.exe` lo installa con SetupAPI e lo imposta a 1920×1080@60 (ADR 0049). Scheda nella sezione
+  Aggiornamenti; il programma viaggia nell'installer dell'app e da solo nella release.
+- Controllato solo con clippy per Windows da qui; da provare su un PC Windows.

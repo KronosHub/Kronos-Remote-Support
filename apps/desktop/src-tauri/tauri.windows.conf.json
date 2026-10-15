@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "resources/virtual-monitor/KronosVirtualMonitor.exe": "virtual-monitor/KronosVirtualMonitor.exe",
+      "../../../tools/virtual-monitor/LICENSE-VirtualDisplayDriver.txt": "virtual-monitor/LICENSE-VirtualDisplayDriver.txt"
+    }
+  }
+}

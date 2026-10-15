@@ -4,6 +4,7 @@ mod service;
 mod store;
 mod uac;
 mod updates;
+mod virtual_monitor;
 
 use service::{Service, Status};
 use signaling_proto::PeerId;
@@ -669,6 +670,8 @@ pub fn run() {
             updates::app_version,
             updates::check_update,
             updates::install_update,
+            virtual_monitor::virtual_monitor_status,
+            virtual_monitor::set_virtual_monitor,
             attach_view,
             set_clipboard,
             send_chat,

@@ -97,10 +97,22 @@ jobs:
             echo 'body<<EOF_NOTES'
             echo 'Si installa dal pulsante "Aggiornamenti" nell'"'"'app.'
             echo 'Kronos Quick Support (file KronosQuickSupport_*): versione senza installazione per farsi assistere.'
+            echo 'KronosVirtualMonitor.exe: monitor virtuale 1920×1080 per PC Windows senza monitor (si installa anche dall'"'"'app, sezione Aggiornamenti).'
             echo
             cat notes.md
             echo 'EOF_NOTES'
           } >> "$GITHUB_OUTPUT"
+      # Windows: the virtual monitor program (ADR 0049), bundled in the installer (app updates
+      # bring its new versions) and published on its own for PCs without the app.
+      - name: Virtual monitor program (Windows)
+        if: startsWith(matrix.platform, 'windows')
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools/virtual-monitor/fetch-driver.sh
+          cargo build --release -p virtual-monitor
+          mkdir -p apps/desktop/src-tauri/resources/virtual-monitor
+          cp target/release/KronosVirtualMonitor.exe apps/desktop/src-tauri/resources/virtual-monitor/
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -150,6 +162,9 @@ jobs:
               cp "$out"/bundle/appimage/*.AppImage "$file" ;;
             Windows)
               file="KronosQuickSupport_${version}_windows_x64.exe"
-              cp "$out/kronos-quick-support.exe" "$file" ;;
+              cp "$out/kronos-quick-support.exe" "$file"
+              # The virtual monitor program on its own (built in the step above).
+              cp "$out/KronosVirtualMonitor.exe" KronosVirtualMonitor.exe
+              gh release upload "$TAG" KronosVirtualMonitor.exe --clobber -R "${{ github.repository }}" ;;
           esac
           gh release upload "$TAG" "$file" --clobber -R "${{ github.repository }}"

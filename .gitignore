@@ -7,3 +7,8 @@ peer-host.key
 
 # Separate project (self-hosted RustDesk), tracked on its own
 /RUSTDESK/
+
+# Virtual Display Driver, downloaded by tools/virtual-monitor/fetch-driver.sh
+/tools/virtual-monitor/driver/
+# KronosVirtualMonitor.exe, copied here by the Windows release build (ADR 0049)
+/apps/desktop/src-tauri/resources/

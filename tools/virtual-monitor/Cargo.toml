@@ -1,0 +1,22 @@
+[package]
+name = "virtual-monitor"
+version = "1.0.0"
+edition.workspace = true
+license.workspace = true
+description = "Windows: installs a 1920x1080 virtual monitor (Virtual Display Driver) for PCs without one"
+publish = false
+
+[[bin]]
+name = "KronosVirtualMonitor"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }

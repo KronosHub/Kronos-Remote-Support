@@ -16,6 +16,7 @@ members = [
     "tools/agent-poc",
     "tools/capture-poc",
     "tools/peer-poc",
+    "tools/virtual-monitor",
 ]
 
 [workspace.package]

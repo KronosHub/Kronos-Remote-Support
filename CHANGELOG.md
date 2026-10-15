@@ -2,6 +2,14 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.7.0 — 2026-10-15
+- Windows, monitor virtuale: nella sezione **Aggiornamenti** puoi installare uno schermo virtuale da 1920×1080
+  sui PC senza monitor collegato, così chi si collega vede e controlla il desktop. Windows chiede il permesso di
+  amministratore e una conferma per il driver (Virtual Display Driver, open source, firmato da SignPath
+  Foundation). Dalla stessa sezione lo aggiorni quando ne arriva una versione nuova o lo rimuovi.
+- Lo stesso è disponibile da solo come `KronosVirtualMonitor.exe` tra i file della versione: doppio clic e scegli
+  Installa o Rimuovi.
+
 ## 1.6.0 — 2026-10-15
 - Mac senza monitor (per esempio un Mac mini senza schermo collegato): l'app crea da sola uno schermo virtuale
   da 1920×1080 per la durata della sessione, così lo puoi vedere e controllare. Lo schermo sparisce quando la
