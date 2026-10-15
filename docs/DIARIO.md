@@ -484,3 +484,14 @@
 - 1.5.1 includeva anche "Modifica/Salva" per il nome (richiesta arrivata mentre la release era in coda).
 - ✕ accanto alla barra di avanzamento: `ClipboardShare::cancel_transfer` ferma l'invio (task annullato) e/o
   fa scartare al lettore il trasferimento in arrivo (`Notify`); il partner riceve `TransferCancelled` e fa lo stesso.
+
+## 2026-10-15 — Invio sulla schermata di accesso
+- L'utente conferma che l'Invio da remoto sulla schermata di accesso del Mac ora funziona: domanda chiusa in STATO.
+
+## 2026-10-15 — Connessioni che cadevano (v1.5.3)
+- Analizzato il log del Mac controllato: le sessioni venivano chiuse dal server quando il WebSocket del partner
+  cadeva o si ricollegava (Cloudflare lo ricicla ogni 30–90 min), anche con la connessione diretta attiva.
+- Il client ora ignora queste chiusure per le sessioni avviate (solo "peer left" conta); messaggio corretto
+  sull'host quando il partner esce (ADR 0046). ADR 0045 rivisto.
+- Log del viewer: conferma la sequenza (WebSocket perso → ricollegato → host chiude → viewer chiude per silenzio).
+  Le due sessioni parallele erano un secondo "Connetti" con la prima finestra ancora aperta: ora "Connetti" porta in primo piano la finestra già aperta (richiesta dell'utente).
