@@ -316,10 +316,15 @@ export class Hub extends DurableObject {
     for (const s of this.socketsOf(to)) send(s, { type: "session_closed", session, reason: "peer left" });
   }
 
+  /**
+   * Tells the partners of `id` that its link to the server dropped or was replaced. The
+   * sessions are kept: established ones go on peer to peer (apps from 1.5.3 ignore this
+   * notice), and a later `leave` must still reach the partner (rows stay bounded per
+   * device, see `connect`).
+   */
   closeSessionsOf(id, reason) {
     const rows = this.sql.exec("SELECT session, a, b FROM sessions WHERE a = ? OR b = ?", id, id).toArray();
     for (const { session, a, b } of rows) {
-      this.sql.exec("DELETE FROM sessions WHERE session = ?", session);
       const other = a === id ? b : a;
       for (const s of this.socketsOf(other)) send(s, { type: "session_closed", session, reason });
     }

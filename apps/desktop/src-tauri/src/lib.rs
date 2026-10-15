@@ -388,6 +388,16 @@ fn close_view(service: State<'_, Service>, session: u64) {
     service.close_view(session);
 }
 
+/// The end-of-session summary was acknowledged: make sure nothing of the session is left
+/// (connection, sharing, the remote screen's window).
+#[tauri::command]
+fn end_session(app: AppHandle, service: State<'_, Service>, session: u64) {
+    service.end_session(session);
+    if let Some(window) = app.get_webview_window(&format!("view-{session}")) {
+        let _ = window.close();
+    }
+}
+
 #[tauri::command]
 fn stop_hosting(service: State<'_, Service>, session: u64) {
     service.stop_hosting(session);
@@ -698,6 +708,7 @@ pub fn run() {
             set_display_name,
             audio_supported,
             close_view,
+            end_session,
             stop_hosting
         ])
         .build(tauri::generate_context!())

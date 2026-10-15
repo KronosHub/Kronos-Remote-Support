@@ -246,6 +246,8 @@ enum Command {
     CancelConnect,
     /// Ask the server again which saved devices are online (list shown or changed).
     RefreshPresence,
+    /// Close this session's connection for good (the summary was acknowledged).
+    EndSession(SessionId),
 }
 
 /// A device of this app seen on the local network.
@@ -926,6 +928,14 @@ impl Service {
             let _ = tx.send(HostCommand::Stop);
         }
     }
+
+    /// Ends whatever is left of a session: viewing or sharing, the connection, and (through
+    /// the server) the partner's side. Safe to call when it already ended.
+    pub fn end_session(&self, session: SessionId) {
+        self.close_view(session);
+        self.stop_hosting(session);
+        let _ = self.commands.send(Command::EndSession(session));
+    }
 }
 
 struct Ctx {
@@ -1090,6 +1100,9 @@ async fn run(ctx: Ctx, mut commands: UnboundedReceiver<Command>) {
                     }
                     Some(Command::CancelConnect) => cancel_connecting(&ctx),
                     Some(Command::RefreshPresence) => {}
+                    Some(Command::EndSession(session)) => {
+                        handle_internal(&ctx, &mut sessions, Internal::SessionDone(session)).await;
+                    }
                     None => return,
                 },
                 Some(msg) = internal.recv() => handle_internal(&ctx, &mut sessions, msg).await,
@@ -1178,6 +1191,10 @@ async fn online(
                     ctx.log("error", "connessione annullata");
                 }
                 Some(Command::RefreshPresence) => presence.ask(ctx, &client, true),
+                // Same as a session that finished: close the connection, tell the server.
+                Some(Command::EndSession(session)) => {
+                    handle_internal(ctx, sessions, Internal::SessionDone(session)).await;
+                }
                 None => break "chiusura".to_owned(),
             },
             Some(msg) = internal.recv() => handle_internal(ctx, sessions, msg).await,

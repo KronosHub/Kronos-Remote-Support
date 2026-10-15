@@ -38,6 +38,9 @@ pub struct Hub {
     turn: Option<Turn>,
 }
 
+/// Sessions remembered at most (never-left ones of disconnected devices included).
+const MAX_KEPT_SESSIONS: usize = 10_000;
+
 fn key_hash(device_key: &str) -> String {
     Sha256::digest(device_key.as_bytes())
         .iter()
@@ -226,6 +229,7 @@ impl Hub {
         Ok(())
     }
 
+    /// Tells the partners of `id` that its link to the server dropped or was replaced.
     fn close_sessions_of(&mut self, id: &PeerId, reason: &str) {
         let ended: Vec<_> = self
             .sessions
@@ -233,8 +237,9 @@ impl Hub {
             .filter(|(_, (a, b))| a == id || b == id)
             .map(|(s, (a, b))| (*s, if a == id { b.clone() } else { a.clone() }))
             .collect();
+        // Sessions are kept (as in the Worker): established ones go on peer to peer and a
+        // later `leave` must still reach the partner. The oldest go beyond a bound.
         for (session, other) in ended {
-            self.sessions.remove(&session);
             self.send(
                 &other,
                 ServerMessage::SessionClosed {
@@ -242,6 +247,12 @@ impl Hub {
                     reason: reason.into(),
                 },
             );
+        }
+        while self.sessions.len() > MAX_KEPT_SESSIONS {
+            let Some(oldest) = self.sessions.keys().min().copied() else {
+                break;
+            };
+            self.sessions.remove(&oldest);
         }
     }
 }
@@ -285,6 +296,33 @@ mod tests {
         hub.disconnect(1, &id);
         let (b, _rx_b) = peer(&mut hub, 3, "other");
         assert!(hub.connect(&b, &id).is_ok());
+    }
+
+    #[test]
+    fn leave_reaches_the_partner_after_a_reconnect() {
+        let mut hub = Hub::new(None, vec![], None).unwrap();
+        let (a, mut rx_a) = peer(&mut hub, 1, "a");
+        let (b, mut rx_b) = peer(&mut hub, 2, "b");
+        hub.connect(&a, &b).unwrap();
+        let ServerMessage::SessionCreated { session, .. } = rx_a.try_recv().unwrap() else {
+            panic!("expected SessionCreated");
+        };
+        let _ = rx_b.try_recv();
+        // The viewer's link to the server drops and comes back: b is told, the session stays.
+        let (_a2, _rx_a2) = peer(&mut hub, 3, "a");
+        assert!(matches!(
+            rx_b.try_recv().unwrap(),
+            ServerMessage::SessionClosed { .. }
+        ));
+        // "Disconnetti" later still reaches the shared computer.
+        hub.leave(&a, session).unwrap();
+        assert_eq!(
+            rx_b.try_recv().unwrap(),
+            ServerMessage::SessionClosed {
+                session,
+                reason: "peer left".into()
+            }
+        );
     }
 
     #[test]

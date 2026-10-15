@@ -526,3 +526,9 @@
 - Worker pubblicato in produzione (account kronosweb.cloud) e verificato con la stessa prova.
 - Domanda dell'utente su più di 20 dispositivi: la prima versione chiedeva solo i primi 20 (gli altri sarebbero
   risultati Offline). Ora gruppi di 20 a rotazione, con test.
+
+## 2026-10-15 — Disconnetti che non arrivava (v1.7.2)
+- Segnalazione: dopo Disconnetti il computer controllato è rimasto in modalità controllata. Causa trovata nel
+  server: un ricollegamento di uno dei due dispositivi cancellava la sessione, quindi il `leave` successivo non
+  arrivava più al partner. Ora la sessione resta (Worker e server Rust, test `leave_reaches_the_partner_after_a_reconnect`).
+- `Bye` atteso prima di chiudere; OK sul resoconto chiude tutto (`end_session`). ADR 0051.

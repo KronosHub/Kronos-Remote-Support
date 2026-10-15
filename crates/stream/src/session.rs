@@ -92,6 +92,27 @@ async fn send(channel: &Arc<dyn DataChannel>, msg: &ControlMsg) {
     let _ = channel.send_text(&msg.to_json()).await;
 }
 
+/// Tells the other side the session ends and waits (at most `BYE_FLUSH`) until the
+/// message has left: the connection is closed right after, which would otherwise drop it.
+async fn send_bye(channel: &Arc<dyn DataChannel>, reason: &str) {
+    send(
+        channel,
+        &ControlMsg::Bye {
+            reason: reason.to_owned(),
+        },
+    )
+    .await;
+    let _ = tokio::time::timeout(BYE_FLUSH, async {
+        while channel.outstanding_bytes().await.unwrap_or(0) > 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+}
+
+/// Longest wait for a `Bye` to leave before the connection closes.
+const BYE_FLUSH: Duration = Duration::from_secs(1);
+
 /// Next control message; `None` once the channel is closed.
 async fn recv(channel: &Arc<dyn DataChannel>) -> Option<ControlMsg> {
     loop {
@@ -484,7 +505,7 @@ pub async fn serve_host(
                 }
                 Some(HostCommand::PartnerLeft) => break "il partner si è disconnesso".to_owned(),
                 Some(HostCommand::Stop) | None => {
-                    send(&channel, &ControlMsg::Bye { reason: "terminata dall'host".into() }).await;
+                    send_bye(&channel, "terminata dall'host").await;
                     break "terminata da te".to_owned();
                 }
             },
@@ -838,7 +859,7 @@ pub async fn run_viewer(
                 }
                 Some(ControlMsg::StreamError { message }) => {
                     on_event(ViewerEvent::Error(message.clone()));
-                    send(&channel, &ControlMsg::Bye { reason: "condivisione non disponibile".into() }).await;
+                    send_bye(&channel, "condivisione non disponibile").await;
                     break message;
                 }
                 Some(ControlMsg::Pong { sent_us, .. }) => {
@@ -918,7 +939,7 @@ pub async fn run_viewer(
                     }
                 }
                 Some(ViewerCommand::Stop) | None => {
-                    send(&channel, &ControlMsg::Bye { reason: "il partner si è disconnesso".into() }).await;
+                    send_bye(&channel, "il partner si è disconnesso").await;
                     break "disconnesso".to_owned();
                 }
             },

@@ -2,6 +2,11 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.7.2 — 2026-10-15
+- Disconnetti: il computer controllato si accorge sempre che hai chiuso la sessione, anche se nel frattempo uno dei
+  due computer si era ricollegato al server (prima poteva restare in modalità controllata).
+- OK sul resoconto della sessione chiude tutto ciò che ne resta: connessione e finestra di controllo.
+
 ## 1.7.1 — 2026-10-15
 - Dispositivi: accanto a ogni dispositivo salvato c'è l'etichetta **Online** (verde) o **Offline** (grigia), così
   vedi subito quali sono accesi e raggiungibili. Si aggiorna da sola ogni 30 secondi e quando apri la sezione;

@@ -159,7 +159,18 @@
   }
   let lanPeers = $state<LanPeer[]>([]);
   /** Popup shown in the main window when a session ends (we controlled or were controlled). */
-  let sessionEnded = $state<{ controlled: boolean; peer: string; duration: number; reason: string } | null>(null);
+  let sessionEnded = $state<{
+    session: number;
+    controlled: boolean;
+    peer: string;
+    duration: number;
+    reason: string;
+  } | null>(null);
+  /** OK on the summary: nothing of that session may stay open (connection, viewer window). */
+  function acknowledgeEnded() {
+    if (sessionEnded) invoke("end_session", { session: sessionEnded.session });
+    sessionEnded = null;
+  }
   /** Partner of each session we viewed (from view_opened), for the end popup. */
   const viewedPeers = new Map<number, string>();
   /** Main window page chosen in the sidebar. */
@@ -399,6 +410,7 @@
         // Main window: summary popup for the session we controlled.
         if (viewSession === null) {
           sessionEnded = {
+            session: event.session,
             controlled: false,
             peer: viewedPeers.get(event.session) ?? "",
             duration: event.duration_secs,
@@ -465,7 +477,13 @@
         break;
       case "hosting_ended":
         hosting = hosting.filter((h) => h.session !== event.session);
-        sessionEnded = { controlled: true, peer: event.peer, duration: event.duration_secs, reason: "" };
+        sessionEnded = {
+          session: event.session,
+          controlled: true,
+          peer: event.peer,
+          duration: event.duration_secs,
+          reason: "",
+        };
         break;
       case "approval_request":
         approvals = [
@@ -1921,7 +1939,7 @@
         </div>
       </div>
       <div class="actions">
-        <button class="primary" type="button" onclick={() => (sessionEnded = null)}>OK</button>
+        <button class="primary" type="button" onclick={acknowledgeEnded}>OK</button>
       </div>
     </div>
   </div>
