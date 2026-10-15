@@ -44,6 +44,10 @@ pub struct Entry {
 pub struct Manifest {
     pub transfer: u32,
     pub entries: Vec<Entry>,
+    /// One PNG holding a copied picture (e.g. a screenshot): the receiver puts the picture
+    /// itself on the clipboard. Older peers ignore the field and get the PNG as a file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub image: bool,
 }
 
 impl Manifest {
@@ -126,7 +130,11 @@ pub fn collect(transfer: u32, paths: &[PathBuf]) -> Result<Outgoing> {
         bail!("nessun file da inviare");
     }
     Ok(Outgoing {
-        manifest: Manifest { transfer, entries },
+        manifest: Manifest {
+            transfer,
+            entries,
+            image: false,
+        },
         sources,
     })
 }
@@ -312,6 +320,8 @@ pub struct Received {
     /// The copied items (top-level files/folders) to put on the clipboard.
     pub items: Vec<PathBuf>,
     pub total_bytes: u64,
+    /// The single item is a PNG to put on the clipboard as a picture.
+    pub image: bool,
 }
 
 struct IncomingFiles {
@@ -666,6 +676,7 @@ impl FileReceiver {
         Ok(Some(Received {
             items,
             total_bytes: incoming.manifest.total_bytes(),
+            image: incoming.manifest.image && incoming.manifest.entries.len() == 1,
         }))
     }
 }
@@ -761,6 +772,32 @@ mod tests {
     }
 
     #[test]
+    fn a_picture_arrives_marked_as_one() {
+        let src = temp("picture-src");
+        std::fs::write(src.join("immagine.png"), b"png").unwrap();
+        let mut outgoing = collect(3, &[src.join("immagine.png")]).unwrap();
+        outgoing.manifest.image = true;
+        let dst = temp("picture-dst");
+        let mut receiver = FileReceiver::new(dst.clone());
+        let mut done = None;
+        for message in encode(&outgoing) {
+            if let Some(Incoming::Files(received)) = receiver.on_message(&message).unwrap() {
+                done = Some(received);
+            }
+        }
+        assert!(done.expect("transfer completed").image);
+        // Plain files say nothing about pictures, so older peers read the same JSON.
+        let plain = collect(4, &[src.join("immagine.png")]).unwrap();
+        assert!(
+            !serde_json::to_string(&plain.manifest)
+                .unwrap()
+                .contains("image")
+        );
+        std::fs::remove_dir_all(src).unwrap();
+        std::fs::remove_dir_all(dst).unwrap();
+    }
+
+    #[test]
     fn many_files_split_the_manifest() {
         let src = temp("many");
         for i in 0..600 {
@@ -822,6 +859,7 @@ mod tests {
         let mut receiver = FileReceiver::new(dst.clone());
         let manifest = Manifest {
             transfer: 1,
+            image: false,
             entries: vec![Entry {
                 path: "../../evil".into(),
                 size: 1,
@@ -841,6 +879,7 @@ mod tests {
         let mut receiver = FileReceiver::new(dst.clone());
         let manifest = Manifest {
             transfer: 2,
+            image: false,
             entries: vec![Entry {
                 path: "a".into(),
                 size: 3,
@@ -870,6 +909,7 @@ mod tests {
         let mut receiver = FileReceiver::new(dst.clone());
         let manifest = Manifest {
             transfer: 4,
+            image: false,
             entries: vec![
                 Entry {
                     path: "ok.txt".into(),
@@ -895,6 +935,7 @@ mod tests {
         let mut receiver = FileReceiver::new(dst.clone());
         let manifest = Manifest {
             transfer: 5,
+            image: false,
             entries: vec![
                 Entry {
                     path: "a".into(),
@@ -921,6 +962,7 @@ mod tests {
         let mut receiver = FileReceiver::new(dst.clone());
         let manifest = Manifest {
             transfer: 6,
+            image: false,
             entries: vec![Entry {
                 path: "a".into(),
                 size: 3,
@@ -952,6 +994,7 @@ mod tests {
 
         let manifest = Manifest {
             transfer: 2,
+            image: false,
             entries: vec![Entry {
                 path: "a".into(),
                 size: 0,

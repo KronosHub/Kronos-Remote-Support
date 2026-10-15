@@ -2,6 +2,11 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.5.4 — 2026-10-15
+- Appunti condivisi: ora passano anche le immagini, per esempio uno screenshot fatto con ⌘⌃⇧4 sul Mac o con
+  Stamp/Win+Shift+S su Windows. Si incollano direttamente come immagine dall'altra parte. Funziona tra Mac e
+  Windows (su Linux le immagini non vengono condivise); vanno aggiornati entrambi i computer.
+
 ## 1.5.3 — 2026-10-15
 - Le connessioni non cadono più dopo qualche minuto: quando uno dei due computer perdeva per un attimo il
   collegamento con il server (succede da solo ogni tanto), la sessione veniva chiusa anche se la connessione

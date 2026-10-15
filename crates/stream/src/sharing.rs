@@ -1,5 +1,6 @@
-//! Clipboard sharing within one session: text goes on the control channel, copied files on
-//! the `files` channel (see [`crate::files`]). Used by both the host and the viewer.
+//! Clipboard sharing within one session: text goes on the control channel, copied files and
+//! pictures (as one PNG) on the `files` channel (see [`crate::files`]). Used by both the host
+//! and the viewer.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,6 +33,8 @@ pub(crate) struct ClipboardShare {
     /// Private folder holding the received files until the session ends, once created by
     /// the reader (only when a transfer arrives while sharing is on).
     received_dir: Arc<Mutex<Option<PathBuf>>>,
+    /// Private folder for the PNG of a copied picture while it is sent.
+    sent_dir: Option<PathBuf>,
     /// Whether the reader keeps what the peer sends: only while sharing is on here.
     accepting: Arc<AtomicBool>,
     /// Wakes the reader to drop the transfer it is receiving (cancelled).
@@ -68,6 +71,7 @@ impl ClipboardShare {
             sending: None,
             next_transfer: 1,
             received_dir: Arc::default(),
+            sent_dir: None,
             accepting: Arc::default(),
         }
     }
@@ -184,7 +188,15 @@ impl ClipboardShare {
             }
             ClipEvent::Local(Some(Change::Files(paths))) => {
                 tracing::debug!(count = paths.len(), "clipboard files copied");
-                self.send_files(paths).await
+                self.send_files(paths, false).await
+            }
+            ClipEvent::Local(Some(Change::Image(png))) => {
+                tracing::debug!(bytes = png.len(), "clipboard picture copied");
+                let path = match self.write_picture(png).await {
+                    Ok(path) => path,
+                    Err(e) => return Some(format!("immagine copiata non condivisa: {e:#}")),
+                };
+                self.send_files(vec![path], true).await
             }
             ClipEvent::FilesChannel(None) => {
                 self.files_pending = None;
@@ -208,6 +220,17 @@ impl ClipboardShare {
                 None
             }
             ClipEvent::Progress(_) => None,
+            ClipEvent::Received(Some(Ok(Incoming::Files(received)))) if received.image => {
+                let sync = self.sync.as_ref()?;
+                let path = received.items.into_iter().next()?;
+                match tokio::fs::read(&path).await {
+                    Ok(png) => {
+                        sync.set_image(png);
+                        Some("immagine ricevuta negli appunti: incolla dove vuoi".into())
+                    }
+                    Err(e) => Some(format!("immagine degli appunti non ricevuta: {e}")),
+                }
+            }
             ClipEvent::Received(Some(Ok(Incoming::Files(received)))) => {
                 let sync = self.sync.as_ref()?;
                 let n = received.items.len();
@@ -221,22 +244,44 @@ impl ClipboardShare {
         }
     }
 
-    async fn send_files(&mut self, paths: Vec<PathBuf>) -> Option<String> {
+    /// Saves a copied picture as `immagine.png` in a private folder (the previous one goes).
+    async fn write_picture(&mut self, png: Vec<u8>) -> std::io::Result<PathBuf> {
+        if let Some(old) = self.sent_dir.take() {
+            let _ = tokio::fs::remove_dir_all(old).await;
+        }
+        let dir = tokio::task::spawn_blocking(files::private_dir)
+            .await
+            .map_err(std::io::Error::other)??;
+        self.sent_dir = Some(dir.clone());
+        let path = dir.join("immagine.png");
+        tokio::fs::write(&path, png).await?;
+        Ok(path)
+    }
+
+    async fn send_files(&mut self, paths: Vec<PathBuf>, image: bool) -> Option<String> {
         let Some(channel) = self.files.clone() else {
             return Some("il partner non può ricevere file: va aggiornata la sua app".into());
         };
         let transfer = self.take_transfer_id();
-        let outgoing =
+        let mut outgoing =
             match tokio::task::spawn_blocking(move || files::collect(transfer, &paths)).await {
                 Ok(Ok(outgoing)) => outgoing,
                 Ok(Err(e)) => return Some(format!("file non condivisi: {e:#}")),
                 Err(_) => return None,
             };
-        let message = format!(
-            "invio di {} ({}) negli appunti del partner",
-            items(outgoing.manifest.items()),
-            megabytes(outgoing.manifest.total_bytes())
-        );
+        outgoing.manifest.image = image;
+        let message = if image {
+            format!(
+                "invio dell'immagine copiata ({}) negli appunti del partner",
+                megabytes(outgoing.manifest.total_bytes())
+            )
+        } else {
+            format!(
+                "invio di {} ({}) negli appunti del partner",
+                items(outgoing.manifest.items()),
+                megabytes(outgoing.manifest.total_bytes())
+            )
+        };
         if let Some(previous) = self.sending.take() {
             previous.abort();
         }
@@ -328,6 +373,9 @@ impl Drop for ClipboardShare {
         if let Ok(mut dir) = self.received_dir.lock()
             && let Some(path) = dir.take()
         {
+            let _ = std::fs::remove_dir_all(path);
+        }
+        if let Some(path) = self.sent_dir.take() {
             let _ = std::fs::remove_dir_all(path);
         }
     }
