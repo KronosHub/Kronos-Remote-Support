@@ -532,3 +532,6 @@
   server: un ricollegamento di uno dei due dispositivi cancellava la sessione, quindi il `leave` successivo non
   arrivava più al partner. Ora la sessione resta (Worker e server Rust, test `leave_reaches_the_partner_after_a_reconnect`).
 - `Bye` atteso prima di chiudere; OK sul resoconto chiude tutto (`end_session`). ADR 0051.
+- Worker pubblicato (versione 7ecee978). Nei primi minuti il Durable Object ha continuato a cancellare le sessioni
+  (codice vecchio ancora attivo: le WebSocket in ibernazione non si scollegano a un deploy); dopo, tre prove su tre
+  in produzione: sessione, ricollegamento di chi controlla, `leave` → il partner riceve "peer left".
