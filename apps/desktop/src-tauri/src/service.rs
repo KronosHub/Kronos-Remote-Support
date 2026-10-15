@@ -167,6 +167,11 @@ pub enum UiEvent {
         displays: Vec<protocol::DisplayInfo>,
         current: u32,
     },
+    /// The partner has no screen to share yet (e.g. no monitor): the session stays open.
+    ViewNoScreen {
+        session: SessionId,
+        message: String,
+    },
     /// The partner's screen can be watched but not controlled.
     ViewControlUnavailable {
         session: SessionId,
@@ -2033,6 +2038,10 @@ async fn view_partner(
                     current,
                 },
             ),
+            ViewerEvent::ScreenUnavailable(message) => {
+                log(app, "warn", format!("{partner}: {message}"));
+                shared.view_event(app, session, UiEvent::ViewNoScreen { session, message });
+            }
             ViewerEvent::ControlUnavailable(message) => {
                 log(app, "warn", format!("controllo non disponibile: {message}"));
                 shared.view_event(

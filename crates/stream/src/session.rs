@@ -30,6 +30,8 @@ fn heard<T>(at: &mut Instant, value: T) -> T {
 }
 /// Pause between attempts to restart a stream whose capture stopped.
 const RESTART_RETRY: Duration = Duration::from_secs(2);
+/// Pause between attempts to share a screen while there is none (e.g. no monitor).
+const NO_SCREEN_RETRY: Duration = Duration::from_secs(5);
 
 /// The injector for this host session: the local one, or the SYSTEM agent on Windows
 /// (so remote control reaches UAC prompts and the lock screen).
@@ -156,44 +158,47 @@ pub async fn serve_host(
     mut on_event: impl FnMut(HostEvent),
 ) {
     let allow_control = config.allow_control;
+    // A Mac without a monitor gets a virtual one for the session (ADR 0048).
+    let mut screen_keeper = ScreenKeeper::default();
+    ensure_screen(&config, &mut screen_keeper).await;
+    // `None` while there is no screen to share: the session stays open (chat, files) and
+    // the capture is tried again every few seconds.
     let mut handle = match crate::start(config.clone(), video.clone()).await {
-        Ok(handle) => handle,
+        Ok(handle) => Some(handle),
         Err(e) => {
-            let message = format!("{e:#}");
+            let message = screen_unavailable_message(&e);
+            tracing::warn!("screen not shared yet: {e:#}");
             send(
                 &channel,
-                &ControlMsg::StreamError {
+                &ControlMsg::ScreenUnavailable {
                     message: message.clone(),
                 },
             )
             .await;
             on_event(HostEvent::Failed(message));
-            // Give the viewer time to read the reason before the session is torn down.
-            let _ = tokio::time::timeout(Duration::from_secs(3), async {
-                while recv(&channel).await.is_some() {}
-            })
-            .await;
-            return;
+            None
         }
     };
     // The most this picture is worth: more for large screens (`rate::max_bitrate_for`).
-    let max_bitrate = rate::max_bitrate_for(
-        u64::from(handle.width) * u64::from(handle.height),
+    let pixels = |h: &StreamHandle| u64::from(h.width) * u64::from(h.height);
+    let mut rate = RateController::new(rate::max_bitrate_for(
+        handle.as_ref().map_or(rate::FULL_HD_PIXELS, pixels),
         config.bitrate_bps,
-    );
-    let mut rate = RateController::new(max_bitrate);
-    send(
-        &channel,
-        &ControlMsg::StreamStarted {
+    ));
+    if let Some(handle) = &handle {
+        send(
+            &channel,
+            &ControlMsg::StreamStarted {
+                width: handle.width,
+                height: handle.height,
+            },
+        )
+        .await;
+        on_event(HostEvent::Started {
             width: handle.width,
             height: handle.height,
-        },
-    )
-    .await;
-    on_event(HostEvent::Started {
-        width: handle.width,
-        height: handle.height,
-    });
+        });
+    }
 
     // Starting the injector may block on an OS permission prompt: keep it off the runtime.
     let agent_product = config.agent_product.clone();
@@ -220,10 +225,12 @@ pub async fn serve_host(
     } else {
         None
     };
-    if let Some(sink) = &input {
-        sink.set_area(area(handle.bounds));
+    if let Some(handle) = &handle {
+        if let Some(sink) = &input {
+            sink.set_area(area(handle.bounds));
+        }
+        send_displays(&channel, &config, handle.display_id).await;
     }
-    send_displays(&channel, &config, handle.display_id).await;
     let usage_task = tokio::spawn(report_usage(channel.clone()));
 
     // Report how remote control is going: first success, and failures (once each kind).
@@ -247,7 +254,9 @@ pub async fn serve_host(
     // HD on by default; the viewer may limit the stream to 1080p (kept across restarts).
     let mut high_resolution = true;
     // Set while the capture is down and must be started again.
-    let mut restart_at: Option<tokio::time::Instant> = None;
+    let mut restart_at = handle
+        .is_none()
+        .then(|| tokio::time::Instant::now() + NO_SCREEN_RETRY);
     let reason = loop {
         tokio::select! {
             event = clipboard.next() => match event {
@@ -281,7 +290,12 @@ pub async fn serve_host(
                 let message = Some("sbloccati da chi è davanti al computer (Esc ×3)".to_owned());
                 send(&channel, &ControlMsg::InputBlocked { blocked: false, message }).await;
             }
-            change = handle.changed(), if restart_at.is_none() => match change {
+            change = async {
+                match handle.as_mut() {
+                    Some(handle) => handle.changed().await,
+                    None => std::future::pending().await,
+                }
+            }, if restart_at.is_none() => match change {
                 StreamChange::Resized { width, height } => {
                     // Resolution lowered or restored for the bandwidth: the viewer restarts
                     // its decoder on the new size, as for another monitor.
@@ -297,8 +311,28 @@ pub async fn serve_host(
             _ = tokio::time::sleep_until(restart_at.unwrap_or_else(tokio::time::Instant::now)),
                 if restart_at.is_some() =>
             {
-                match restart_stream(&config, &video, &mut handle).await {
+                let restarted = match handle.as_mut() {
+                    Some(current) => restart_stream(&config, &video, current).await,
+                    // No screen so far: maybe a monitor was plugged in (or, on a Mac, the
+                    // virtual one can be made now).
+                    None => {
+                        ensure_screen(&config, &mut screen_keeper).await;
+                        match crate::start(config.clone(), video.clone()).await {
+                            Ok(new) => {
+                                rate = RateController::new(rate::max_bitrate_for(
+                                    pixels(&new),
+                                    config.bitrate_bps,
+                                ));
+                                handle = Some(new);
+                                Ok(())
+                            }
+                            Err(e) => Err(e),
+                        }
+                    }
+                };
+                match restarted {
                     Ok(()) => {
+                        let Some(handle) = handle.as_ref() else { continue };
                         restart_at = None;
                         tracing::info!(size = ?(handle.width, handle.height), "screen capture restarted");
                         handle.set_bitrate(rate.bitrate());
@@ -315,8 +349,9 @@ pub async fn serve_host(
                         on_event(HostEvent::Started { width: handle.width, height: handle.height });
                     }
                     Err(e) => {
-                        tracing::warn!("cannot restart the screen capture: {e:#}");
-                        restart_at = Some(tokio::time::Instant::now() + RESTART_RETRY);
+                        let retry = if handle.is_some() { RESTART_RETRY } else { NO_SCREEN_RETRY };
+                        tracing::debug!("cannot (re)start the screen capture: {e:#}");
+                        restart_at = Some(tokio::time::Instant::now() + retry);
                     }
                 }
             }
@@ -330,7 +365,11 @@ pub async fn serve_host(
                 Some(ControlMsg::Ping { seq, sent_us }) => {
                     send(&channel, &ControlMsg::Pong { seq, sent_us }).await;
                 }
-                Some(ControlMsg::RequestKeyframe) => handle.request_keyframe(),
+                Some(ControlMsg::RequestKeyframe) => {
+                    if let Some(handle) = &handle {
+                        handle.request_keyframe();
+                    }
+                }
                 Some(ControlMsg::Chat { text }) => on_event(HostEvent::Chat(text)),
                 Some(ControlMsg::ClipboardMode { enabled }) => {
                     // The viewer asks; the host's own setting decides.
@@ -382,7 +421,9 @@ pub async fn serve_host(
                 Some(ControlMsg::HighResolution { enabled }) => {
                     tracing::info!(enabled, "viewer set HD");
                     high_resolution = enabled;
-                    handle.set_high_resolution(enabled);
+                    if let Some(handle) = &handle {
+                        handle.set_high_resolution(enabled);
+                    }
                 }
                 Some(ControlMsg::Report { received, lost, rtt_ms }) => {
                     let report = rate::Report {
@@ -391,7 +432,9 @@ pub async fn serve_host(
                         rtt: (rtt_ms > 0).then(|| Duration::from_millis(rtt_ms.into())),
                     };
                     tracing::debug!(received, lost, rtt_ms, "viewer report");
-                    if let Some(bps) = rate.on_report(report, Instant::now()) {
+                    if let Some(bps) = rate.on_report(report, Instant::now())
+                        && let Some(handle) = &handle
+                    {
                         handle.set_bitrate(bps);
                         let kbps = bps / 1000;
                         let fps = rate::fps_for(bps, config.fps);
@@ -407,8 +450,9 @@ pub async fn serve_host(
                         sink.send(event);
                     }
                 }
-                Some(ControlMsg::SelectDisplay { id }) if id != handle.display_id => {
-                    match switch_display(&config, &video, &mut handle, id).await {
+                Some(ControlMsg::SelectDisplay { id }) if handle.as_ref().is_some_and(|h| h.display_id != id) => {
+                    let Some(handle) = handle.as_mut() else { continue };
+                    match switch_display(&config, &video, handle, id).await {
                         Ok(()) => {
                             handle.set_bitrate(rate.bitrate());
                             handle.set_high_resolution(high_resolution);
@@ -592,12 +636,68 @@ async fn stop_and_wait(handle: &mut StreamHandle) {
 }
 
 /// Joining the encoder thread can take up to one capture timeout; keep it off the runtime.
-fn stop_in_background(mut handle: StreamHandle, input: Option<HostInput>) {
+fn stop_in_background(handle: Option<StreamHandle>, input: Option<HostInput>) {
     tokio::task::spawn_blocking(move || {
         drop(input);
-        handle.stop();
+        if let Some(mut handle) = handle {
+            handle.stop();
+        }
     });
 }
+
+/// What the viewer reads while this computer has no screen to share.
+fn screen_unavailable_message(e: &anyhow::Error) -> String {
+    let no_display = e.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<capture::CaptureError>(),
+            Some(capture::CaptureError::NoDisplay)
+        )
+    });
+    if no_display {
+        "nessuno schermo collegato al computer remoto: la sessione resta aperta per chat e file, \
+         lo schermo compare appena ne viene collegato uno"
+            .into()
+    } else {
+        format!(
+            "schermo del partner non disponibile ({e:#}): la sessione resta aperta per chat e file"
+        )
+    }
+}
+
+/// Keeps the virtual monitor of a Mac without one for the session.
+#[cfg(target_os = "macos")]
+type ScreenKeeper = Option<Arc<capture::virtual_display::VirtualDisplay>>;
+#[cfg(not(target_os = "macos"))]
+type ScreenKeeper = ();
+
+/// macOS: with no monitor at all, makes a virtual one (kept in `keeper`) so there is
+/// something to share. Elsewhere, nothing (a missing monitor leaves the session waiting).
+#[cfg(target_os = "macos")]
+async fn ensure_screen(config: &StreamConfig, keeper: &mut ScreenKeeper) {
+    if keeper.is_some() || !matches!(config.source, crate::Source::Screen { .. }) {
+        return;
+    }
+    let made = tokio::task::spawn_blocking(|| {
+        let none = capture::virtual_display::no_monitor()
+            || match capture::displays() {
+                Ok(displays) => displays.is_empty(),
+                Err(e) => matches!(e, capture::CaptureError::NoDisplay),
+            };
+        none.then(capture::virtual_display::shared)
+    })
+    .await;
+    match made {
+        Ok(Some(Ok(screen))) => {
+            tracing::info!(id = screen.id(), "no monitor: sharing a virtual one");
+            *keeper = Some(screen);
+        }
+        Ok(Some(Err(e))) => tracing::warn!("no monitor and no virtual one: {e}"),
+        Ok(None) | Err(_) => {}
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn ensure_screen(_config: &StreamConfig, _keeper: &mut ScreenKeeper) {}
 
 #[derive(Debug, Clone)]
 pub enum ViewerEvent {
@@ -627,6 +727,8 @@ pub enum ViewerEvent {
     /// A keyframe was requested to resync the picture (loss or decoder trouble).
     Resync,
     Error(String),
+    /// The partner has no screen to share yet (session stays open; `Started` follows).
+    ScreenUnavailable(String),
     /// The host can be watched but not controlled.
     ControlUnavailable(String),
     /// The host's monitors and the one being shown.
@@ -774,6 +876,9 @@ pub async fn run_viewer(
                 }
                 Some(ControlMsg::InputUnavailable { message }) => {
                     on_event(ViewerEvent::ControlUnavailable(message));
+                }
+                Some(ControlMsg::ScreenUnavailable { message }) => {
+                    on_event(ViewerEvent::ScreenUnavailable(message));
                 }
                 Some(ControlMsg::Bye { reason }) => break reason,
                 Some(_) => {}

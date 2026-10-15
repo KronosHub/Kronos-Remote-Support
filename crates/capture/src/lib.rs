@@ -11,6 +11,8 @@ mod macos;
 mod pattern;
 pub mod scale;
 pub mod shared;
+#[cfg(target_os = "macos")]
+pub mod virtual_display;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "linux")]

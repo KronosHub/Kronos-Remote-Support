@@ -2,6 +2,14 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.6.0 — 2026-10-15
+- Mac senza monitor (per esempio un Mac mini senza schermo collegato): l'app crea da sola uno schermo virtuale
+  da 1920×1080 per la durata della sessione, così lo puoi vedere e controllare. Lo schermo sparisce quando la
+  sessione finisce.
+- Computer senza schermo da condividere (per esempio un PC Windows senza monitor): la sessione non si chiude più
+  dopo 2 secondi. Resta aperta con il messaggio che spiega cosa succede, puoi usare chat e appunti, e lo schermo
+  compare da solo appena ne viene collegato uno. Vanno aggiornati entrambi i computer.
+
 ## 1.5.4 — 2026-10-15
 - Appunti condivisi: ora passano anche le immagini, per esempio uno screenshot fatto con ⌘⌃⇧4 sul Mac o con
   Stamp/Win+Shift+S su Windows. Si incollano direttamente come immagine dall'altra parte. Funziona tra Mac e

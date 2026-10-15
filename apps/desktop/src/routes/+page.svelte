@@ -51,6 +51,7 @@
         finished: boolean;
       }
     | { kind: "view_control_unavailable"; session: number; message: string }
+    | { kind: "view_no_screen"; session: number; message: string }
     | { kind: "view_displays"; session: number; displays: DisplayInfo[]; current: number }
     | { kind: "view_closed"; session: number; reason: string; duration_secs: number }
     | { kind: "hosting_started"; session: number; peer: string }
@@ -67,6 +68,8 @@
     fps: number | null;
     waiting: boolean;
     error: string | null;
+    /** The partner has no screen to share yet (no monitor...): why, while the session stays open. */
+    noScreen: string | null;
     /** Send mouse and keyboard to the partner. */
     control: boolean;
     controlError: string | null;
@@ -316,7 +319,11 @@
           }
           view.width = event.width;
           view.height = event.height;
+          view.noScreen = null;
         }
+        break;
+      case "view_no_screen":
+        if (view?.session === event.session) view.noScreen = event.message;
         break;
       case "view_displays":
         if (view?.session === event.session) {
@@ -755,6 +762,7 @@
       fps: null,
       waiting: true,
       error: null,
+      noScreen: null,
       control: true,
       controlError: null,
       displays: [],
@@ -1312,6 +1320,8 @@
         <p class="overlay">Sessione terminata: {view.ended}</p>
       {:else if view.error}
         <p class="overlay error-text">{view.error}</p>
+      {:else if view.noScreen}
+        <p class="overlay">{view.noScreen}</p>
       {:else if view.waiting}
         <p class="overlay">In attesa dello schermo del partner…</p>
       {/if}

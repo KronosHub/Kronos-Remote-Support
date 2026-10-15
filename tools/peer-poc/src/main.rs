@@ -565,6 +565,7 @@ async fn view(
                 failure = Some(e);
             }
             ViewerEvent::ControlUnavailable(e) => println!("Host cannot be controlled: {e}"),
+            ViewerEvent::ScreenUnavailable(e) => println!("Host has no screen yet: {e}"),
             ViewerEvent::AudioUnavailable(e) => println!("Sound unavailable: {e}"),
             ViewerEvent::Transfer(p) => println!("Transfer: {}/{} bytes", p.done, p.total),
             ViewerEvent::InputBlocked { blocked, message } => {

@@ -25,6 +25,11 @@ pub enum ControlMsg {
     StreamError {
         message: String,
     },
+    /// Host → viewer: there is no screen to share yet (e.g. no monitor connected); the
+    /// session stays open (chat, files) and `StreamStarted` follows once one appears.
+    ScreenUnavailable {
+        message: String,
+    },
     /// Viewer → host: decoder lost sync (start, packet loss, decode error); send an IDR.
     RequestKeyframe,
     /// Either side ends the session.
