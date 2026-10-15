@@ -27,11 +27,11 @@ pub fn uac_support() -> UacSupport {
                 toggleable: false,
             };
         }
-        return UacSupport {
+        UacSupport {
             supported: true,
             active: agent::windows::is_service_installed(crate::service_name()),
             toggleable: true,
-        };
+        }
     }
     #[cfg(not(windows))]
     UacSupport {

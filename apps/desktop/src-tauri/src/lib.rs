@@ -553,11 +553,12 @@ pub fn run() {
             _ => {
                 // Quick Support is opt-out for admin: try to gain admin at startup so admin
                 // windows work; if the user clicks "No" on the UAC prompt, continue as user.
-                if QUICK && !agent::windows::is_elevated() {
-                    if let Ok(true) = agent::windows::spawn_self_elevated(&[]) {
-                        // The elevated copy takes over; this one exits.
-                        return;
-                    }
+                if QUICK
+                    && !agent::windows::is_elevated()
+                    && let Ok(true) = agent::windows::spawn_self_elevated(&[])
+                {
+                    // The elevated copy takes over; this one exits.
+                    return;
                 }
             }
         }
@@ -585,17 +586,17 @@ pub fn run() {
                 // Elevated Quick: a temporary agent service so admin windows can be shared;
                 // removed on exit. Non-elevated Quick offers to relaunch elevated from the UI.
                 #[cfg(windows)]
-                if agent::windows::is_elevated() {
-                    if let Ok(exe) = std::env::current_exe() {
-                        let _ = agent::windows::install_service(
-                            service_name(),
-                            "Kronos Quick Support (controllo UAC)",
-                            &exe,
-                            agent_product(),
-                            // Removed on exit: nothing may start it again later.
-                            false,
-                        );
-                    }
+                if agent::windows::is_elevated()
+                    && let Ok(exe) = std::env::current_exe()
+                {
+                    let _ = agent::windows::install_service(
+                        service_name(),
+                        "Kronos Quick Support (controllo UAC)",
+                        &exe,
+                        agent_product(),
+                        // Removed on exit: nothing may start it again later.
+                        false,
+                    );
                 }
                 app.manage(Service::start(app.handle().clone(), None)?);
                 show_main_window(app.handle());
