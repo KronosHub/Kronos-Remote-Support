@@ -500,3 +500,13 @@
 - Lo screenshot con ⌘⌃⇧4 non arrivava: gli appunti condivisi gestivano solo testo e file. Ora le immagini
   passano come PNG con `Manifest.image` e arrivano negli appunti come immagine (ADR 0047). Test di codifica e
   trasferimento; prova reale da fare tra due Mac e tra Mac e Windows.
+- Release 1.5.4: il job Linux è fallito caricando `latest.json` ("Not Found" sull'aggiornamento dell'asset, corsa
+  tra i job) e il file è rimasto con le sole voci Mac. Rilanciato il job Linux, poi aggiunte a mano le tre voci
+  Windows con le firme `.sig` pubblicate (stessa struttura della 1.5.3): 11 piattaforme, URL tutti 200.
+
+## 2026-10-15 — Computer senza monitor (v1.6.0)
+- L'utente segnala sessioni chiuse dopo 2 s su un PC Windows e un Mac senza monitor (`no displays available`).
+- Host: sessione aperta senza schermo (`ScreenUnavailable`, nuovo tentativo ogni 5 s); provato con un host senza
+  permesso di registrazione: la sessione resta aperta e il viewer riceve il messaggio.
+- macOS: schermo virtuale `CGVirtualDisplay` 1920×1080 quando non c'è nessuno schermo attivo; provato su questo Mac
+  (creato e tolto). Da provare su un Mac davvero senza monitor. ADR 0048.

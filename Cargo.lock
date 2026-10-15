@@ -766,6 +766,8 @@ dependencies = [
 name = "capture"
 version = "0.1.0"
 dependencies = [
+ "objc2",
+ "objc2-foundation",
  "screencapturekit",
  "thiserror 2.0.21",
  "tracing",
@@ -1462,7 +1464,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-remoto"
-version = "1.5.4"
+version = "1.6.0"
 dependencies = [
  "agent",
  "anyhow",
