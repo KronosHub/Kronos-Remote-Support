@@ -31,6 +31,8 @@ impl SignalSender {
 pub struct SignalingClient {
     pub id: PeerId,
     pub ice_servers: Vec<IceServer>,
+    /// Optional abilities the server announced (e.g. `signaling_proto::FEATURE_PRESENCE`).
+    pub features: Vec<String>,
     sender: SignalSender,
     inbox: UnboundedReceiver<ServerMessage>,
 }
@@ -88,9 +90,14 @@ impl SignalingClient {
             device_key: device_key.to_owned(),
         });
         match inbox.recv().await {
-            Some(ServerMessage::Registered { id, ice_servers }) => Ok(Self {
+            Some(ServerMessage::Registered {
                 id,
                 ice_servers,
+                features,
+            }) => Ok(Self {
+                id,
+                ice_servers,
+                features,
                 sender,
                 inbox,
             }),

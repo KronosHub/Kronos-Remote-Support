@@ -144,6 +144,10 @@ impl Hub {
         }
     }
 
+    pub fn is_online(&self, peer: &PeerId) -> bool {
+        self.online.contains_key(peer)
+    }
+
     pub fn connect(&mut self, from: &PeerId, target: &PeerId) -> Result<(), ServerMessage> {
         if from == target {
             return Err(ServerMessage::error(

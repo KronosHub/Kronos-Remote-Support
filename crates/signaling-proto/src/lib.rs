@@ -116,7 +116,21 @@ pub enum ClientMessage {
     Leave {
         session: SessionId,
     },
+    /// Which of these devices (at most [`MAX_PRESENCE_IDS`]) are connected to the server
+    /// now; answered with `Presence`. Only to servers that announce [`FEATURE_PRESENCE`],
+    /// at most once every [`PRESENCE_INTERVAL_SECS`] per connection.
+    Presence {
+        ids: Vec<PeerId>,
+    },
 }
+
+/// `Registered.features` entry of servers that answer `Presence`.
+pub const FEATURE_PRESENCE: &str = "presence";
+/// Most ids asked about in one `Presence` request.
+pub const MAX_PRESENCE_IDS: usize = 20;
+/// Least time between two `Presence` requests on one connection: the online state of a
+/// list of known devices, not a way to scan ids.
+pub const PRESENCE_INTERVAL_SECS: u64 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -137,6 +151,9 @@ pub enum ServerMessage {
     Registered {
         id: PeerId,
         ice_servers: Vec<IceServer>,
+        /// Optional abilities of this server (e.g. [`FEATURE_PRESENCE`]); empty from old ones.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        features: Vec<String>,
     },
     /// Sent to the caller of `Connect`.
     SessionCreated {
@@ -160,6 +177,10 @@ pub enum ServerMessage {
     SessionClosed {
         session: SessionId,
         reason: String,
+    },
+    /// Answer to `Presence`: the asked ids that are online.
+    Presence {
+        online: Vec<PeerId>,
     },
     Error {
         code: ErrorCode,
@@ -189,6 +210,28 @@ impl ServerMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn presence_messages_and_old_servers() {
+        // Servers before presence send no `features`.
+        let old = r#"{"type":"registered","id":"123456789","ice_servers":[]}"#;
+        let Ok(ServerMessage::Registered { features, .. }) = serde_json::from_str(old) else {
+            panic!("old registered message not read");
+        };
+        assert!(features.is_empty());
+        let ask = ClientMessage::Presence {
+            ids: vec!["123 456 789".parse().unwrap()],
+        };
+        assert_eq!(ask.to_json(), r#"{"type":"presence","ids":["123456789"]}"#);
+        let reply: ServerMessage =
+            serde_json::from_str(r#"{"type":"presence","online":["123456789"]}"#).unwrap();
+        assert_eq!(
+            reply,
+            ServerMessage::Presence {
+                online: vec!["123456789".parse().unwrap()]
+            }
+        );
+    }
 
     #[test]
     fn peer_id_accepts_spaces_and_formats_grouped() {

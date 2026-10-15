@@ -149,6 +149,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             let _ = tx.send(ServerMessage::Registered {
                 id: id.clone(),
                 ice_servers: hub.ice_servers_for(&id),
+                features: vec![signaling_proto::FEATURE_PRESENCE.to_owned()],
             });
             id
         }
@@ -165,12 +166,18 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     tracing::info!(conn, %id, "peer online");
 
     let mut recent_connects = VecDeque::new();
+    let mut last_presence: Option<Instant> = None;
     loop {
         tokio::select! {
             msg = next_client_message(&mut stream) => {
                 let Some(msg) = msg else { break };
-                if let Err(err) = handle_message(&state, &id, msg, &mut recent_connects) {
-                    let _ = tx.send(err);
+                let reply = if let ClientMessage::Presence { ids } = msg {
+                    presence(&state, ids, &mut last_presence)
+                } else {
+                    handle_message(&state, &id, msg, &mut recent_connects).err()
+                };
+                if let Some(reply) = reply {
+                    let _ = tx.send(reply);
                 }
             }
             _ = kick.notified() => {
@@ -185,6 +192,29 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     // Let the writer flush what is queued (e.g. the "replaced" error), then hang up.
     drop(tx);
     let _ = tokio::time::timeout(Duration::from_secs(1), writer).await;
+}
+
+/// Which of `ids` are online, at most once every `PRESENCE_INTERVAL_SECS` per connection.
+fn presence(
+    state: &AppState,
+    ids: Vec<PeerId>,
+    last: &mut Option<Instant>,
+) -> Option<ServerMessage> {
+    let now = Instant::now();
+    let interval = Duration::from_secs(signaling_proto::PRESENCE_INTERVAL_SECS);
+    if last.is_some_and(|t| now.duration_since(t) < interval) {
+        return Some(ServerMessage::error(
+            ErrorCode::RateLimited,
+            "presence asked too often",
+        ));
+    }
+    if ids.len() > signaling_proto::MAX_PRESENCE_IDS {
+        return Some(ServerMessage::error(ErrorCode::BadRequest, "too many ids"));
+    }
+    *last = Some(now);
+    let hub = state.hub.lock().unwrap();
+    let online = ids.into_iter().filter(|id| hub.is_online(id)).collect();
+    Some(ServerMessage::Presence { online })
 }
 
 fn handle_message(
@@ -218,6 +248,8 @@ fn handle_message(
         }
         ClientMessage::Signal { session, payload } => hub.relay(id, session, payload),
         ClientMessage::Leave { session } => hub.leave(id, session),
+        // Answered by `presence` before getting here.
+        ClientMessage::Presence { .. } => Ok(()),
     }
 }
 

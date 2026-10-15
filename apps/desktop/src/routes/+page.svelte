@@ -16,6 +16,7 @@
   type Device = { id: string; name: string };
   type UiEvent =
     | ({ kind: "status" } & Status)
+    | { kind: "presence"; online: string[] | null }
     | { kind: "log"; level: "info" | "warn" | "error"; message: string }
     | { kind: "approval_request"; session: number; peer: string; timeout_secs: number }
     | { kind: "approval_closed"; session: number }
@@ -139,6 +140,24 @@
   let devices = $state<Device[]>([]);
   /** This app's devices found on the local network (connect without the server). */
   type LanPeer = { id: string; host: string; alias: string | null };
+  /** Saved devices connected to the server now (formatted ids); null while unknown. */
+  let onlineIds = $state<string[] | null>(null);
+  const digits = (id: string) => id.replace(/\D/g, "");
+  /** Online through the server or seen on this network; null when we cannot tell. */
+  function deviceOnline(d: Device): boolean | null {
+    if (lanPeers.some((p) => digits(p.id) === digits(d.id))) return true;
+    if (onlineIds === null) return null;
+    return onlineIds.some((id) => digits(id) === digits(d.id));
+  }
+  // Opening the list asks again (the app also asks every 30 s on its own).
+  $effect(() => {
+    if (section === "devices") refreshPresence();
+  });
+  function refreshPresence() {
+    invoke<string[] | null>("device_presence").then((o) => {
+      if (o !== null) onlineIds = o;
+    });
+  }
   let lanPeers = $state<LanPeer[]>([]);
   /** Popup shown in the main window when a session ends (we controlled or were controlled). */
   let sessionEnded = $state<{ controlled: boolean; peer: string; duration: number; reason: string } | null>(null);
@@ -304,6 +323,9 @@
 
   function handle(event: UiEvent) {
     switch (event.kind) {
+      case "presence":
+        onlineIds = event.online;
+        break;
       case "status": {
         const { kind, ...rest } = event;
         status = rest;
@@ -491,6 +513,7 @@
     invoke<"quick" | "full">("app_mode").then((m) => (mode = m));
     invoke<Status>("get_status").then((s) => (status = s));
     invoke<Device[]>("list_devices").then((d) => (devices = d));
+    refreshPresence();
     invoke<boolean>("get_autostart").then((a) => (autostart = a));
     invoke<string | null>("display_name").then((n) => {
       displayName = n;
@@ -551,6 +574,7 @@
       if (usePersonal && saveAs.trim()) {
         devices = await invoke<Device[]>("list_devices");
         saveAs = "";
+        refreshPresence();
       }
     } catch (e) {
       formError = String(e);
@@ -1661,7 +1685,13 @@
       {:else}
         <ul class="devices">
           {#each devices as d (d.id)}
+            {@const online = deviceOnline(d)}
             <li>
+              {#if online !== null}
+                <span class="presence" class:on={online}
+                  title={online ? "Acceso e raggiungibile" : "Spento o senza connessione"}
+                >{online ? "Online" : "Offline"}</span>
+              {/if}
               <span class="strong">{d.name}</span>
               <span class="mono muted small">{d.id}</span>
               <span class="spacer"></span>
@@ -2601,6 +2631,28 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+  }
+  .presence {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 7ch;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .presence::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.6;
+  }
+  .presence.on {
+    color: var(--ok);
+  }
+  .presence.on::before {
+    opacity: 1;
   }
   .devices li {
     display: flex;

@@ -43,6 +43,10 @@ const TURN_SESSIONS_PER_IP_PER_HOUR = 30;
 const MAX_SESSIONS_PER_PEER = 32;
 /** Upper bound on the keys of each rate-limit table (memory cap against many IPs). */
 const MAX_LIMITER_KEYS = 50_000;
+// Presence (which saved devices are online): ids per request, least ms between requests of
+// one connection. Enough for a device list, far too slow to scan ids.
+const MAX_PRESENCE_IDS = 20;
+const PRESENCE_INTERVAL_MS = 10_000;
 /** WebSocket close code for policy violations (rate limits). */
 const CLOSE_POLICY = 1008;
 const CLOSE_TOO_BIG = 1009;
@@ -143,6 +147,8 @@ export class Hub extends DurableObject {
         return this.relay(ws, me.id, msg.session, msg.payload);
       case "leave":
         return this.leave(ws, me.id, msg.session);
+      case "presence":
+        return this.presence(ws, me, msg.ids);
       default:
         return send(ws, error("bad_request", "unknown message"));
     }
@@ -209,7 +215,26 @@ export class Hub extends DurableObject {
     }
     ws.serializeAttachment({ ...me, id });
     // STUN is enough until a session starts; sessions get TURN credentials.
-    send(ws, { type: "registered", id, ice_servers: [STUN] });
+    send(ws, { type: "registered", id, ice_servers: [STUN], features: ["presence"] });
+  }
+
+  /** Which of `ids` are online now (a device list's dots), rate limited per connection. */
+  presence(ws, me, ids) {
+    if (!Array.isArray(ids) || ids.length > MAX_PRESENCE_IDS || !ids.every((i) => /^\d{9}$/.test(i))) {
+      return send(ws, error("bad_request", "invalid presence request"));
+    }
+    const now = Date.now();
+    if (me.presenceAt && now - me.presenceAt < PRESENCE_INTERVAL_MS) {
+      return send(ws, error("rate_limited", "presence asked too often"));
+    }
+    ws.serializeAttachment({ ...me, presenceAt: now });
+    const online = new Set(
+      this.ctx
+        .getWebSockets()
+        .map((s) => s.deserializeAttachment()?.id)
+        .filter(Boolean),
+    );
+    send(ws, { type: "presence", online: ids.filter((i) => online.has(i)) });
   }
 
   allocateId() {

@@ -517,3 +517,9 @@
   `KronosVirtualMonitor.exe` lo installa con SetupAPI e lo imposta a 1920×1080@60 (ADR 0049). Scheda nella sezione
   Aggiornamenti; il programma viaggia nell'installer dell'app e da solo nella release.
 - Controllato solo con clippy per Windows da qui; da provare su un PC Windows.
+
+## 2026-10-15 — Online/Offline dei dispositivi (v1.7.1)
+- Nuovo messaggio `presence` nel protocollo, nel Worker e nel server Rust, con limiti contro la scansione degli ID;
+  etichetta Online/Offline nella lista dei dispositivi (ADR 0050).
+- Worker provato in locale con `wrangler dev` (Node 26 di Homebrew: wrangler non parte con il Node 20 di nvm): un
+  dispositivo online, richiesta troppo ravvicinata rifiutata, dispositivo uscito offline, 21 ID rifiutati.

@@ -71,6 +71,10 @@ pub struct Status {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum UiEvent {
     Status(Status),
+    /// Saved devices online now (formatted ids); `None` while unknown.
+    Presence {
+        online: Option<Vec<String>>,
+    },
     Log {
         level: &'static str,
         message: String,
@@ -239,6 +243,8 @@ enum Command {
     },
     /// Abort connections still being set up (the "Annulla" button).
     CancelConnect,
+    /// Ask the server again which saved devices are online (list shown or changed).
+    RefreshPresence,
 }
 
 /// A device of this app seen on the local network.
@@ -341,6 +347,9 @@ struct Attempts {
 /// State shared between the service task, its spawned tasks and Tauri commands.
 struct Shared {
     status: Mutex<Status>,
+    /// Saved devices connected to the server now (formatted ids); `None` while unknown
+    /// (offline, or a server without presence).
+    presence: Mutex<Option<Vec<String>>>,
     approvals: Mutex<HashMap<SessionId, oneshot::Sender<bool>>>,
     attempts: Mutex<Attempts>,
     viewers: Mutex<HashMap<SessionId, ViewerCtl>>,
@@ -511,6 +520,7 @@ impl Service {
         let store = Store::new(data_dir);
         let personal = store.personal_secret();
         let shared = Arc::new(Shared {
+            presence: Mutex::new(None),
             status: Mutex::new(Status {
                 link: Link::Connecting,
                 id: None,
@@ -605,6 +615,13 @@ impl Service {
 
     pub fn cancel_connect(&self) {
         let _ = self.commands.send(Command::CancelConnect);
+    }
+
+    /// Saved devices online now, as last reported by the server; `None` while unknown.
+    /// Asks again in the background (the answer comes as `UiEvent::Presence`).
+    pub fn presence(&self) -> Option<Vec<String>> {
+        let _ = self.commands.send(Command::RefreshPresence);
+        self.shared.presence.lock().unwrap().clone()
     }
 
     /// Devices of this app currently seen on the local network.
@@ -1071,6 +1088,7 @@ async fn run(ctx: Ctx, mut commands: UnboundedReceiver<Command>) {
                         cancel_connecting(&ctx);
                     }
                     Some(Command::CancelConnect) => cancel_connecting(&ctx),
+                    Some(Command::RefreshPresence) => {}
                     None => return,
                 },
                 Some(msg) = internal.recv() => handle_internal(&ctx, &mut sessions, msg).await,
@@ -1114,8 +1132,11 @@ async fn online(
     sessions: &mut Sessions,
     internal: &mut UnboundedReceiver<Internal>,
 ) -> String {
+    let mut presence = Presence::new(&client);
+    let mut presence_tick = tokio::time::interval(PRESENCE_REFRESH);
     let reason = loop {
         tokio::select! {
+            _ = presence_tick.tick() => presence.ask(ctx, &client),
             msg = client.recv() => {
                 let Some(msg) = msg else { break "connessione al server persa".to_owned() };
                 if let ServerMessage::Error { code: ErrorCode::Replaced, .. } = msg {
@@ -1151,6 +1172,7 @@ async fn online(
                     }
                     ctx.log("error", "connessione annullata");
                 }
+                Some(Command::RefreshPresence) => presence.ask(ctx, &client),
                 None => break "chiusura".to_owned(),
             },
             Some(msg) = internal.recv() => handle_internal(ctx, sessions, msg).await,
@@ -1159,7 +1181,55 @@ async fn online(
 
     // Connections requested on this server connection will never get their session.
     sessions.pending_connects.clear();
+    set_presence(ctx, None);
     reason
+}
+
+/// How often the online state of the saved devices is asked again.
+const PRESENCE_REFRESH: Duration = Duration::from_secs(30);
+
+/// Asks the server which saved devices are online (servers that support it).
+struct Presence {
+    supported: bool,
+    last: Option<Instant>,
+}
+
+impl Presence {
+    fn new(client: &SignalingClient) -> Self {
+        Self {
+            supported: client
+                .features
+                .iter()
+                .any(|f| f == signaling_proto::FEATURE_PRESENCE),
+            last: None,
+        }
+    }
+
+    fn ask(&mut self, ctx: &Ctx, client: &SignalingClient) {
+        // A margin over the server's limit: network delays never make two asks look closer.
+        let interval = Duration::from_secs(signaling_proto::PRESENCE_INTERVAL_SECS + 2);
+        if !self.supported || self.last.is_some_and(|t| t.elapsed() < interval) {
+            return;
+        }
+        let ids: Vec<PeerId> = ctx
+            .shared
+            .store
+            .devices()
+            .into_iter()
+            .filter_map(|d| d.id.parse().ok())
+            .take(signaling_proto::MAX_PRESENCE_IDS)
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        self.last = Some(Instant::now());
+        client.send(ClientMessage::Presence { ids });
+    }
+}
+
+fn set_presence(ctx: &Ctx, online: Option<Vec<String>>) {
+    *ctx.shared.presence.lock().unwrap() = online.clone();
+    emit(&ctx.app, UiEvent::Presence { online });
 }
 
 async fn handle_server_message(
@@ -1293,6 +1363,9 @@ async fn handle_server_message(
             ctx.log("error", message);
         }
         ServerMessage::Registered { .. } => {}
+        ServerMessage::Presence { online } => {
+            set_presence(ctx, Some(online.iter().map(PeerId::to_string).collect()));
+        }
     }
 }
 

@@ -140,6 +140,12 @@ fn list_devices(service: State<'_, Service>) -> Vec<service::DeviceView> {
     service.devices()
 }
 
+/// Saved devices online now (`None` while unknown); also asks the server again.
+#[tauri::command]
+fn device_presence(service: State<'_, Service>) -> Option<Vec<String>> {
+    service.presence()
+}
+
 /// Devices of this app on the local network (connectable without the server).
 #[tauri::command]
 fn lan_peers(service: State<'_, Service>) -> Vec<service::LanPeerView> {
@@ -656,6 +662,7 @@ pub fn run() {
             respond_approval,
             cancel_connect,
             list_devices,
+            device_presence,
             lan_peers,
             set_lan_name,
             connect_device,
