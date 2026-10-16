@@ -222,9 +222,78 @@
       addLog("error", String(e));
     }
   }
-  async function moveDevice(d: Device, group: string) {
+  /** "Organizza": the only mode where devices can be picked and moved, so a stray click in
+   *  the normal list never moves anything. */
+  let organizing = $state(false);
+  let picked = $state<string[]>([]);
+  /** The "Sposta in…" dialog: the chosen folder ("" is the top of the list). */
+  let moveDialog = $state<{ target: string } | null>(null);
+  /** The last move, undoable for a few seconds: each device's previous folder. */
+  let lastMove = $state<{ message: string; previous: { id: string; group: string | null }[] } | null>(null);
+  let lastMoveTimer: ReturnType<typeof setTimeout> | undefined;
+  function startOrganizing() {
+    organizing = true;
+    picked = [];
+  }
+  function stopOrganizing() {
+    organizing = false;
+    picked = [];
+    moveDialog = null;
+  }
+  function togglePicked(d: Device) {
+    picked = picked.includes(d.id) ? picked.filter((id) => id !== d.id) : [...picked, d.id];
+  }
+  /** Every device under a folder, subfolders included. */
+  function devicesUnder(id: string): Device[] {
+    return [...devicesIn(id), ...childGroups(id).flatMap((g) => devicesUnder(g.id))];
+  }
+  /** Picks all the devices in a folder, or unpicks them when they are all picked already. */
+  function togglePickedFolder(g: Group) {
+    const ids = devicesUnder(g.id).map((d) => d.id);
+    const all = ids.length > 0 && ids.every((id) => picked.includes(id));
+    picked = all ? picked.filter((id) => !ids.includes(id)) : [...new Set([...picked, ...ids])];
+  }
+  function folderPicked(g: Group): boolean | "some" {
+    const ids = devicesUnder(g.id).map((d) => d.id);
+    const n = ids.filter((id) => picked.includes(id)).length;
+    return n === 0 ? false : n === ids.length ? true : "some";
+  }
+  function openMoveDialog() {
+    const current = new Set(devices.filter((d) => picked.includes(d.id)).map((d) => d.group ?? ""));
+    moveDialog = { target: current.size === 1 ? [...current][0] : "" };
+  }
+  async function setGroups(moves: { id: string; group: string | null }[]) {
+    for (const m of moves) setTree(await invoke<DeviceTree>("move_device", m));
+  }
+  async function movePicked(event: SubmitEvent) {
+    event.preventDefault();
+    if (!moveDialog) return;
+    const group = moveDialog.target || null;
+    const moving = devices.filter((d) => picked.includes(d.id) && (d.group ?? null) !== group);
+    const where = group ? (groups.find((g) => g.id === group)?.name ?? "") : "I miei dispositivi";
     try {
-      setTree(await invoke<DeviceTree>("move_device", { id: d.id, group: group || null }));
+      await setGroups(moving.map((d) => ({ id: d.id, group })));
+      if (moving.length > 0) {
+        const what = moving.length === 1 ? `"${moving[0].name}" spostato` : `${moving.length} dispositivi spostati`;
+        lastMove = { message: `${what} in ${where}`, previous: moving.map((d) => ({ id: d.id, group: d.group ?? null })) };
+        clearTimeout(lastMoveTimer);
+        lastMoveTimer = setTimeout(() => (lastMove = null), 10000);
+      }
+      moveDialog = null;
+      picked = [];
+    } catch (e) {
+      addLog("error", String(e));
+      moveDialog = null;
+      await reloadDevices();
+    }
+  }
+  async function undoMove() {
+    if (!lastMove) return;
+    const { previous } = lastMove;
+    lastMove = null;
+    clearTimeout(lastMoveTimer);
+    try {
+      await setGroups(previous);
     } catch (e) {
       addLog("error", String(e));
     }
@@ -1818,7 +1887,13 @@
   {#snippet tree(parent: string | null, depth: number)}
     {#each childGroups(parent) as g (g.id)}
       {@const count = folderCount(g.id)}
+      {@const sel = organizing ? folderPicked(g) : false}
       <li class="folder" style="--depth: {depth}">
+        {#if organizing}
+          <input type="checkbox" class="pick" title="Seleziona tutti i dispositivi della cartella"
+            checked={sel === true} indeterminate={sel === "some"} disabled={count.total === 0}
+            onchange={() => togglePickedFolder(g)} />
+        {/if}
         <button class="folder-toggle" aria-expanded={!g.collapsed} onclick={() => toggleGroup(g)}>
           <svg class="chevron" class:open={!g.collapsed} viewBox="0 0 24 24" width="14" height="14" fill="none"
             stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"
@@ -1832,6 +1907,7 @@
           </span>
         </button>
         <span class="spacer"></span>
+        {#if organizing}
         <button class="icon-btn" title="Nuova cartella dentro {g.name}"
           onclick={() => (groupDialog = { id: null, name: "", parent: g.id, error: "" })}>+ Cartella</button>
         <button class="icon-btn" title="Rinomina o sposta la cartella"
@@ -1839,6 +1915,7 @@
           Modifica
         </button>
         <button class="icon-btn" onclick={() => deleteGroup(g)}>Elimina</button>
+        {/if}
       </li>
       {#if !g.collapsed}
         {#if childGroups(g.id).length === 0 && devicesIn(g.id).length === 0}
@@ -1849,7 +1926,11 @@
     {/each}
     {#each devicesIn(parent) as d (d.id)}
       {@const online = deviceOnline(d)}
-      <li style="--depth: {depth}">
+      <li style="--depth: {depth}" class:picked={organizing && picked.includes(d.id)}>
+        {#if organizing}
+          <input type="checkbox" class="pick" aria-label="Seleziona {d.name}"
+            checked={picked.includes(d.id)} onchange={() => togglePicked(d)} />
+        {/if}
         {#if online !== null}
           <span class="presence" class:on={online}
             title={online ? "Acceso e raggiungibile" : "Spento o senza connessione"}
@@ -1858,16 +1939,11 @@
         <span class="strong">{d.name}</span>
         <span class="mono muted small">{d.id}</span>
         <span class="spacer"></span>
-        {#if groups.length > 0}
-          <select class="move" title="Sposta in una cartella" value={d.group ?? ""}
-            onchange={(e) => moveDevice(d, e.currentTarget.value)}>
-            <option value="">Nessuna cartella</option>
-            {#each folderOptions() as f (f.id)}<option value={f.id}>{f.label}</option>{/each}
-          </select>
-        {/if}
+        {#if !organizing}
         <button class="icon-btn" disabled={busy || status.link !== "online"}
           onclick={() => connectDevice(d)}>Connetti</button>
         <button class="icon-btn" onclick={() => removeDevice(d)}>Rimuovi</button>
+        {/if}
       </li>
     {/each}
   {/snippet}
@@ -1883,10 +1959,33 @@
     <section class="card">
       <div class="card-title">
         <h2>I miei dispositivi</h2>
-        <button class="icon-btn" onclick={() => (groupDialog = { id: null, name: "", parent: null, error: "" })}>
-          Nuova cartella
-        </button>
+        {#if organizing}
+          <div class="row-actions">
+            <button class="icon-btn" onclick={() => (groupDialog = { id: null, name: "", parent: null, error: "" })}>
+              Nuova cartella
+            </button>
+            <button class="icon-btn" disabled={picked.length === 0} onclick={openMoveDialog}>
+              Sposta in…{picked.length > 0 ? ` (${picked.length})` : ""}
+            </button>
+            <button class="icon-btn primary" onclick={stopOrganizing}>Fine</button>
+          </div>
+        {:else if devices.length > 0 || groups.length > 0}
+          <button class="icon-btn" title="Crea cartelle e sposta i dispositivi" onclick={startOrganizing}>
+            Organizza
+          </button>
+        {/if}
       </div>
+      {#if organizing}
+        <p class="hint small">
+          Seleziona i dispositivi (o una cartella intera) e premi "Sposta in…". Premi "Fine" quando hai finito.
+        </p>
+      {/if}
+      {#if lastMove}
+        <div class="undo-bar small">
+          <span class="spacer">{lastMove.message}</span>
+          <button class="icon-btn" onclick={undoMove}>Annulla</button>
+        </div>
+      {/if}
       {#if devices.length === 0 && groups.length === 0}
         <p class="hint small">
           Nessun dispositivo salvato. Collegandoti con la password personale del partner puoi salvarlo qui
@@ -2140,6 +2239,33 @@
       <div class="actions">
         <button type="button" onclick={() => (groupDialog = null)}>Annulla</button>
         <button class="primary" type="submit" disabled={!groupDialog.name.trim()}>Salva</button>
+      </div>
+    </form>
+  </div>
+{/if}
+
+{#if moveDialog}
+  <div class="backdrop">
+    <form class="modal" onsubmit={movePicked}>
+      <h2>Sposta {picked.length === 1 ? "1 dispositivo" : `${picked.length} dispositivi`} in</h2>
+      <div class="folder-choices">
+        <label class="choice">
+          <input type="radio" name="move-target" value="" bind:group={moveDialog.target} />
+          I miei dispositivi (nessuna cartella)
+        </label>
+        {#each folderOptions() as f (f.id)}
+          <label class="choice">
+            <input type="radio" name="move-target" value={f.id} bind:group={moveDialog.target} />
+            {f.label}
+          </label>
+        {/each}
+      </div>
+      {#if groups.length === 0}
+        <p class="hint small">Non ci sono ancora cartelle: creane una con "Nuova cartella".</p>
+      {/if}
+      <div class="actions">
+        <button type="button" onclick={() => (moveDialog = null)}>Annulla</button>
+        <button class="primary" type="submit">Sposta</button>
       </div>
     </form>
   </div>
@@ -2891,6 +3017,52 @@
   }
   .tree li.empty {
     padding-left: calc(var(--depth, 0) * 22px + 22px);
+  }
+  .tree li.picked {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+  .pick,
+  .choice input {
+    width: auto;
+    flex: none;
+    margin: 0 2px 0 4px;
+    padding: 0;
+  }
+  .row-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .row-actions .primary {
+    margin-top: 0;
+  }
+  .undo-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    margin: 6px 0;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  }
+  .folder-choices {
+    max-height: 300px;
+    overflow-y: auto;
+    margin: 10px 0 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px 0;
+  }
+  .choice {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    white-space: pre;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .choice:hover {
+    background: var(--bg);
   }
   .folder-toggle {
     display: flex;

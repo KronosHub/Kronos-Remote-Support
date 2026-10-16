@@ -2,6 +2,12 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.8.2 — 2026-10-16
+- I miei dispositivi: per mettere i dispositivi nelle cartelle ora si preme **Organizza**. Selezioni uno o più
+  dispositivi (o una cartella intera), premi **Sposta in…**, scegli la cartella e confermi con **Sposta**; per qualche
+  secondo puoi ancora annullare. Fuori da Organizza non c'è più il menu accanto a ogni dispositivo, così non se ne
+  sposta nessuno per errore. Anche creare, modificare ed eliminare le cartelle si fa da Organizza.
+
 ## 1.8.1 — 2026-10-16
 - Nuovo pulsante **Trasferimento file** nella finestra della sessione: si apre una finestra divisa in due, con le
   cartelle di questo computer a sinistra e quelle del computer controllato a destra, tutte e due sulla cartella home.

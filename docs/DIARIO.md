@@ -558,3 +558,10 @@
   non salva un `D` di una copia non più attesa; il test passa più volte di fila.
 - Interfaccia controllata con dati finti in Chrome headless. Da provare tra due computer, anche Windows e Mac (permesso
   di accesso ai file su macOS).
+
+## 2026-10-16 — Modalità Organizza per le cartelle (v1.8.2)
+- Segnalazione: con il menu accanto a ogni dispositivo si rischiava di spostarlo per errore. Proposte tre soluzioni
+  (Organizza, menu ⋯ con finestra, trascinamento); l'utente ha scelto Organizza.
+- Fuori da Organizza la lista non sposta né modifica nulla; in Organizza selezione multipla, "Sposta in…" con
+  conferma e Annulla per 10 s. ADR 0054. Solo interfaccia: backend invariato.
+- Controllata con dati finti in Chrome headless.

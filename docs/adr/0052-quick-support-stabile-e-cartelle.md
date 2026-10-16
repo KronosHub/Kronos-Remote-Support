@@ -28,7 +28,7 @@
 - Eliminare una cartella sposta dispositivi e sottocartelle nella cartella che la conteneva: nessun dispositivo
   si perde. Salvare di nuovo un dispositivo (nuova password) lo lascia nella sua cartella.
 - Lo stato aperto/chiuso è salvato. Spostamento con un menu (non trascinamento: su Windows il trascinamento dei
-  file di Tauri intercetta quello HTML).
+  file di Tauri intercetta quello HTML). Dalla 1.8.2 lo spostamento si fa nella modalità Organizza (ADR 0054).
 
 ## Verifica
 Test di `store.rs` (cartelle annidate, spostamenti vietati, eliminazione, file con ciclo, file vecchi); interfaccia
