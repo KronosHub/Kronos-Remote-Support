@@ -273,6 +273,12 @@ enum Internal {
     LanIncoming(transport::lan::LanSession),
 }
 
+/// Control handle of a session we are sharing our screen in.
+struct HostCtl {
+    commands: UnboundedSender<HostCommand>,
+    partner: PeerId,
+}
+
 /// Control handle of a session we are viewing.
 struct ViewerCtl {
     commands: UnboundedSender<ViewerCommand>,
@@ -356,7 +362,7 @@ struct Shared {
     approvals: Mutex<HashMap<SessionId, oneshot::Sender<bool>>>,
     attempts: Mutex<Attempts>,
     viewers: Mutex<HashMap<SessionId, ViewerCtl>>,
-    hosting: Mutex<HashMap<SessionId, UnboundedSender<HostCommand>>>,
+    hosting: Mutex<HashMap<SessionId, HostCtl>>,
     /// Chat of each shared session, for the floating chat window opened later.
     host_chats: Mutex<HashMap<SessionId, Vec<ChatLine>>>,
     /// Hosting sessions opened with the personal password: ended when it is removed or
@@ -733,8 +739,8 @@ impl Service {
         let ended: Vec<SessionId> = self.shared.unattended.lock().unwrap().drain().collect();
         let hosting = self.shared.hosting.lock().unwrap();
         for session in &ended {
-            if let Some(tx) = hosting.get(session) {
-                let _ = tx.send(HostCommand::Stop);
+            if let Some(host) = hosting.get(session) {
+                let _ = host.commands.send(HostCommand::Stop);
             }
         }
         drop(hosting);
@@ -807,7 +813,7 @@ impl Service {
             .lock()
             .unwrap()
             .get(&session)
-            .is_some_and(|host| host.send(HostCommand::Chat(text.clone())).is_ok());
+            .is_some_and(|host| host.commands.send(HostCommand::Chat(text.clone())).is_ok());
         if sent {
             self.shared.host_chat_line(session, true, &text);
             emit(
@@ -874,7 +880,7 @@ impl Service {
         if let Some(viewer) = self.shared.viewers.lock().unwrap().get(&session) {
             let _ = viewer.commands.send(ViewerCommand::CancelTransfer);
         } else if let Some(host) = self.shared.hosting.lock().unwrap().get(&session) {
-            let _ = host.send(HostCommand::CancelTransfer);
+            let _ = host.commands.send(HostCommand::CancelTransfer);
         }
     }
 
@@ -924,8 +930,8 @@ impl Service {
     }
 
     pub fn stop_hosting(&self, session: SessionId) {
-        if let Some(tx) = self.shared.hosting.lock().unwrap().get(&session) {
-            let _ = tx.send(HostCommand::Stop);
+        if let Some(host) = self.shared.hosting.lock().unwrap().get(&session) {
+            let _ = host.commands.send(HostCommand::Stop);
         }
     }
 
@@ -1438,7 +1444,7 @@ async fn handle_server_message(
                 let _ = viewer.commands.send(ViewerCommand::Stop);
             }
             if let Some(host) = ctx.shared.hosting.lock().unwrap().get(&session) {
-                let _ = host.send(HostCommand::PartnerLeft);
+                let _ = host.commands.send(HostCommand::PartnerLeft);
             }
         }
         ServerMessage::Error { message, .. } => {
@@ -1852,7 +1858,23 @@ async fn serve_partner(
         }
         shared.unattended.lock().unwrap().insert(session);
     }
-    shared.hosting.lock().unwrap().insert(session, stop_tx);
+    {
+        let mut hosting = shared.hosting.lock().unwrap();
+        // One session per partner, as on its side: a partner that connects again (its old
+        // window closed, its app restarted) replaces what is left of the previous sessions,
+        // which could otherwise keep sharing the screen side by side.
+        for (old, host) in hosting.iter().filter(|(_, h)| h.partner == from) {
+            tracing::info!(session, old, "{from} connected again, ending its previous session");
+            let _ = host.commands.send(HostCommand::Stop);
+        }
+        hosting.insert(
+            session,
+            HostCtl {
+                commands: stop_tx,
+                partner: from.clone(),
+            },
+        );
+    }
     watch_path(app, info.clone(), session, false);
     emit(
         app,

@@ -535,3 +535,10 @@
 - Worker pubblicato (versione 7ecee978). Nei primi minuti il Durable Object ha continuato a cancellare le sessioni
   (codice vecchio ancora attivo: le WebSocket in ibernazione non si scollegano a un deploy); dopo, tre prove su tre
   in produzione: sessione, ricollegamento di chi controlla, `leave` → il partner riceve "peer left".
+
+## 2026-10-16 — Condivisioni doppie verso lo stesso partner (v1.7.3)
+- Segnalazione con schermata: il Mac controllato (app 1.7.0) mostrava quattro condivisioni attive verso lo stesso
+  controllante, tutte in rete locale. Il viewer chiudeva già le sessioni vecchie verso lo stesso partner, l'host no.
+- Ora l'host ferma le sessioni precedenti dello stesso partner quando una nuova supera l'autenticazione. Perché
+  le vecchie siano rimaste vive (il controllo dei 20 s le avrebbe chiuse se il controllante fosse sparito) resta
+  da capire con i log del controllante.

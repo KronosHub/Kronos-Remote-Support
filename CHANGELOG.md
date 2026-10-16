@@ -2,6 +2,10 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.7.3 — 2026-10-16
+- Computer controllato: se chi ti controlla si ricollega, la sessione nuova sostituisce quelle vecchie. Prima
+  potevano restare aperte più condivisioni verso la stessa persona.
+
 ## 1.7.2 — 2026-10-15
 - Disconnetti: il computer controllato si accorge sempre che hai chiuso la sessione, anche se nel frattempo uno dei
   due computer si era ricollegato al server (prima poteva restare in modalità controllata).
