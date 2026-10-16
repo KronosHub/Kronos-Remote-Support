@@ -4,6 +4,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount, tick } from "svelte";
   import { RemoteVideo, webCodecsSupported } from "$lib/remote-video";
+  import FileManager from "$lib/FileManager.svelte";
 
   type Link = "connecting" | "online" | "offline";
   type Status = {
@@ -256,6 +257,19 @@
     duration: number;
     reason: string;
   } | null>(null);
+  /** The summary closes by itself (as OK) after this long. */
+  const ENDED_CLOSE_SECS = 30;
+  let endedLeft = $state(ENDED_CLOSE_SECS);
+  $effect(() => {
+    const shown = sessionEnded?.session;
+    if (shown === undefined) return;
+    endedLeft = ENDED_CLOSE_SECS;
+    const timer = setInterval(() => {
+      endedLeft--;
+      if (endedLeft <= 0 && sessionEnded?.session === shown) acknowledgeEnded();
+    }, 1000);
+    return () => clearInterval(timer);
+  });
   /** OK on the summary: nothing of that session may stay open (connection, viewer window). */
   function acknowledgeEnded() {
     if (sessionEnded) invoke("end_session", { session: sessionEnded.session });
@@ -323,6 +337,11 @@
   const viewSession = (() => {
     const label = getCurrentWindow().label;
     return label.startsWith("view-") ? Number(label.slice(5)) : null;
+  })();
+  /** This window is the file manager of a session we view (`files-<session>`). */
+  const filesSession = (() => {
+    const label = getCurrentWindow().label;
+    return label.startsWith("files-") ? Number(label.slice(6)) : null;
   })();
   /** This window is the floating chat of a shared session (`chat-<session>`). */
   const chatPopupSession = (() => {
@@ -593,6 +612,8 @@
   }
 
   onMount(() => {
+    // The file manager window listens on its own.
+    if (filesSession !== null) return;
     const unlisten = listen<UiEvent>("service", (e) => handle(e.payload));
     if (chatPopupSession !== null) {
       invoke<{ mine: boolean; text: string }[]>("host_chat_history", { session: chatPopupSession }).then((lines) => {
@@ -1277,6 +1298,16 @@
     if (await win.isFullscreen()) await win.setFullscreen(false);
   }
 
+  async function openFiles() {
+    if (!view) return;
+    const peer = view.peerName ? `${view.peerName} (${view.peer})` : view.peer;
+    try {
+      await invoke("open_files_window", { session: view.session, peer });
+    } catch (e) {
+      addLog("error", String(e));
+    }
+  }
+
   /** Ends the session (if still running) and closes this window. */
   async function disconnect() {
     if (view && !view.ended) await invoke("close_view", { session: view.session });
@@ -1304,7 +1335,9 @@
   });
 </script>
 
-{#if chatPopupSession !== null}
+{#if filesSession !== null}
+  <FileManager session={filesSession} />
+{:else if chatPopupSession !== null}
   <div class="popup-chat">
     <div class="chat-log" bind:this={popupLog}>
       {#each popupChat as m}
@@ -1378,6 +1411,10 @@
             title="Scrivi al partner">
             Chat{#if view.unread > 0} <span class="chat-badge">{view.unread}</span>{/if}
           </button>
+        {/if}
+        {#if !view.ended}
+          <button onclick={openFiles}
+            title="Sfoglia le cartelle del partner e copia file nei due sensi">Trasferimento file</button>
         {/if}
         {#if !view.ended && audioSupported}
           <button
@@ -2080,7 +2117,7 @@
         </div>
       </div>
       <div class="actions">
-        <button class="primary" type="button" onclick={acknowledgeEnded}>OK</button>
+        <button class="primary" type="button" onclick={acknowledgeEnded}>OK ({endedLeft})</button>
       </div>
     </div>
   </div>

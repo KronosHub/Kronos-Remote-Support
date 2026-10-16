@@ -549,3 +549,12 @@
   vale finché la finestra è aperta (niente avvio automatico né barra). ADR 0052, rivede la 0031.
 - Cartelle annidate (`groups.json`), sposta con menu, apri/chiudi salvato; eliminando una cartella il contenuto sale
   di un livello. Test in `store.rs`; interfaccia controllata con dati finti in Chrome headless.
+
+## 2026-10-16 — Trasferimento file e resoconto a tempo (v1.8.1)
+- Richieste: il popup di fine sessione si chiude dopo 30 s; pulsante "Trasferimento file" con interfaccia divisa,
+  home dell'utente come cartella iniziale.
+- Nuovo canale `fs` e modulo `stream::fs` (ADR 0053). Il test con due peer WebRTC reali ha trovato un caso: un
+  annullamento arrivato a copia appena finita lasciava il file. Ora chi riceve scarta subito la copia annullata e
+  non salva un `D` di una copia non più attesa; il test passa più volte di fila.
+- Interfaccia controllata con dati finti in Chrome headless. Da provare tra due computer, anche Windows e Mac (permesso
+  di accesso ai file su macOS).

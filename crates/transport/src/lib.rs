@@ -15,7 +15,7 @@ pub use auth::{
     validate_personal_password,
 };
 pub use session::{
-    CONTROL_CHANNEL, ConnectionPath, FILES_CHANNEL, PeerSession, Role, SessionChannels,
+    CONTROL_CHANNEL, ConnectionPath, FILES_CHANNEL, FS_CHANNEL, PeerSession, Role, SessionChannels,
     SessionInfo, sort_channels,
 };
 pub use signaling::{SignalSender, SignalingClient};

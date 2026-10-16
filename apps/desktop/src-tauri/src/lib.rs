@@ -398,6 +398,84 @@ pub(crate) fn open_view_window(app: &AppHandle, session: u64, peer: &str) {
     }
 }
 
+/// Opens (or brings forward) the file manager of a session we view (ADR 0053): this
+/// computer's folders on one side, the partner's on the other.
+#[tauri::command]
+fn open_files_window(app: AppHandle, session: u64, peer: String) -> Result<(), String> {
+    let label = format!("files-{session}");
+    if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+    let url = tauri::WebviewUrl::App("index.html".into());
+    tauri::WebviewWindowBuilder::new(&app, &label, url)
+        .title(format!("Trasferimento file — {peer}"))
+        .inner_size(1100.0, 680.0)
+        .min_inner_size(720.0, 420.0)
+        .focused(true)
+        .build()
+        .map(|_| ())
+        .map_err(|e| format!("impossibile aprire il trasferimento file: {e}"))
+}
+
+/// A folder of this computer (`None`: the home folder).
+#[tauri::command]
+async fn fs_local_list(path: Option<String>) -> Result<stream::fs::Listing, String> {
+    tauri::async_runtime::spawn_blocking(move || stream::fs::list_dir(path.as_deref()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn fs_local_mkdir(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || stream::fs::make_dir(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// A folder of the partner (`None`: its user's home folder).
+#[tauri::command]
+async fn fs_remote_list(
+    service: State<'_, Service>,
+    session: u64,
+    path: Option<String>,
+) -> Result<stream::fs::Listing, String> {
+    let client = service.file_manager(session)?;
+    client.list(path).await
+}
+
+#[tauri::command]
+async fn fs_remote_mkdir(
+    service: State<'_, Service>,
+    session: u64,
+    path: String,
+) -> Result<(), String> {
+    let client = service.file_manager(session)?;
+    client.make_dir(path).await
+}
+
+/// Copies `paths` into the folder `dest` on the other side (`upload`: from this computer
+/// to the partner); returns the copy's number. Progress and outcome come as events.
+#[tauri::command]
+fn fs_copy(
+    service: State<'_, Service>,
+    session: u64,
+    upload: bool,
+    paths: Vec<String>,
+    dest: String,
+) -> Result<u32, String> {
+    service.copy_files(session, upload, paths, dest)
+}
+
+#[tauri::command]
+async fn fs_cancel(service: State<'_, Service>, session: u64, req: u32) -> Result<(), String> {
+    let client = service.file_manager(session)?;
+    client.cancel(req).await;
+    Ok(())
+}
+
 /// The viewer UI processed `count` video frames (flow control, see service.rs).
 #[tauri::command]
 fn frames_consumed(service: State<'_, Service>, session: u64, count: u32) {
@@ -730,9 +808,15 @@ pub fn run() {
         .on_window_event(|window, event| {
             let label = window.label();
             if let Some(session) = label.strip_prefix("view-").and_then(|s| s.parse().ok()) {
-                // Closing a remote screen's window ends that session.
+                // Closing a remote screen's window ends that session, and its file manager.
                 if let WindowEvent::Destroyed = event {
                     window.app_handle().state::<Service>().close_view(session);
+                    if let Some(files) = window
+                        .app_handle()
+                        .get_webview_window(&format!("files-{session}"))
+                    {
+                        let _ = files.close();
+                    }
                 }
                 return;
             }
@@ -759,6 +843,13 @@ pub fn run() {
             remove_device,
             set_personal_password,
             list_device_tree,
+            open_files_window,
+            fs_local_list,
+            fs_local_mkdir,
+            fs_remote_list,
+            fs_remote_mkdir,
+            fs_copy,
+            fs_cancel,
             create_group,
             rename_group,
             move_group,

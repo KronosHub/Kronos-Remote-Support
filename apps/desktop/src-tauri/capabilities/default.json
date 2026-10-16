@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main, viewer and floating chat windows: app commands and service events only",
-  "windows": ["main", "view-*", "chat-*"],
+  "description": "Main, viewer, file manager and floating chat windows: app commands and service events only",
+  "windows": ["main", "view-*", "files-*", "chat-*"],
   "permissions": [
     "core:default",
     "core:window:allow-set-fullscreen",

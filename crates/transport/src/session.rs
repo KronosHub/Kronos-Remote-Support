@@ -27,6 +27,10 @@ pub const CONTROL_CHANNEL: &str = "control";
 /// delays input and control messages (each channel is its own SCTP stream).
 pub const FILES_CHANNEL: &str = "files";
 
+/// Label of the channel of the file manager (browsing the host's folders, copying files
+/// both ways); older hosts ignore it.
+pub const FS_CHANNEL: &str = "fs";
+
 /// Label of the unordered, unreliable channel carrying the host's sound (a late audio
 /// packet is worthless; a lost one is concealed by the decoder).
 pub const AUDIO_CHANNEL: &str = "audio";
@@ -38,6 +42,8 @@ pub struct SessionChannels {
     pub files: tokio::sync::oneshot::Receiver<Arc<dyn DataChannel>>,
     /// Same for the audio channel (peers before 1.3.0 do not open it).
     pub audio: tokio::sync::oneshot::Receiver<Arc<dyn DataChannel>>,
+    /// Same for the file manager channel (peers before 1.8.1 do not open it).
+    pub fs: tokio::sync::oneshot::Receiver<Arc<dyn DataChannel>>,
 }
 
 /// Picks the control and files channels out of a session's channel stream (the remote
@@ -55,10 +61,11 @@ pub async fn sort_channels(
     };
     let (files_tx, files) = tokio::sync::oneshot::channel();
     let (audio_tx, audio) = tokio::sync::oneshot::channel();
+    let (fs_tx, fs) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-        let (mut files_tx, mut audio_tx) = (Some(files_tx), Some(audio_tx));
+        let (mut files_tx, mut audio_tx, mut fs_tx) = (Some(files_tx), Some(audio_tx), Some(fs_tx));
         let mut pending = others.into_iter();
-        while files_tx.is_some() || audio_tx.is_some() {
+        while files_tx.is_some() || audio_tx.is_some() || fs_tx.is_some() {
             let channel = match pending.next() {
                 Some(channel) => channel,
                 None => match channels.recv().await {
@@ -69,6 +76,7 @@ pub async fn sort_channels(
             let slot = match channel.label().await.as_deref() {
                 Ok(FILES_CHANNEL) => &mut files_tx,
                 Ok(AUDIO_CHANNEL) => &mut audio_tx,
+                Ok(FS_CHANNEL) => &mut fs_tx,
                 _ => continue,
             };
             if let Some(tx) = slot.take() {
@@ -80,6 +88,7 @@ pub async fn sort_channels(
         control,
         files,
         audio,
+        fs,
     })
 }
 
@@ -363,6 +372,8 @@ impl PeerSession {
                 )
                 .await?;
             let _ = channels_tx.send(audio);
+            let fs = pc.create_data_channel(FS_CHANNEL, None).await?;
+            let _ = channels_tx.send(fs);
 
             let offer = pc.create_offer(None).await?;
             let sdp = offer.sdp.clone();

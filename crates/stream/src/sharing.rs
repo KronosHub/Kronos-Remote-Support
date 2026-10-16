@@ -44,11 +44,11 @@ pub(crate) struct ClipboardShare {
     progress: mpsc::UnboundedReceiver<TransferProgress>,
 }
 
-fn megabytes(bytes: u64) -> String {
+pub(crate) fn megabytes(bytes: u64) -> String {
     format!("{:.1} MB", bytes as f64 / 1_000_000.0).replace('.', ",")
 }
 
-fn items(n: usize) -> String {
+pub(crate) fn items(n: usize) -> String {
     if n == 1 {
         "1 elemento".into()
     } else {

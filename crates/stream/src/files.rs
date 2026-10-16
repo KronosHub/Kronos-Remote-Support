@@ -27,7 +27,7 @@ pub const MAX_TEXT_BYTES: usize = 1024 * 1024;
 pub const MAX_TOTAL_BYTES: u64 = 500 * 1024 * 1024;
 const MAX_ENTRIES: usize = 10_000;
 /// Chunk payload: data channel messages stay well below 16 KiB.
-const CHUNK: usize = 15 * 1024;
+pub(crate) const CHUNK: usize = 15 * 1024;
 /// Pause reading while this much is queued on the channel, so a big file is not read into
 /// memory faster than the network drains it.
 const MAX_QUEUED: usize = 1024 * 1024;
@@ -76,6 +76,16 @@ pub struct Outgoing {
 
 /// Walks the copied files and folders (symbolic links are skipped).
 pub fn collect(transfer: u32, paths: &[PathBuf]) -> Result<Outgoing> {
+    collect_limited(transfer, paths, MAX_ENTRIES, MAX_TOTAL_BYTES)
+}
+
+/// [`collect`] with other limits (the file manager moves more than the clipboard).
+pub(crate) fn collect_limited(
+    transfer: u32,
+    paths: &[PathBuf],
+    max_entries: usize,
+    max_bytes: u64,
+) -> Result<Outgoing> {
     let mut entries = Vec::new();
     let mut sources = Vec::new();
     let mut total = 0u64;
@@ -90,8 +100,8 @@ pub fn collect(transfer: u32, paths: &[PathBuf]) -> Result<Outgoing> {
         if meta.file_type().is_symlink() {
             continue;
         }
-        if entries.len() >= MAX_ENTRIES {
-            bail!("troppi file (massimo {MAX_ENTRIES})");
+        if entries.len() >= max_entries {
+            bail!("troppi file (massimo {max_entries})");
         }
         if meta.is_dir() {
             let mut children: Vec<_> = std::fs::read_dir(&source)?
@@ -111,11 +121,11 @@ pub fn collect(transfer: u32, paths: &[PathBuf]) -> Result<Outgoing> {
                 dir: true,
             });
         } else {
-            total += meta.len();
-            if total > MAX_TOTAL_BYTES {
+            total = total.saturating_add(meta.len());
+            if total > max_bytes {
                 bail!(
                     "file troppo grandi (massimo {} MB)",
-                    MAX_TOTAL_BYTES / 1024 / 1024
+                    max_bytes / 1024 / 1024
                 );
             }
             entries.push(Entry {
@@ -155,7 +165,7 @@ fn manifest_messages(manifest: &Manifest) -> Result<Vec<BytesMut>> {
         .collect())
 }
 
-fn frame(kind: u8, transfer: u32, index: Option<u32>, data: &[u8]) -> BytesMut {
+pub(crate) fn frame(kind: u8, transfer: u32, index: Option<u32>, data: &[u8]) -> BytesMut {
     let mut out = BytesMut::with_capacity(9 + data.len());
     out.extend_from_slice(&[kind]);
     out.extend_from_slice(&transfer.to_le_bytes());
@@ -166,7 +176,7 @@ fn frame(kind: u8, transfer: u32, index: Option<u32>, data: &[u8]) -> BytesMut {
     out
 }
 
-async fn wait_for_room(channel: &Arc<dyn DataChannel>) {
+pub(crate) async fn wait_for_room(channel: &Arc<dyn DataChannel>) {
     while channel.outstanding_bytes().await.unwrap_or(0) > MAX_QUEUED {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -257,10 +267,19 @@ pub async fn send(
     outgoing: Outgoing,
     mut progress: Option<ProgressReporter>,
 ) -> Result<()> {
-    let transfer = outgoing.manifest.transfer;
     for part in manifest_messages(&outgoing.manifest)? {
         channel.send(part).await?;
     }
+    send_chunks(&channel, &outgoing, progress.as_mut()).await
+}
+
+/// The contents of every file of `outgoing` (`C` messages), then `D`.
+pub(crate) async fn send_chunks(
+    channel: &Arc<dyn DataChannel>,
+    outgoing: &Outgoing,
+    mut progress: Option<&mut ProgressReporter>,
+) -> Result<()> {
+    let transfer = outgoing.manifest.transfer;
     let mut buffer = vec![0u8; CHUNK];
     for (index, (entry, source)) in outgoing
         .manifest
@@ -282,11 +301,11 @@ pub async fn send(
                 bail!("{} changed while being sent", source.display());
             }
             left -= n as u64;
-            wait_for_room(&channel).await;
+            wait_for_room(channel).await;
             channel
                 .send(frame(b'C', transfer, Some(index as u32), &buffer[..n]))
                 .await?;
-            if let Some(progress) = &mut progress {
+            if let Some(progress) = progress.as_deref_mut() {
                 progress.advance(n as u64);
             }
         }
@@ -351,7 +370,7 @@ pub struct FileReceiver {
 
 /// A remote-supplied relative path as safe components (no `..`, no absolute or drive
 /// prefixes, no separators or NUL inside a name), or `None`.
-fn safe_relative(path: &str) -> Option<PathBuf> {
+pub(crate) fn safe_relative(path: &str) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for part in path.split('/') {
         if part.is_empty() || part == "." || part == ".." || part.contains(['\\', ':', '\0']) {
@@ -426,7 +445,7 @@ fn create_private(dir: &Path) -> std::io::Result<()> {
 
 /// Creates a new private folder in `base` with an unpredictable name; fails rather than
 /// reuse one that already exists.
-fn create_unique(base: &Path, prefix: &str) -> std::io::Result<PathBuf> {
+pub(crate) fn create_unique(base: &Path, prefix: &str) -> std::io::Result<PathBuf> {
     use std::hash::{BuildHasher, RandomState};
     let pid = std::process::id();
     for attempt in 0..16u32 {
@@ -448,7 +467,11 @@ fn create_unique(base: &Path, prefix: &str) -> std::io::Result<PathBuf> {
 }
 
 /// Creates the folders and empty files of a transfer whose paths were already validated.
-fn create_targets(dir: &Path, entries: &[Entry], relatives: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
+pub(crate) fn create_targets(
+    dir: &Path,
+    entries: &[Entry],
+    relatives: Vec<PathBuf>,
+) -> Result<Vec<PathBuf>> {
     std::fs::create_dir_all(dir)?;
     let mut targets = Vec::with_capacity(entries.len());
     for (entry, relative) in entries.iter().zip(relatives) {
@@ -681,7 +704,7 @@ impl FileReceiver {
     }
 }
 
-fn split_u32(data: &[u8]) -> Result<(u32, &[u8])> {
+pub(crate) fn split_u32(data: &[u8]) -> Result<(u32, &[u8])> {
     let (head, rest) = data.split_at_checked(4).context("truncated message")?;
     Ok((u32::from_le_bytes(head.try_into().expect("4 bytes")), rest))
 }

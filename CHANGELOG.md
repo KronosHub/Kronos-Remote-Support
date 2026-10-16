@@ -2,6 +2,15 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.8.1 — 2026-10-16
+- Nuovo pulsante **Trasferimento file** nella finestra della sessione: si apre una finestra divisa in due, con le
+  cartelle di questo computer a sinistra e quelle del computer controllato a destra, tutte e due sulla cartella home.
+  Selezioni file e cartelle e li copi con **Invia →** o **← Ricevi** nella cartella aperta dall'altra parte, con
+  barra di avanzamento e Annulla. Puoi anche creare cartelle e mostrare i file nascosti. Nessun file viene
+  sovrascritto: se il nome esiste già, la copia prende un nome nuovo. Sul computer controllato l'Attività mostra
+  cosa è stato copiato. Serve la versione 1.8.1 su tutti e due i computer.
+- Il resoconto di fine sessione si chiude da solo dopo 30 secondi.
+
 ## 1.8.0 — 2026-10-16
 - Dispositivi: in **I miei dispositivi** puoi creare cartelle, anche una dentro l'altra, e spostarci i dispositivi
   dal menu accanto a ciascuno. Le cartelle si aprono e si chiudono con un clic e mostrano quanti dispositivi sono

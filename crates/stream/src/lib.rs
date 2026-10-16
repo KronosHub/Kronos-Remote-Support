@@ -6,6 +6,7 @@
 pub mod awake;
 pub mod clipboard;
 pub mod files;
+pub mod fs;
 pub mod rate;
 pub mod session;
 mod sharing;

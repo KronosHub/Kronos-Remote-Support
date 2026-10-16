@@ -297,6 +297,7 @@ async fn serve(
         control: channel,
         files,
         audio,
+        ..
     } = channels;
     let result = async {
         diag::wait_open(&channel).await?;
@@ -449,6 +450,7 @@ async fn view(
         control: channel,
         files,
         audio,
+        ..
     } = channels;
     diag::wait_open(&channel).await?;
     println!(

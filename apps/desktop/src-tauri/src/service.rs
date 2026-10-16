@@ -202,6 +202,23 @@ pub enum UiEvent {
         bytes_per_sec: u64,
         finished: bool,
     },
+    /// A copy of the file manager moved on.
+    FsProgress {
+        session: SessionId,
+        req: u32,
+        sending: bool,
+        done: u64,
+        total: u64,
+        bytes_per_sec: u64,
+    },
+    /// A copy of the file manager ended: the names the items got, or why it failed.
+    FsDone {
+        session: SessionId,
+        req: u32,
+        upload: bool,
+        names: Vec<String>,
+        error: Option<String>,
+    },
     /// The partner blocked (or unblocked) this computer's own mouse and keyboard.
     HostingInputBlocked {
         session: SessionId,
@@ -294,6 +311,8 @@ struct ViewerCtl {
     resyncing: bool,
     /// Events for the viewer window produced before it attached (it opens asynchronously).
     backlog: Vec<UiEvent>,
+    /// Browses the partner's files, once its channel is open (`None` with older hosts).
+    fs: Option<Arc<stream::fs::FsClient>>,
 }
 
 /// Viewer events kept for a window that has not attached yet; older ones are dropped.
@@ -938,6 +957,85 @@ impl Service {
         if let Some(host) = self.shared.hosting.lock().unwrap().get(&session) {
             let _ = host.commands.send(HostCommand::Stop);
         }
+    }
+
+    /// The partner's file manager, for a session we view.
+    pub fn file_manager(&self, session: SessionId) -> Result<Arc<stream::fs::FsClient>, String> {
+        let viewers = self.shared.viewers.lock().unwrap();
+        let viewer = viewers.get(&session).ok_or("sessione terminata")?;
+        viewer.fs.clone().ok_or_else(|| {
+            "il computer controllato non permette ancora il trasferimento file: aggiorna la sua \
+             app alla versione 1.8.1 o successiva"
+                .into()
+        })
+    }
+
+    /// Starts a copy between this computer and the partner (`upload`: from here to there);
+    /// returns its number, for `FsProgress`/`FsDone` and to cancel it.
+    pub fn copy_files(
+        &self,
+        session: SessionId,
+        upload: bool,
+        paths: Vec<String>,
+        dest: String,
+    ) -> Result<u32, String> {
+        if paths.is_empty() {
+            return Err("seleziona almeno un file o una cartella".into());
+        }
+        let client = self.file_manager(session)?;
+        let req = client.new_request();
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            let (progress_tx, mut progress) = mpsc::unbounded_channel();
+            let forward = tokio::spawn({
+                let app = app.clone();
+                async move {
+                    while let Some(p) = progress.recv().await {
+                        let p: stream::files::TransferProgress = p;
+                        if !p.finished {
+                            emit(
+                                &app,
+                                UiEvent::FsProgress {
+                                    session,
+                                    req,
+                                    sending: p.sending,
+                                    done: p.done,
+                                    total: p.total,
+                                    bytes_per_sec: p.bytes_per_sec,
+                                },
+                            );
+                        }
+                    }
+                }
+            });
+            let result = if upload {
+                let paths = paths.into_iter().map(PathBuf::from).collect();
+                client.upload(req, paths, dest, Some(progress_tx)).await
+            } else {
+                client
+                    .download(req, paths, PathBuf::from(dest), Some(progress_tx))
+                    .await
+            };
+            forward.abort();
+            if let Err(e) = &result {
+                tracing::warn!(session, req, upload, "file copy failed: {e}");
+            }
+            let (names, error) = match result {
+                Ok(names) => (names, None),
+                Err(e) => (Vec::new(), Some(e)),
+            };
+            emit(
+                &app,
+                UiEvent::FsDone {
+                    session,
+                    req,
+                    upload,
+                    names,
+                    error,
+                },
+            );
+        });
+        Ok(req)
     }
 
     /// Ends whatever is left of a session: viewing or sharing, the connection, and (through
@@ -1763,6 +1861,7 @@ async fn serve_partner(
         control: channel,
         files,
         audio,
+        fs,
     } = channels;
     if !wait_open(&channel).await {
         log(
@@ -1885,6 +1984,18 @@ async fn serve_partner(
         );
     }
     watch_path(app, info.clone(), session, false);
+    // The partner's file manager (ADR 0053): what it copies is written to the activity list.
+    let file_manager = tokio::spawn({
+        let (app, who) = (app.clone(), who.clone());
+        async move {
+            if let Ok(channel) = fs.await {
+                stream::fs::serve(channel, |message| {
+                    log(&app, "info", format!("{who} {message}"))
+                })
+                .await;
+            }
+        }
+    });
     emit(
         app,
         UiEvent::HostingStarted {
@@ -1969,6 +2080,7 @@ async fn serve_partner(
         },
     )
     .await;
+    file_manager.abort();
     shared.hosting.lock().unwrap().remove(&session);
     shared.unattended.lock().unwrap().remove(&session);
     shared.host_chats.lock().unwrap().remove(&session);
@@ -2075,6 +2187,7 @@ async fn view_partner(
         control: channel,
         files,
         audio,
+        fs,
     } = channels;
     let (cancel_tx, cancel_rx) = oneshot::channel::<String>();
     shared.connecting.lock().unwrap().insert(session, cancel_tx);
@@ -2145,9 +2258,21 @@ async fn view_partner(
                 in_flight: 0,
                 resyncing: false,
                 backlog: Vec::new(),
+                fs: None,
             },
         );
     }
+    // The file manager is ready once the host's app answers on its channel (ADR 0053).
+    let file_manager = tokio::spawn({
+        let shared = shared.clone();
+        async move {
+            if let Ok(channel) = fs.await
+                && let Some(viewer) = shared.viewers.lock().unwrap().get_mut(&session)
+            {
+                viewer.fs = Some(Arc::new(stream::fs::FsClient::new(channel)));
+            }
+        }
+    });
     let viewing_since = Instant::now();
     let opened = UiEvent::ViewOpened {
         session,
@@ -2286,6 +2411,7 @@ async fn view_partner(
     )
     .await;
 
+    file_manager.abort();
     shared.viewers.lock().unwrap().remove(&session);
     log(
         app,

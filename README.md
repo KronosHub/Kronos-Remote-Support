@@ -64,6 +64,10 @@ Permessi necessari sul computer controllato:
 Nella barra del viewer, *Controllo attivo/spento* abilita l'invio di mouse e tastiera; i tasti sono inviati per
 posizione fisica (vale il layout del computer controllato).
 
+**Trasferimento file** apre una finestra con le cartelle di questo computer a sinistra e quelle del computer
+controllato a destra: selezioni e copi con *Invia →* / *← Ricevi*. Nessun file viene sovrascritto. Sul Mac
+controllato, per Scrivania, Documenti e Download macOS chiede il permesso di accesso ai file.
+
 ### Accesso non presidiato (i tuoi dispositivi)
 Sul computer da controllare: *Consenti il controllo* → **Imposta password personale**, e se vuoi **Avvia all'accesso**.
 Dall'altro computer inserisci ID e password personale con la casella **Password personale (senza conferma)**,
