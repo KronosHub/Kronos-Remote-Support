@@ -1864,7 +1864,11 @@ async fn serve_partner(
         // window closed, its app restarted) replaces what is left of the previous sessions,
         // which could otherwise keep sharing the screen side by side.
         for (old, host) in hosting.iter().filter(|(_, h)| h.partner == from) {
-            tracing::info!(session, old, "{from} connected again, ending its previous session");
+            tracing::info!(
+                session,
+                old,
+                "{from} connected again, ending its previous session"
+            );
             let _ = host.commands.send(HostCommand::Stop);
         }
         hosting.insert(
