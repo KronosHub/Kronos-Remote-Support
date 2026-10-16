@@ -542,3 +542,10 @@
 - Ora l'host ferma le sessioni precedenti dello stesso partner quando una nuova supera l'autenticazione. Perché
   le vecchie siano rimaste vive (il controllo dei 20 s le avrebbe chiuse se il controllante fosse sparito) resta
   da capire con i log del controllante.
+
+## 2026-10-16 — Cartelle dei dispositivi e Quick Support stabile (v1.8.0)
+- Richieste: Quick Support con ID fisso e password per l'accesso non presidiato; cartelle in I miei dispositivi.
+- Quick Support ora usa la sua cartella dati (ID fisso, segreto della password personale); l'accesso non presidiato
+  vale finché la finestra è aperta (niente avvio automatico né barra). ADR 0052, rivede la 0031.
+- Cartelle annidate (`groups.json`), sposta con menu, apri/chiudi salvato; eliminando una cartella il contenuto sale
+  di un livello. Test in `store.rs`; interfaccia controllata con dati finti in Chrome headless.

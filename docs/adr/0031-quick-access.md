@@ -1,6 +1,6 @@
 # 0031 — Kronos Quick Support (accesso rapido senza installazione)
 
-**Data:** 2026-10-08 · **Stato:** accettata
+**Data:** 2026-10-08 · **Stato:** accettata; ID fisso e password personale dalla 0052
 
 ## Richiesta
 Una versione del client che non richiede installazione e serve solo ad avviare la condivisione (non a connettersi ad

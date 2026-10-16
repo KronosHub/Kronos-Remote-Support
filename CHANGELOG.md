@@ -2,6 +2,14 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.8.0 — 2026-10-16
+- Dispositivi: in **I miei dispositivi** puoi creare cartelle, anche una dentro l'altra, e spostarci i dispositivi
+  dal menu accanto a ciascuno. Le cartelle si aprono e si chiudono con un clic e mostrano quanti dispositivi sono
+  online. Eliminando una cartella i dispositivi passano a quella superiore: non se ne perde nessuno.
+- Kronos Quick Support: l'ID resta sempre lo stesso, anche chiudendo e riaprendo il programma.
+- Kronos Quick Support: puoi impostare una password personale per entrare senza conferma (accesso non presidiato),
+  finché la finestra del programma è aperta.
+
 ## 1.7.3 — 2026-10-16
 - Computer controllato: se chi ti controlla si ricollega, la sessione nuova sostituisce quelle vecchie. Prima
   potevano restare aperte più condivisioni verso la stessa persona.

@@ -18,9 +18,10 @@ use tracing_subscriber::Layer;
 /// Command-line flag used by the login item: start without showing the window.
 const HIDDEN_ARG: &str = "--hidden";
 
-/// "Quick access" build (ADR 0031): runs without installation and only shares this screen
-/// with a temporary password and approval. No tray, login item, updater, unattended access
-/// or saved devices; nothing is written to disk; closing the window quits.
+/// "Quick access" build (ADR 0031): runs without installation and only shares this screen.
+/// No tray, login item, updater or saved devices; closing the window quits. It keeps its
+/// id and an optional personal password (unattended access while it runs) in its own data
+/// folder (ADR 0052).
 pub(crate) const QUICK: bool = cfg!(feature = "quick-access");
 
 /// Product tag for the Windows agent and service (separate pipe/service per flavour).
@@ -183,6 +184,82 @@ fn remove_device(
 ) -> Result<Vec<service::DeviceView>, String> {
     service.remove_device(&id)?;
     Ok(service.devices())
+}
+
+/// Saved devices and their folders (ADR 0052), for the tree in "I miei dispositivi".
+#[derive(serde::Serialize)]
+struct DeviceTree {
+    devices: Vec<service::DeviceView>,
+    groups: Vec<store::DeviceGroup>,
+}
+
+fn device_tree(service: &Service) -> DeviceTree {
+    DeviceTree {
+        devices: service.devices(),
+        groups: service.groups(),
+    }
+}
+
+#[tauri::command]
+fn list_device_tree(service: State<'_, Service>) -> DeviceTree {
+    device_tree(&service)
+}
+
+#[tauri::command]
+fn create_group(
+    service: State<'_, Service>,
+    name: String,
+    parent: Option<String>,
+) -> Result<DeviceTree, String> {
+    service.store().create_group(&name, parent.as_deref())?;
+    Ok(device_tree(&service))
+}
+
+#[tauri::command]
+fn rename_group(
+    service: State<'_, Service>,
+    id: String,
+    name: String,
+) -> Result<DeviceTree, String> {
+    service.store().rename_group(&id, &name)?;
+    Ok(device_tree(&service))
+}
+
+#[tauri::command]
+fn move_group(
+    service: State<'_, Service>,
+    id: String,
+    parent: Option<String>,
+) -> Result<DeviceTree, String> {
+    service.store().move_group(&id, parent.as_deref())?;
+    Ok(device_tree(&service))
+}
+
+#[tauri::command]
+fn set_group_collapsed(
+    service: State<'_, Service>,
+    id: String,
+    collapsed: bool,
+) -> Result<(), String> {
+    service.store().set_group_collapsed(&id, collapsed)
+}
+
+/// Removes a folder; what it held moves to the folder above.
+#[tauri::command]
+fn delete_group(service: State<'_, Service>, id: String) -> Result<DeviceTree, String> {
+    service.store().delete_group(&id)?;
+    Ok(device_tree(&service))
+}
+
+#[tauri::command]
+fn move_device(
+    service: State<'_, Service>,
+    id: String,
+    group: Option<String>,
+) -> Result<DeviceTree, String> {
+    let id: String = id.chars().filter(|c| !c.is_whitespace()).collect();
+    service.store().move_device(&id, group.as_deref())?;
+    Ok(device_tree(&service))
 }
 
 /// Sets (or with `None` disables) this device's personal password for unattended access.
@@ -598,7 +675,8 @@ pub fn run() {
     let app = builder
         .setup(|app| {
             if QUICK {
-                // Leave nothing behind: log to the console only, keep no identity on disk.
+                // Logs to the console only; the id and the personal password are kept in its
+                // own data folder (not shared with the full app), so the id stays the same.
                 init_logging(None);
                 // Elevated Quick: a temporary agent service so admin windows can be shared;
                 // removed on exit. Non-elevated Quick offers to relaunch elevated from the UI.
@@ -615,13 +693,14 @@ pub fn run() {
                         false,
                     );
                 }
-                app.manage(Service::start(app.handle().clone(), None)?);
+                let data_dir = app.path().app_data_dir()?;
+                app.manage(Service::start(app.handle().clone(), data_dir)?);
                 show_main_window(app.handle());
                 return Ok(());
             }
             init_logging(app.path().app_log_dir().ok());
             let data_dir = app.path().app_data_dir()?;
-            let service = Service::start(app.handle().clone(), Some(data_dir))?;
+            let service = Service::start(app.handle().clone(), data_dir)?;
             // Admin-windows (UAC) agent is opt-out: offer to install the service once, unless
             // the user declined before or it is already installed.
             #[cfg(windows)]
@@ -679,6 +758,13 @@ pub fn run() {
             connect_device,
             remove_device,
             set_personal_password,
+            list_device_tree,
+            create_group,
+            rename_group,
+            move_group,
+            set_group_collapsed,
+            delete_group,
+            move_device,
             get_autostart,
             set_autostart,
             permissions::get_permissions,

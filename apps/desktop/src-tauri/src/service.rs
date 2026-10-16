@@ -18,7 +18,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 
-use crate::store::{SavedDevice, Store};
+use crate::store::{DeviceGroup, SavedDevice, Store};
 use transport::handshake::{self, Access, HandshakeError, Refusal};
 use transport::video::VideoSender;
 use transport::{
@@ -265,6 +265,8 @@ pub struct LanPeerView {
 pub struct DeviceView {
     pub id: String,
     pub name: String,
+    /// Folder it is in, if any.
+    pub group: Option<String>,
 }
 
 enum Internal {
@@ -517,16 +519,11 @@ pub struct Service {
 }
 
 impl Service {
-    /// `data_dir: None` (Quick access): throwaway identity, nothing stored on disk.
-    pub fn start(app: AppHandle, data_dir: Option<PathBuf>) -> anyhow::Result<Self> {
-        let device_key = match &data_dir {
-            Some(dir) => {
-                std::fs::create_dir_all(dir)?;
-                load_or_create_key(&dir.join("device.key"))?
-            }
-            None => new_device_key(),
-        };
-        let store = Store::new(data_dir);
+    /// `data_dir` keeps the device key (so the id never changes) and the small JSON files.
+    pub fn start(app: AppHandle, data_dir: PathBuf) -> anyhow::Result<Self> {
+        std::fs::create_dir_all(&data_dir)?;
+        let device_key = load_or_create_key(&data_dir.join("device.key"))?;
+        let store = Store::new(Some(data_dir));
         let personal = store.personal_secret();
         let shared = Arc::new(Shared {
             presence: Mutex::new(None),
@@ -593,6 +590,7 @@ impl Service {
                     id: target.as_str().to_owned(),
                     name,
                     secret: secret.clone(),
+                    group: None,
                 })
                 .map_err(|e| format!("impossibile salvare il dispositivo: {e}"))?;
         }
@@ -699,8 +697,18 @@ impl Service {
             .map(|d| DeviceView {
                 id: d.id.parse::<PeerId>().map_or(d.id, |id| id.to_string()),
                 name: d.name,
+                group: d.group,
             })
             .collect()
+    }
+
+    /// The folders of "my devices" (ADR 0052).
+    pub fn groups(&self) -> Vec<DeviceGroup> {
+        self.shared.store.groups()
+    }
+
+    pub fn store(&self) -> &Store {
+        &self.shared.store
     }
 
     pub fn remove_device(&self, id: &str) -> Result<(), String> {
@@ -713,9 +721,6 @@ impl Service {
 
     /// Enables unattended access with `password`, or disables it with `None`.
     pub fn set_personal_password(&self, password: Option<&str>) -> Result<Status, String> {
-        if crate::QUICK {
-            return Err("l'accesso non presidiato non è disponibile in Quick access".into());
-        }
         let secret = match password {
             Some(password) => {
                 transport::validate_personal_password(password)?;

@@ -13,7 +13,10 @@
     unattended: boolean;
     error: string | null;
   };
-  type Device = { id: string; name: string };
+  type Device = { id: string; name: string; group: string | null };
+  /** A folder of saved devices; folders nest through `parent`. */
+  type Group = { id: string; name: string; parent: string | null; collapsed?: boolean };
+  type DeviceTree = { devices: Device[]; groups: Group[] };
   type UiEvent =
     | ({ kind: "status" } & Status)
     | { kind: "presence"; devices: Record<string, boolean> | null }
@@ -138,6 +141,93 @@
     error: null,
   });
   let devices = $state<Device[]>([]);
+  let groups = $state<Group[]>([]);
+  function setTree(tree: DeviceTree) {
+    devices = tree.devices;
+    groups = tree.groups;
+  }
+  async function reloadDevices() {
+    setTree(await invoke<DeviceTree>("list_device_tree"));
+  }
+  /** Folders inside `parent` (null: the top of the list). */
+  function childGroups(parent: string | null): Group[] {
+    return groups.filter((g) => (g.parent ?? null) === parent);
+  }
+  /** Devices directly in `parent`; one in a folder that no longer exists is at the top. */
+  function devicesIn(parent: string | null): Device[] {
+    return devices.filter((d) => {
+      const group = d.group && groups.some((g) => g.id === d.group) ? d.group : null;
+      return group === parent;
+    });
+  }
+  /** Devices in a folder and its subfolders, and how many are online. */
+  function folderCount(id: string): { total: number; online: number } {
+    let total = 0;
+    let online = 0;
+    for (const d of devicesIn(id)) {
+      total++;
+      if (deviceOnline(d)) online++;
+    }
+    for (const g of childGroups(id)) {
+      const c = folderCount(g.id);
+      total += c.total;
+      online += c.online;
+    }
+    return { total, online };
+  }
+  /** Every folder in tree order, indented, for the "move to" menus; `except` and the folders
+   *  inside it are left out (a folder cannot go inside itself). */
+  function folderOptions(except: string | null = null): { id: string; label: string }[] {
+    const out: { id: string; label: string }[] = [];
+    const walk = (parent: string | null, depth: number) => {
+      for (const g of childGroups(parent)) {
+        if (g.id === except) continue;
+        out.push({ id: g.id, label: "\u00a0\u00a0\u00a0".repeat(depth) + g.name });
+        walk(g.id, depth + 1);
+      }
+    };
+    walk(null, 0);
+    return out;
+  }
+  /** New folder (`id` null) or one being renamed/moved. */
+  let groupDialog = $state<{ id: string | null; name: string; parent: string | null; error: string } | null>(null);
+  async function saveGroup(event: SubmitEvent) {
+    event.preventDefault();
+    if (!groupDialog) return;
+    const { id, name, parent } = groupDialog;
+    try {
+      if (id === null) {
+        setTree(await invoke<DeviceTree>("create_group", { name, parent }));
+      } else {
+        const old = groups.find((g) => g.id === id);
+        if (old && old.name !== name.trim()) setTree(await invoke<DeviceTree>("rename_group", { id, name }));
+        if (old && (old.parent ?? null) !== parent) setTree(await invoke<DeviceTree>("move_group", { id, parent }));
+      }
+      groupDialog = null;
+    } catch (e) {
+      if (groupDialog) groupDialog.error = String(e);
+    }
+  }
+  function toggleGroup(g: Group) {
+    g.collapsed = !g.collapsed;
+    invoke("set_group_collapsed", { id: g.id, collapsed: g.collapsed }).catch((e) => addLog("error", String(e)));
+  }
+  async function deleteGroup(g: Group) {
+    const message = `Eliminare la cartella "${g.name}"? I dispositivi e le cartelle che contiene passano alla cartella superiore.`;
+    if (!(await askConfirm(message, "Elimina"))) return;
+    try {
+      setTree(await invoke<DeviceTree>("delete_group", { id: g.id }));
+    } catch (e) {
+      addLog("error", String(e));
+    }
+  }
+  async function moveDevice(d: Device, group: string) {
+    try {
+      setTree(await invoke<DeviceTree>("move_device", { id: d.id, group: group || null }));
+    } catch (e) {
+      addLog("error", String(e));
+    }
+  }
   /** This app's devices found on the local network (connect without the server). */
   type LanPeer = { id: string; host: string; alias: string | null };
   /** Online state of the saved devices (id digits → online); null while unknown. */
@@ -529,7 +619,7 @@
     }
     invoke<"quick" | "full">("app_mode").then((m) => (mode = m));
     invoke<Status>("get_status").then((s) => (status = s));
-    invoke<Device[]>("list_devices").then((d) => (devices = d));
+    reloadDevices();
     refreshPresence();
     invoke<boolean>("get_autostart").then((a) => (autostart = a));
     invoke<string | null>("display_name").then((n) => {
@@ -589,7 +679,7 @@
         saveAs: usePersonal && saveAs.trim() ? saveAs.trim() : null,
       });
       if (usePersonal && saveAs.trim()) {
-        devices = await invoke<Device[]>("list_devices");
+        await reloadDevices();
         saveAs = "";
         refreshPresence();
       }
@@ -753,7 +843,8 @@
 
   async function removeDevice(d: Device) {
     if (!(await askConfirm(`Rimuovere "${d.name}" da I miei dispositivi?`, "Rimuovi"))) return;
-    devices = await invoke<Device[]>("remove_device", { id: d.id });
+    await invoke("remove_device", { id: d.id });
+    await reloadDevices();
   }
 
   async function savePersonalPassword(event: SubmitEvent) {
@@ -1591,10 +1682,10 @@
 
       {#if quick}
         <p class="hint small">
-          Accesso rapido: nessuna installazione, nulla resta sul computer. Chiudi questa finestra per
+          Accesso rapido: nessuna installazione e l'ID resta sempre lo stesso. Chiudi questa finestra per
           terminare la condivisione.
         </p>
-      {:else}
+      {/if}
       <span class="label">Accesso non presidiato</span>
       {#if status.unattended}
         <p class="unattended on">
@@ -1607,7 +1698,10 @@
           <button class="icon-btn" onclick={disablePersonal}>Disattiva</button>
         </div>
       {:else}
-        <p class="hint small">Imposta una password personale per controllare questo computer senza conferma.</p>
+        <p class="hint small">
+          Imposta una password personale per controllare questo computer senza conferma{#if quick}, finché
+          questa finestra è aperta{/if}.
+        </p>
         <div class="row">
           <button class="icon-btn" disabled={!status.id}
             onclick={() => (personalDialog = { first: "", second: "", error: "" })}>
@@ -1615,6 +1709,7 @@
           </button>
         </div>
       {/if}
+      {#if !quick}
       <label class="check">
         <input type="checkbox" checked={autostart} onchange={toggleAutostart} />
         Avvia all'accesso (nascosto nella barra)
@@ -1683,6 +1778,62 @@
   </main>
 
   {:else if section === "devices"}
+  {#snippet tree(parent: string | null, depth: number)}
+    {#each childGroups(parent) as g (g.id)}
+      {@const count = folderCount(g.id)}
+      <li class="folder" style="--depth: {depth}">
+        <button class="folder-toggle" aria-expanded={!g.collapsed} onclick={() => toggleGroup(g)}>
+          <svg class="chevron" class:open={!g.collapsed} viewBox="0 0 24 24" width="14" height="14" fill="none"
+            stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"
+            aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          <span class="strong">{g.name}</span>
+          <span class="muted small">
+            {count.total} {count.total === 1 ? "dispositivo" : "dispositivi"}{#if count.online > 0}{` · ${count.online} online`}{/if}
+          </span>
+        </button>
+        <span class="spacer"></span>
+        <button class="icon-btn" title="Nuova cartella dentro {g.name}"
+          onclick={() => (groupDialog = { id: null, name: "", parent: g.id, error: "" })}>+ Cartella</button>
+        <button class="icon-btn" title="Rinomina o sposta la cartella"
+          onclick={() => (groupDialog = { id: g.id, name: g.name, parent: g.parent ?? null, error: "" })}>
+          Modifica
+        </button>
+        <button class="icon-btn" onclick={() => deleteGroup(g)}>Elimina</button>
+      </li>
+      {#if !g.collapsed}
+        {#if childGroups(g.id).length === 0 && devicesIn(g.id).length === 0}
+          <li class="empty muted small" style="--depth: {depth + 1}">Cartella vuota</li>
+        {/if}
+        {@render tree(g.id, depth + 1)}
+      {/if}
+    {/each}
+    {#each devicesIn(parent) as d (d.id)}
+      {@const online = deviceOnline(d)}
+      <li style="--depth: {depth}">
+        {#if online !== null}
+          <span class="presence" class:on={online}
+            title={online ? "Acceso e raggiungibile" : "Spento o senza connessione"}
+          >{online ? "Online" : "Offline"}</span>
+        {/if}
+        <span class="strong">{d.name}</span>
+        <span class="mono muted small">{d.id}</span>
+        <span class="spacer"></span>
+        {#if groups.length > 0}
+          <select class="move" title="Sposta in una cartella" value={d.group ?? ""}
+            onchange={(e) => moveDevice(d, e.currentTarget.value)}>
+            <option value="">Nessuna cartella</option>
+            {#each folderOptions() as f (f.id)}<option value={f.id}>{f.label}</option>{/each}
+          </select>
+        {/if}
+        <button class="icon-btn" disabled={busy || status.link !== "online"}
+          onclick={() => connectDevice(d)}>Connetti</button>
+        <button class="icon-btn" onclick={() => removeDevice(d)}>Rimuovi</button>
+      </li>
+    {/each}
+  {/snippet}
   <main>
     <h1>Dispositivi</h1>
     {#if busy}
@@ -1693,30 +1844,20 @@
       </div>
     {/if}
     <section class="card">
-      <h2>I miei dispositivi</h2>
-      {#if devices.length === 0}
+      <div class="card-title">
+        <h2>I miei dispositivi</h2>
+        <button class="icon-btn" onclick={() => (groupDialog = { id: null, name: "", parent: null, error: "" })}>
+          Nuova cartella
+        </button>
+      </div>
+      {#if devices.length === 0 && groups.length === 0}
         <p class="hint small">
           Nessun dispositivo salvato. Collegandoti con la password personale del partner puoi salvarlo qui
           (Supporto remoto → "Salva in I miei dispositivi").
         </p>
       {:else}
-        <ul class="devices">
-          {#each devices as d (d.id)}
-            {@const online = deviceOnline(d)}
-            <li>
-              {#if online !== null}
-                <span class="presence" class:on={online}
-                  title={online ? "Acceso e raggiungibile" : "Spento o senza connessione"}
-                >{online ? "Online" : "Offline"}</span>
-              {/if}
-              <span class="strong">{d.name}</span>
-              <span class="mono muted small">{d.id}</span>
-              <span class="spacer"></span>
-              <button class="icon-btn" disabled={busy || status.link !== "online"}
-                onclick={() => connectDevice(d)}>Connetti</button>
-              <button class="icon-btn" onclick={() => removeDevice(d)}>Rimuovi</button>
-            </li>
-          {/each}
+        <ul class="devices tree">
+          {@render tree(null, 0)}
         </ul>
       {/if}
     </section>
@@ -1942,6 +2083,28 @@
         <button class="primary" type="button" onclick={acknowledgeEnded}>OK</button>
       </div>
     </div>
+  </div>
+{/if}
+
+{#if groupDialog}
+  <div class="backdrop">
+    <form class="modal" onsubmit={saveGroup}>
+      <h2>{groupDialog.id === null ? "Nuova cartella" : "Modifica cartella"}</h2>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input placeholder="es. Clienti" maxlength="40" autofocus bind:value={groupDialog.name} />
+      <label>
+        <span class="label">Dentro</span>
+        <select bind:value={groupDialog.parent}>
+          <option value={null}>I miei dispositivi (primo livello)</option>
+          {#each folderOptions(groupDialog.id) as f (f.id)}<option value={f.id}>{f.label}</option>{/each}
+        </select>
+      </label>
+      {#if groupDialog.error}<p class="error">{groupDialog.error}</p>{/if}
+      <div class="actions">
+        <button type="button" onclick={() => (groupDialog = null)}>Annulla</button>
+        <button class="primary" type="submit" disabled={!groupDialog.name.trim()}>Salva</button>
+      </div>
+    </form>
   </div>
 {/if}
 
@@ -2676,6 +2839,56 @@
     align-items: center;
     gap: 10px;
     padding: 6px 0;
+  }
+  .card-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .tree li {
+    padding-left: calc(var(--depth, 0) * 22px);
+  }
+  .tree li.folder {
+    border-top: 1px solid var(--border);
+  }
+  .tree li.empty {
+    padding-left: calc(var(--depth, 0) * 22px + 22px);
+  }
+  .folder-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    border: none;
+    background: none;
+    min-width: 0;
+    text-align: left;
+  }
+  .folder-toggle:hover {
+    background: var(--surface);
+  }
+  .chevron {
+    transition: transform 0.15s ease;
+    flex: none;
+  }
+  .chevron.open {
+    transform: rotate(90deg);
+  }
+  select {
+    font: inherit;
+    font-size: 13px;
+    padding: 5px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    max-width: 180px;
+  }
+  .modal select {
+    width: 100%;
+    max-width: none;
+    margin-top: 4px;
   }
   .modal input {
     margin-top: 8px;

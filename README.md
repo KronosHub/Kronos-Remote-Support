@@ -69,6 +69,11 @@ Sul computer da controllare: *Consenti il controllo* → **Imposta password pers
 Dall'altro computer inserisci ID e password personale con la casella **Password personale (senza conferma)**,
 eventualmente **Salva come**: il dispositivo comparirà in **I miei dispositivi** e si apre con un clic, senza popup.
 La password personale non viene mai salvata né trasmessa (resta solo un segreto derivato, verifica SPAKE2).
+In **I miei dispositivi** puoi raccogliere i dispositivi in **cartelle** (anche una dentro l'altra) con **Nuova cartella**
+e il menu accanto a ogni dispositivo; un clic sul nome della cartella la apre o la chiude.
+
+**Kronos Quick Support** (senza installazione) tiene sempre lo stesso ID e può avere anche lui una password personale:
+l'accesso non presidiato funziona finché la sua finestra è aperta.
 
 Chiudendo la finestra l'app resta attiva nell'icona della barra di sistema, così può ancora ricevere richieste.
 Per uscire: icona → *Esci* (su macOS anche ⌘Q).
