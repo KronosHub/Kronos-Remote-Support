@@ -2,6 +2,14 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.8.5 — 2026-10-19
+- Windows con Desktop remoto: se la sessione dell'utente resta aperta ma scollegata (finestra RDP chiusa senza
+  uscire), il servizio non avvia più la copia per la schermata di accesso, che con lo stesso ID avrebbe disturbato
+  l'app già in esecuzione. Al servizio serve un nuovo aggiornamento: Windows chiede una volta il permesso di
+  amministratore (oppure premi **Aggiorna**).
+- In quella situazione chi si collega legge un messaggio chiaro: la sessione di Windows è scollegata e lo schermo
+  compare quando qualcuno vi si ricollega o entra dal PC. Chat e file restano disponibili.
+
 ## 1.8.4 — 2026-10-19
 - Windows: con **Controllo finestre di amministratore** attivo e una password personale, il PC resta raggiungibile
   anche dopo un riavvio, quando è ancora sulla schermata di accesso. Ti colleghi con la password personale ed entri

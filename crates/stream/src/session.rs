@@ -691,6 +691,13 @@ fn screen_unavailable_message(e: &anyhow::Error) -> String {
             Some(capture::CaptureError::NoDisplay)
         )
     });
+    #[cfg(windows)]
+    if agent::windows::session_disconnected() {
+        return "la sessione di Windows del partner è scollegata (Desktop remoto chiuso senza uscire): \
+                lo schermo compare quando qualcuno vi si ricollega o entra dal PC; intanto la sessione \
+                resta aperta per chat e file"
+            .into();
+    }
     if no_display {
         "nessuno schermo collegato al computer remoto: la sessione resta aperta per chat e file, \
          lo schermo compare appena ne viene collegato uno"

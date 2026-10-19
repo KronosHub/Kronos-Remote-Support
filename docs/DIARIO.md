@@ -604,3 +604,11 @@
 - Mac prima dell'accesso, prove sul Mac dell'utente (con il suo permesso, programma di prova installato e poi tolto):
   i permessi di schermo valgono per una copia `.app` con identificativo e firma dell'app; sulla schermata di login
   cattura e puntatore funzionano, tastiera e clic no. Funzione non fatta per il Mac (ADR 0056, sezione "E il Mac?").
+
+## 2026-10-19 — Windows con Desktop remoto (v1.8.5)
+- Segnalazione: server Windows senza monitor, gestito anche con RDP; collegandosi con Kronos dopo aver chiuso RDP
+  "Failed to find DXGI output" e input rifiutato ("The parameter is incorrect"). Causa: la sessione utente era
+  scollegata (niente schermo né input); con RDP aperto Kronos vedeva lo schermo della sessione RDP.
+- Rileggendo il codice della 1.8.4: in quel caso il servizio avrebbe avviato l'host prima dell'accesso con lo stesso
+  ID dell'app nella sessione scollegata. Corretto: l'host parte solo senza utenti in nessuna sessione. Messaggio
+  chiaro al viewer quando la sessione è scollegata.

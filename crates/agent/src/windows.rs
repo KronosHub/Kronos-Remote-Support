@@ -719,7 +719,7 @@ pub fn uninstall_service(name: &str) -> Result<()> {
 
 /// Bumped whenever the service or the pre-login host change: an app finding an older
 /// revision installed offers to reinstall the service, which refreshes its protected copy.
-pub const SERVICE_REVISION: u32 = 1;
+pub const SERVICE_REVISION: u32 = 2;
 const REVISION_FILE: &str = "revision";
 
 /// Files of the user's app data the pre-login host needs: the device key (same id), the
@@ -776,6 +776,63 @@ pub fn session_user(session: u32) -> Option<String> {
     unsafe { WTSFreeMemory(buffer.cast()) };
     let name = name.trim_end_matches('\0').to_owned();
     (!name.is_empty()).then_some(name)
+}
+
+/// True if a user is logged on in a session other than `console` (active or disconnected,
+/// e.g. Remote Desktop).
+fn other_user_session(console: u32) -> bool {
+    use windows_sys::Win32::System::RemoteDesktop::{
+        WTS_CURRENT_SERVER_HANDLE, WTS_SESSION_INFOW, WTSEnumerateSessionsW, WTSFreeMemory,
+    };
+    let mut list: *mut WTS_SESSION_INFOW = std::ptr::null_mut();
+    let mut count = 0u32;
+    if unsafe { WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &mut list, &mut count) } == 0
+    {
+        // Cannot tell: better no second host than two fighting over the id.
+        return true;
+    }
+    let sessions: Vec<u32> = unsafe { std::slice::from_raw_parts(list, count as usize) }
+        .iter()
+        .map(|s| s.SessionId)
+        .collect();
+    unsafe { WTSFreeMemory(list.cast()) };
+    sessions
+        .into_iter()
+        .any(|id| id != console && session_user(id).is_some())
+}
+
+/// True if this process's session was left disconnected (Remote Desktop closed without
+/// signing out): it has no screen to capture and takes no input until someone connects to
+/// it again or signs in at the PC.
+pub fn session_disconnected() -> bool {
+    use windows_sys::Win32::System::RemoteDesktop::{
+        WTS_CURRENT_SERVER_HANDLE, WTSConnectState, WTSDisconnected, WTSFreeMemory,
+        WTSQuerySessionInformationW,
+    };
+    let Some(session) = current_session() else {
+        return false;
+    };
+    let mut buffer: *mut u16 = std::ptr::null_mut();
+    let mut bytes = 0u32;
+    let ok = unsafe {
+        WTSQuerySessionInformationW(
+            WTS_CURRENT_SERVER_HANDLE,
+            session,
+            WTSConnectState,
+            &mut buffer,
+            &mut bytes,
+        )
+    };
+    if ok == 0 || buffer.is_null() {
+        return false;
+    }
+    let state = if bytes as usize >= size_of::<i32>() {
+        unsafe { *(buffer.cast::<i32>()) }
+    } else {
+        -1
+    };
+    unsafe { WTSFreeMemory(buffer.cast()) };
+    state == WTSDisconnected
 }
 
 /// True once someone has logged on in this process's session (the pre-login host then
@@ -918,7 +975,10 @@ impl LogonHost {
                 let waited = self
                     .last_launch
                     .is_none_or(|t| t.elapsed() > LOGON_RELAUNCH_GAP);
-                if self.process.is_none() && ready && waited {
+                // Someone still logged on elsewhere (e.g. a Remote Desktop session left
+                // disconnected) runs the app with this id: a second host would keep taking
+                // the id from it on the server.
+                if self.process.is_none() && ready && waited && !other_user_session(session) {
                     self.last_launch = Some(std::time::Instant::now());
                     let args = format!("--logon-host \"{}\"", dir.display());
                     match launch_in_session(session, exe, &args) {

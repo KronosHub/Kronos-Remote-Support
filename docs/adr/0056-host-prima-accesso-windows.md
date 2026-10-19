@@ -46,3 +46,11 @@ Provato sul Mac dell'utente (macOS 27.0.1) con un programma di prova firmato com
 Quindi sul Mac un host prima dell'accesso mostrerebbe la schermata di login senza poterla usare: non fatto. Con
 FileVault attivo, inoltre, dopo un riavvio macOS non parte finché il disco non viene sbloccato. Per un Mac fisso la
 via pratica è l'accesso automatico (con FileVault disattivato).
+
+## Aggiornamento 1.8.5 — Desktop remoto
+Una sessione utente lasciata scollegata da Desktop remoto non è la sessione della console: la console risulta senza
+utente, e il servizio avrebbe avviato l'host prima dell'accesso con lo stesso ID dell'app ancora in esecuzione nella
+sessione scollegata (si sarebbero tolti l'ID a vicenda sul server). Ora l'host parte solo se nessun utente è
+collegato in nessuna sessione (`WTSEnumerateSessionsW`); `SERVICE_REVISION` 2. La sessione scollegata non ha schermo
+né input: il viewer riceve un messaggio che lo spiega. Riportare in automatico la sessione sulla console non è stato
+fatto.
