@@ -361,6 +361,15 @@ pub fn run_agent(product: &str, app: Option<&Path>) -> Result<()> {
 
 /// Starts `exe --agent <product> <app>` as SYSTEM in `session` (what the service does).
 pub fn launch_agent(session: u32, exe: &Path, product: &str, app: &Path) -> Result<HANDLE> {
+    launch_in_session(
+        session,
+        exe,
+        &format!("--agent {product} \"{}\"", app.display()),
+    )
+}
+
+/// Starts `exe <args>` as SYSTEM in `session`, on its interactive window station.
+fn launch_in_session(session: u32, exe: &Path, args: &str) -> Result<HANDLE> {
     unsafe {
         let mut own = std::ptr::null_mut();
         if OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS, &mut own) == 0 {
@@ -385,11 +394,7 @@ pub fn launch_agent(session: u32, exe: &Path, product: &str, app: &Path) -> Resu
             bail!("SetTokenInformation: {}", std::io::Error::last_os_error());
         }
         let application = wide(exe);
-        let mut command = wide(format!(
-            "\"{}\" --agent {product} \"{}\"",
-            exe.display(),
-            app.display()
-        ));
+        let mut command = wide(format!("\"{}\" {args}", exe.display()));
         let mut desktop = wide(r"winsta0\default");
         let mut startup: STARTUPINFOW = std::mem::zeroed();
         startup.cb = size_of::<STARTUPINFOW>() as u32;
@@ -427,19 +432,35 @@ use windows_service::service_control_handler::{self, ServiceControlHandlerResult
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 use windows_service::{define_windows_service, service_dispatcher};
 
-/// (service name, product, app executable) for the running service.
-static SERVICE: OnceLock<(String, String, Option<PathBuf>)> = OnceLock::new();
+/// The running service: name, product, app executable and, for the full app, its data
+/// folder name (the pre-login host, ADR 0056).
+struct ServiceConfig {
+    name: String,
+    product: String,
+    app: Option<PathBuf>,
+    app_identifier: Option<String>,
+}
+
+static SERVICE: OnceLock<ServiceConfig> = OnceLock::new();
 
 define_windows_service!(ffi_service_main, service_main);
 
 /// Service process (`--service <name> <product> [app]`), started by the Service Control
 /// Manager. `app` is the app executable whose connections the agent accepts.
-pub fn run_service(name: &str, product: &str, app: Option<&Path>) -> Result<()> {
-    let _ = SERVICE.set((
-        name.to_owned(),
-        product.to_owned(),
-        app.map(Path::to_path_buf),
-    ));
+/// `app_identifier` (the app's data folder name, full app only) turns on the host that
+/// keeps the device reachable before anyone logs in (ADR 0056).
+pub fn run_service(
+    name: &str,
+    product: &str,
+    app: Option<&Path>,
+    app_identifier: Option<&str>,
+) -> Result<()> {
+    let _ = SERVICE.set(ServiceConfig {
+        name: name.to_owned(),
+        product: product.to_owned(),
+        app: app.map(Path::to_path_buf),
+        app_identifier: app_identifier.map(str::to_owned),
+    });
     service_dispatcher::start(name, ffi_service_main).context("starting the service dispatcher")
 }
 
@@ -534,7 +555,12 @@ fn migrate_to_protected_copy(name: &str, product: &str, exe: &Path) -> Result<Pa
 }
 
 fn service_loop() -> Result<()> {
-    let (name, product, app) = SERVICE.get().cloned().context("service not configured")?;
+    let config = SERVICE.get().context("service not configured")?;
+    let (name, product, app) = (
+        config.name.clone(),
+        config.product.clone(),
+        config.app.clone(),
+    );
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
     let handler = move |control| match control {
         ServiceControl::Stop | ServiceControl::Shutdown => {
@@ -574,9 +600,13 @@ fn service_loop() -> Result<()> {
             Err(e) => tracing::warn!("cannot move the service to a protected copy: {e:#}"),
         }
     }
+    if let Err(e) = write_revision(&name) {
+        tracing::warn!("cannot record the service revision: {e:#}");
+    }
     // The agent runs in the session at the physical console; restarted if it exits or the
     // console moves to another session (fast user switching).
     let mut agent: Option<(u32, HANDLE)> = None;
+    let mut logon = LogonHost::default();
     loop {
         let session = unsafe { WTSGetActiveConsoleSessionId() };
         let exited = agent
@@ -597,6 +627,9 @@ fn service_loop() -> Result<()> {
                 Err(e) => tracing::warn!(session, "cannot start the agent: {e:#}"),
             }
         }
+        if let Some(identifier) = &config.app_identifier {
+            logon.supervise(&name, &exe, identifier, session);
+        }
         if stop_rx.recv_timeout(Duration::from_secs(2)).is_ok() {
             break;
         }
@@ -607,6 +640,7 @@ fn service_loop() -> Result<()> {
             CloseHandle(h);
         }
     }
+    logon.stop();
     set(ServiceState::Stopped, ServiceControlAccept::empty())?;
     Ok(())
 }
@@ -679,4 +713,243 @@ pub fn uninstall_service(name: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+// ---- Host before login (ADR 0056) ----------------------------------------------------
+
+/// Bumped whenever the service or the pre-login host change: an app finding an older
+/// revision installed offers to reinstall the service, which refreshes its protected copy.
+pub const SERVICE_REVISION: u32 = 1;
+const REVISION_FILE: &str = "revision";
+
+/// Files of the user's app data the pre-login host needs: the device key (same id), the
+/// personal password's derived secret and the preferences (cached id, user name).
+const LOGON_FILES: [&str; 3] = ["device.key", "personal.json", "prefs.json"];
+/// Only SYSTEM and Administrators, inherited by the files: they hold the device key.
+const LOGON_DIR_SDDL: &str = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
+/// How often the logged-on user's files are copied again (a new personal password).
+const LOGON_SYNC_EVERY: Duration = Duration::from_secs(30);
+/// Least time between two starts of the pre-login host (it may keep failing).
+const LOGON_RELAUNCH_GAP: Duration = Duration::from_secs(30);
+
+/// The data folder of the pre-login host.
+pub fn logon_dir(name: &str) -> Result<PathBuf> {
+    Ok(service_home(name)?.join("logon"))
+}
+
+/// The revision of the installed service, 0 if it predates revisions (or is missing).
+pub fn installed_revision(name: &str) -> u32 {
+    service_home(name)
+        .ok()
+        .and_then(|home| std::fs::read_to_string(home.join(REVISION_FILE)).ok())
+        .and_then(|text| text.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+fn write_revision(name: &str) -> Result<()> {
+    let home = service_home(name)?;
+    std::fs::write(home.join(REVISION_FILE), SERVICE_REVISION.to_string())?;
+    Ok(())
+}
+
+/// The user logged on in `session`, if any (none on the login screen).
+pub fn session_user(session: u32) -> Option<String> {
+    use windows_sys::Win32::System::RemoteDesktop::{
+        WTS_CURRENT_SERVER_HANDLE, WTSFreeMemory, WTSQuerySessionInformationW, WTSUserName,
+    };
+    let mut buffer: *mut u16 = std::ptr::null_mut();
+    let mut bytes = 0u32;
+    let ok = unsafe {
+        WTSQuerySessionInformationW(
+            WTS_CURRENT_SERVER_HANDLE,
+            session,
+            WTSUserName,
+            &mut buffer,
+            &mut bytes,
+        )
+    };
+    if ok == 0 || buffer.is_null() {
+        return None;
+    }
+    let len = (bytes as usize / 2).saturating_sub(1);
+    let name = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(buffer, len) });
+    unsafe { WTSFreeMemory(buffer.cast()) };
+    let name = name.trim_end_matches('\0').to_owned();
+    (!name.is_empty()).then_some(name)
+}
+
+/// True once someone has logged on in this process's session (the pre-login host then
+/// leaves the server to the user's app).
+pub fn user_logged_on() -> bool {
+    current_session().and_then(session_user).is_some()
+}
+
+/// Roaming app data folder of the user logged on in `session` (SYSTEM only).
+fn user_app_data(session: u32) -> Result<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::System::RemoteDesktop::WTSQueryUserToken;
+    use windows_sys::Win32::UI::Shell::{FOLDERID_RoamingAppData, SHGetKnownFolderPath};
+    let mut token: HANDLE = std::ptr::null_mut();
+    if unsafe { WTSQueryUserToken(session, &mut token) } == 0 {
+        bail!("WTSQueryUserToken: {}", std::io::Error::last_os_error());
+    }
+    let mut raw: *mut u16 = std::ptr::null_mut();
+    let hr = unsafe { SHGetKnownFolderPath(&FOLDERID_RoamingAppData, 0, token, &mut raw) };
+    unsafe { CloseHandle(token) };
+    if hr != 0 || raw.is_null() {
+        bail!("SHGetKnownFolderPath (user) failed: {hr:#x}");
+    }
+    let mut len = 0;
+    while unsafe { *raw.add(len) } != 0 {
+        len += 1;
+    }
+    let path = OsString::from_wide(unsafe { std::slice::from_raw_parts(raw, len) });
+    unsafe { CoTaskMemFree(raw.cast()) };
+    Ok(PathBuf::from(path))
+}
+
+/// Creates `dir` readable by SYSTEM and Administrators only.
+fn private_dir(dir: &Path) -> Result<()> {
+    use windows_sys::Win32::Security::{
+        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, SetFileSecurityW,
+    };
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let sddl = wide(LOGON_DIR_SDDL);
+    let mut descriptor = std::ptr::null_mut();
+    if unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            1,
+            &mut descriptor,
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        bail!("security descriptor: {}", std::io::Error::last_os_error());
+    }
+    let path = wide(dir);
+    let ok = unsafe {
+        SetFileSecurityW(
+            path.as_ptr(),
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            descriptor,
+        )
+    };
+    unsafe { LocalFree(descriptor as HLOCAL) };
+    if ok == 0 {
+        bail!("SetFileSecurityW: {}", std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Copies the logged-on user's id and personal password into the pre-login host's folder.
+/// Without a device key (the app never ran for this user) nothing changes; without a
+/// personal password the host is not started (nobody could get in).
+fn sync_logon_files(session: u32, identifier: &str, dir: &Path) -> Result<()> {
+    let source = user_app_data(session)?.join(identifier);
+    if !source.join(LOGON_FILES[0]).is_file() {
+        return Ok(());
+    }
+    private_dir(dir)?;
+    for file in LOGON_FILES {
+        let target = dir.join(file);
+        match std::fs::read(source.join(file)) {
+            Ok(content) => {
+                if std::fs::read(&target).ok().as_deref() != Some(content.as_slice()) {
+                    std::fs::write(&target, &content)
+                        .with_context(|| format!("writing {}", target.display()))?;
+                    tracing::info!(file, "pre-login host: copied from the user's app");
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if std::fs::remove_file(&target).is_ok() {
+                    tracing::info!(file, "pre-login host: removed (gone from the user's app)");
+                }
+            }
+            Err(e) => return Err(e).with_context(|| format!("reading {file}")),
+        }
+    }
+    Ok(())
+}
+
+/// The host that keeps the device reachable while nobody is logged on: the app itself,
+/// as SYSTEM in the console session, with no windows (`--logon-host <dir>`). Once a user
+/// logs on it leaves the server to the user's app and exits when its sessions are over, so
+/// a session started on the login screen goes on uninterrupted.
+#[derive(Default)]
+struct LogonHost {
+    process: Option<HANDLE>,
+    last_launch: Option<std::time::Instant>,
+    last_sync: Option<std::time::Instant>,
+    /// The user whose files were copied last.
+    synced_user: Option<String>,
+}
+
+impl LogonHost {
+    fn supervise(&mut self, name: &str, exe: &Path, identifier: &str, session: u32) {
+        if let Some(h) = self.process
+            && unsafe { WaitForSingleObject(h, 0) } == WAIT_OBJECT_0
+        {
+            unsafe { CloseHandle(h) };
+            self.process = None;
+            tracing::info!("pre-login host exited");
+        }
+        if session == u32::MAX {
+            return;
+        }
+        let Ok(dir) = logon_dir(name) else { return };
+        match session_user(session) {
+            Some(user) => {
+                let due = self.synced_user.as_deref() != Some(user.as_str())
+                    || self
+                        .last_sync
+                        .is_none_or(|t| t.elapsed() > LOGON_SYNC_EVERY);
+                if due {
+                    self.last_sync = Some(std::time::Instant::now());
+                    match sync_logon_files(session, identifier, &dir) {
+                        Ok(()) => self.synced_user = Some(user),
+                        Err(e) => tracing::debug!("pre-login host: cannot copy the files: {e:#}"),
+                    }
+                }
+            }
+            None => {
+                let ready = LOGON_FILES[..2].iter().all(|f| dir.join(f).is_file());
+                let waited = self
+                    .last_launch
+                    .is_none_or(|t| t.elapsed() > LOGON_RELAUNCH_GAP);
+                if self.process.is_none() && ready && waited {
+                    self.last_launch = Some(std::time::Instant::now());
+                    let args = format!("--logon-host \"{}\"", dir.display());
+                    match launch_in_session(session, exe, &args) {
+                        Ok(h) => {
+                            tracing::info!(session, "pre-login host started");
+                            self.process = Some(h);
+                        }
+                        Err(e) => tracing::warn!(session, "cannot start the pre-login host: {e:#}"),
+                    }
+                }
+            }
+        }
+    }
+
+    fn stop(&mut self) {
+        if let Some(h) = self.process.take() {
+            unsafe {
+                TerminateProcess(h, 0);
+                CloseHandle(h);
+            }
+        }
+    }
+}
+
+/// Prepares a SYSTEM process in the console session to capture and control whichever
+/// desktop gets the input (login screen, UAC, the user's desktop), as the agent does.
+pub fn prepare_system_host() {
+    windesk::enable();
+    unsafe {
+        windows_sys::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
+            windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        );
+    }
 }

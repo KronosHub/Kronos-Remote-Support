@@ -14,6 +14,17 @@ pub struct UacSupport {
     pub active: bool,
     /// The UI should offer a toggle (full app on Windows). Quick shows only a note.
     pub toggleable: bool,
+    /// The installed service is older than this app's: "Aggiorna" refreshes it.
+    pub outdated: bool,
+}
+
+/// Full app on Windows: the service is installed but from an older revision.
+#[cfg(windows)]
+pub fn service_outdated() -> bool {
+    !crate::QUICK
+        && agent::windows::is_service_installed(crate::service_name())
+        && agent::windows::installed_revision(crate::service_name())
+            < agent::windows::SERVICE_REVISION
 }
 
 #[tauri::command]
@@ -25,12 +36,14 @@ pub fn uac_support() -> UacSupport {
                 supported: true,
                 active: agent::windows::is_elevated(),
                 toggleable: false,
+                outdated: false,
             };
         }
         UacSupport {
             supported: true,
             active: agent::windows::is_service_installed(crate::service_name()),
             toggleable: true,
+            outdated: service_outdated(),
         }
     }
     #[cfg(not(windows))]
@@ -38,6 +51,7 @@ pub fn uac_support() -> UacSupport {
         supported: false,
         active: false,
         toggleable: false,
+        outdated: false,
     }
 }
 

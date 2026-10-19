@@ -59,7 +59,9 @@ Permessi necessari sul computer controllato:
 - **macOS**: *Registrazione schermo* (per farsi vedere) e *Accessibilità* (per farsi controllare), in
   Impostazioni di Sistema → Privacy e sicurezza. L'app li chiede alla prima connessione.
 - **Linux**: sessione **Xorg** (dalla schermata di login, es. "Ubuntu su Xorg").
-- **Windows**: nessuno; le finestre avviate come amministratore e le richieste UAC non sono controllabili.
+- **Windows**: nessuno. Per le finestre di amministratore (UAC) e la schermata di blocco attiva **Controllo finestre
+  di amministratore**: con una password personale il PC resta raggiungibile anche dopo un riavvio, prima che
+  qualcuno entri in Windows.
 
 Nella barra del viewer, *Controllo attivo/spento* abilita l'invio di mouse e tastiera; i tasti sono inviati per
 posizione fisica (vale il layout del computer controllato).
@@ -75,7 +77,8 @@ eventualmente **Salva come**: il dispositivo comparirà in **I miei dispositivi*
 La password personale non viene mai salvata né trasmessa (resta solo un segreto derivato, verifica SPAKE2).
 In **I miei dispositivi** puoi raccogliere i dispositivi in **cartelle** (anche una dentro l'altra): premi **Organizza**,
 crea le cartelle con **Nuova cartella**, seleziona i dispositivi e usa **Sposta in…**; poi **Fine**. Un clic sul nome
-della cartella la apre o la chiude.
+della cartella la apre o la chiude. Sempre da **Organizza**, **Esporta** salva la lista in un file (con le password
+salvate il file è cifrato con una password che scegli) e **Importa** la aggiunge su un altro computer.
 
 **Kronos Quick Support** (senza installazione) tiene sempre lo stesso ID e può avere anche lui una password personale:
 l'accesso non presidiato funziona finché la sua finestra è aperta.

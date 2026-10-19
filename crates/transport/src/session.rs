@@ -258,6 +258,9 @@ fn to_rtc_ice_servers(servers: &[IceServer]) -> Vec<RTCIceServer> {
 /// (e.g. Tailscale via its relays) measured 12–150 ms between two apps on the same Mac,
 /// against <1 ms on the LAN, and ICE may nominate it first. Real networks are reached
 /// through physical interfaces, srflx or (later) TURN.
+/// Longest wait for a peer connection to close.
+const CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 const TUNNEL_PREFIXES: &[&str] = &[
     "utun",
     "tun",
@@ -483,8 +486,12 @@ impl PeerSession {
     /// Closes the connection without notifying anyone, e.g. after the server reported
     /// the session as already closed.
     pub async fn shutdown(&self) {
-        if let Err(e) = self.pc.close().await {
-            tracing::warn!("closing peer connection: {e}");
+        // A connection that went stale (e.g. this computer slept) must not hold up whoever
+        // closes it: the service loop waits here.
+        match tokio::time::timeout(CLOSE_TIMEOUT, self.pc.close()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!("closing peer connection: {e}"),
+            Err(_) => tracing::warn!(session = self.id, "closing peer connection timed out"),
         }
     }
 }

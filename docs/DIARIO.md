@@ -580,3 +580,27 @@
 - Workflow di release: con la 1.8.2 due compilazioni avevano creato la release nello stesso secondo (i file Windows
   erano finiti in una seconda copia, spostati a mano). Ora un primo job crea la release come bozza, le quattro
   compilazioni caricano lì (`releaseId`) e un job finale la pubblica solo se `latest.json` ha tutte le 11 piattaforme.
+
+## 2026-10-19 — Windows raggiungibile dopo il riavvio; esporta/importa dispositivi (v1.8.4)
+- Segnalazione: dopo il riavvio di Windows, fermo sulla schermata di accesso, non ci si collegava. Causa: l'app
+  parte solo all'accesso dell'utente; il servizio SYSTEM fa solo cattura e input.
+- Il servizio ora avvia, quando nessuno è entrato, una copia dell'app senza finestre come SYSTEM con ID e password
+  personale dell'utente; all'accesso lascia il posto all'app dell'utente ma, su richiesta dell'utente, senza
+  interrompere la sessione in corso (ADR 0056). Il servizio va aggiornato una volta (UAC) perché esegue una copia
+  protetta dell'app.
+- Richiesta durante il lavoro: esportare e importare la lista dei dispositivi. File in Download, cifrato con
+  password se contiene le password salvate (ADR 0057). Test in `devices_file.rs` e `store.rs`; interfaccia controllata
+  con dati finti in Chrome headless.
+- Senza macchina virtuale Windows: `agent` compila per Windows da qui (clippy pulito), il resto lo verificano i
+  controlli su Windows di GitHub. Prima prova vera sul PC dell'utente.
+- Segnalazione durante il lavoro: dopo lo stop del Mac che controllava, la finestra della sessione restava aperta
+  con 0 kbit/s in entrambe le direzioni (nemmeno i ping uscivano): il ciclo della sessione era fermo su un'attesa.
+  Protezione: invio dei messaggi di controllo con limite di 3 s, chiusura della connessione con limite di 5 s.
+- Causa trovata nel log del Mac che controllava: la sessione era in rete locale; con lo stop si è chiuso il
+  collegamento TCP di rete locale (serve solo ad avviare la sessione) e `pump_lan_signals` interrompeva il compito
+  della sessione senza pulizia. Restava una sessione "fantasma": finestra aperta, Disconnetti senza effetto, nuovi
+  collegamenti allo stesso dispositivo rimandati alla finestra morta. Ora la sessione sopravvive alla chiusura del
+  collegamento di rete locale, e le sessioni il cui compito non esiste più vengono riconosciute e chiuse.
+- Mac prima dell'accesso, prove sul Mac dell'utente (con il suo permesso, programma di prova installato e poi tolto):
+  i permessi di schermo valgono per una copia `.app` con identificativo e firma dell'app; sulla schermata di login
+  cattura e puntatore funzionano, tastiera e clic no. Funzione non fatta per il Mac (ADR 0056, sezione "E il Mac?").

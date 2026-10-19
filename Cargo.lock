@@ -1464,7 +1464,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-remoto"
-version = "1.8.3"
+version = "1.8.4"
 dependencies = [
  "agent",
  "anyhow",
@@ -1473,6 +1473,7 @@ dependencies = [
  "protocol",
  "rand 0.10.3",
  "regex",
+ "ring",
  "serde",
  "serde_json",
  "signaling-proto",

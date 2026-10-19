@@ -1,6 +1,6 @@
 # 0033 — Agente Windows per le finestre di amministratore (UAC) e la schermata di blocco
 
-**Data:** 2026-10-09 · **Stato:** accettata
+**Data:** 2026-10-09 · **Stato:** accettata; dalla 1.8.4 il servizio tiene raggiungibile il PC anche prima dell'accesso (ADR 0056)
 
 ## Problema
 Su Windows i popup di amministratore (UAC) e la schermata di blocco vivono su un desktop separato e sicuro

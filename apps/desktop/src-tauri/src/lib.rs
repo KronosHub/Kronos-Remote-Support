@@ -1,3 +1,4 @@
+mod devices_file;
 mod permissions;
 mod privacy;
 mod service;
@@ -23,6 +24,20 @@ const HIDDEN_ARG: &str = "--hidden";
 /// id and an optional personal password (unattended access while it runs) in its own data
 /// folder (ADR 0052).
 pub(crate) const QUICK: bool = cfg!(feature = "quick-access");
+
+/// The app's data folder name: `identifier` in tauri.conf.json (checked by a test). The
+/// Windows service copies the device's id and personal password from there (ADR 0056).
+#[cfg_attr(not(windows), allow(dead_code))]
+const APP_IDENTIFIER: &str = "tech.kronos.desktopremoto";
+
+/// Windows: the data folder of the host that runs before anyone logs in (ADR 0056), when
+/// this process is that host. It runs as SYSTEM with no windows, tray or updates, and only
+/// accepts the personal password: nobody is there to approve a connection.
+static LOGON_HOST: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+pub(crate) fn logon_host() -> bool {
+    LOGON_HOST.get().is_some()
+}
 
 /// Product tag for the Windows agent and service (separate pipe/service per flavour).
 pub(crate) fn agent_product() -> &'static str {
@@ -205,6 +220,77 @@ fn list_device_tree(service: State<'_, Service>) -> DeviceTree {
     device_tree(&service)
 }
 
+/// Writes "my devices" to a file in the Downloads folder (ADR 0057); with `password` the
+/// saved passwords go too, encrypted. Returns the file's path.
+#[tauri::command]
+async fn export_devices(
+    app: AppHandle,
+    service: State<'_, Service>,
+    password: Option<String>,
+) -> Result<String, String> {
+    let list = devices_file::DeviceList {
+        devices: service.store().devices(),
+        groups: service.groups(),
+    };
+    let text = tauri::async_runtime::spawn_blocking(move || {
+        devices_file::export(list, password.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let dir = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().home_dir())
+        .map_err(|e| format!("cartella Download non trovata: {e}"))?;
+    let path = (1..1000)
+        .map(|n| {
+            let name = if n == 1 {
+                "dispositivi-kronos.json".to_owned()
+            } else {
+                format!("dispositivi-kronos ({n}).json")
+            };
+            dir.join(name)
+        })
+        .find(|p| !p.exists())
+        .ok_or("troppi file esportati nella cartella Download")?;
+    std::fs::write(&path, text).map_err(|e| format!("impossibile scrivere il file: {e}"))?;
+    Ok(path.display().to_string())
+}
+
+/// Whether an exported file needs its password to be imported.
+#[tauri::command]
+fn devices_file_locked(content: String) -> Result<bool, String> {
+    devices_file::needs_password(&content)
+}
+
+#[derive(serde::Serialize)]
+struct Imported {
+    devices: usize,
+    groups: usize,
+    tree: DeviceTree,
+}
+
+/// Adds the devices and folders of an exported file to "my devices".
+#[tauri::command]
+async fn import_devices(
+    service: State<'_, Service>,
+    content: String,
+    password: Option<String>,
+) -> Result<Imported, String> {
+    let list = tauri::async_runtime::spawn_blocking(move || {
+        devices_file::import(&content, password.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let (devices, groups) = service.store().import(list.devices, list.groups)?;
+    let _ = service.presence();
+    Ok(Imported {
+        devices,
+        groups,
+        tree: device_tree(&service),
+    })
+}
+
 #[tauri::command]
 fn create_group(
     service: State<'_, Service>,
@@ -338,6 +424,10 @@ const CHAT_POPUP_SIZE: (f64, f64) = (360.0, 320.0);
 /// Shows the floating chat of a shared session, top right and above everything, without
 /// taking the keyboard from the user (the page knows the session from `chat-<session>`).
 pub(crate) fn open_chat_popup(app: &AppHandle, session: u64, peer: &str) {
+    // Before login nobody would read it (and the host opens no windows).
+    if logon_host() {
+        return;
+    }
     let label = format!("chat-{session}");
     if let Some(window) = app.get_webview_window(&label) {
         let _ = window.unminimize();
@@ -561,6 +651,19 @@ fn stop_hosting(service: State<'_, Service>, session: u64) {
 /// Logs to stdout and, when possible, to daily files in the app log directory
 /// (macOS: ~/Library/Logs/tech.kronos.desktopremoto), kept for 7 days.
 fn init_logging(dir: Option<std::path::PathBuf>) {
+    init_logging_as(dir, "kronos-remote-support");
+}
+
+/// The app's configuration; the pre-login host opens no window at all.
+fn context() -> tauri::Context<tauri::Wry> {
+    let mut context = tauri::generate_context!();
+    if logon_host() {
+        context.config_mut().app.windows.clear();
+    }
+    context
+}
+
+fn init_logging_as(dir: Option<std::path::PathBuf>, prefix: &str) {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
@@ -571,7 +674,7 @@ fn init_logging(dir: Option<std::path::PathBuf>) {
     let file = dir.and_then(|dir| {
         tracing_appender::rolling::RollingFileAppender::builder()
             .rotation(tracing_appender::rolling::Rotation::DAILY)
-            .filename_prefix("kronos-remote-support")
+            .filename_prefix(prefix)
             .filename_suffix("log")
             .max_log_files(7)
             .build(dir)
@@ -717,10 +820,21 @@ pub fn run() {
                     .unwrap_or_else(|| agent_product().to_owned());
                 let app = args.get(4).map(std::path::PathBuf::from);
                 init_logging(agent::windows::log_dir());
-                if let Err(e) = agent::windows::run_service(&name, &product, app.as_deref()) {
+                let identifier = (!QUICK).then_some(APP_IDENTIFIER);
+                if let Err(e) =
+                    agent::windows::run_service(&name, &product, app.as_deref(), identifier)
+                {
                     tracing::error!("service exited: {e:#}");
                 }
                 return;
+            }
+            // Host before login, started by the service as SYSTEM (ADR 0056).
+            Some("--logon-host") if !QUICK => {
+                let Some(dir) = args.get(2).map(std::path::PathBuf::from) else {
+                    return;
+                };
+                agent::windows::prepare_system_host();
+                let _ = LOGON_HOST.set(dir);
             }
             _ => {
                 // Quick Support is opt-out for admin: try to gain admin at startup so admin
@@ -736,12 +850,15 @@ pub fn run() {
         }
     }
 
-    // Two instances would share the device key and fight over the same id.
-    let mut builder =
-        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    // Two instances would share the device key and fight over the same id. The pre-login
+    // host has its own copy of the key and hands over to the user's app (ADR 0056).
+    let mut builder = tauri::Builder::default();
+    if !logon_host() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main_window(app);
         }));
-    if !QUICK {
+    }
+    if !QUICK && !logon_host() {
         builder = builder
             // Launched at login: start hidden in the tray, ready for unattended access.
             .plugin(tauri_plugin_autostart::init(
@@ -752,6 +869,13 @@ pub fn run() {
     }
     let app = builder
         .setup(|app| {
+            if let Some(dir) = LOGON_HOST.get() {
+                #[cfg(windows)]
+                init_logging_as(agent::windows::log_dir(), "kronos-logon-host");
+                tracing::info!("host before login starting");
+                app.manage(Service::start(app.handle().clone(), dir.clone())?);
+                return Ok(());
+            }
             if QUICK {
                 // Logs to the console only; the id and the personal password are kept in its
                 // own data folder (not shared with the full app), so the id stays the same.
@@ -791,6 +915,23 @@ pub fn run() {
                         Ok(true) => {}
                         // Declined or failed: do not ask again (the button still enables it).
                         _ => handle.state::<Service>().set_uac_agent_declined(true),
+                    }
+                });
+            } else if uac::service_outdated()
+                && service.service_update_declined() != Some(agent::windows::SERVICE_REVISION)
+            {
+                // The service runs its own copy of the app from when it was installed: refresh
+                // it when the service changed (e.g. the host before login, ADR 0056). Asked
+                // once per service revision; the button stays.
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    if !matches!(
+                        agent::windows::run_self_elevated(&["--install-service"]),
+                        Ok(true)
+                    ) {
+                        handle
+                            .state::<Service>()
+                            .set_service_update_declined(agent::windows::SERVICE_REVISION);
                     }
                 });
             }
@@ -858,6 +999,9 @@ pub fn run() {
             move_device,
             get_autostart,
             set_autostart,
+            export_devices,
+            devices_file_locked,
+            import_devices,
             permissions::get_permissions,
             permissions::open_permission_settings,
             uac::uac_support,
@@ -888,7 +1032,7 @@ pub fn run() {
             end_session,
             stop_hosting
         ])
-        .build(tauri::generate_context!())
+        .build(context())
         .expect("error while building tauri application");
 
     app.run(|app, event| {
@@ -904,4 +1048,14 @@ pub fn run() {
         }
         let _ = (app, event);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn app_identifier_matches_the_tauri_config() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(config["identifier"], super::APP_IDENTIFIER);
+    }
 }

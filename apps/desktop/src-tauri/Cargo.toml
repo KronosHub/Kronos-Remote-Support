@@ -1,6 +1,6 @@
 [package]
 name = "desktop-remoto"
-version = "1.8.3"
+version = "1.8.4"
 description = "Desktop Remoto: remote desktop client and host"
 edition.workspace = true
 license.workspace = true
@@ -37,4 +37,6 @@ transport.workspace = true
 tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 regex = "1"
+# Already used by the WebRTC stack: encrypts exported device lists (ADR 0057).
+ring = "0.17"
 tracing-appender = "0.2"

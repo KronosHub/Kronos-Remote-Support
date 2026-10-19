@@ -56,6 +56,9 @@ struct Prefs {
     /// do not ask again at startup (they can still enable it from the button).
     #[serde(default)]
     uac_agent_declined: bool,
+    /// Windows: the service revision whose update (with a UAC prompt) the user declined.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    service_update_declined: Option<u32>,
     /// This device's id, cached after the first server registration, so LAN discovery works
     /// even when the server is unreachable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -243,6 +246,39 @@ impl Store {
         self.write_groups(&mut groups).map_err(save_error)
     }
 
+    /// Adds an exported list (ADR 0057): devices and folders with an id already here are
+    /// replaced by the imported ones (a secret is kept when the file has none), the others
+    /// are added. Returns how many devices and folders were imported.
+    pub fn import(
+        &self,
+        devices: Vec<SavedDevice>,
+        groups: Vec<DeviceGroup>,
+    ) -> Result<(usize, usize), String> {
+        let mut all_groups: Vec<DeviceGroup> = self.read(GROUPS_FILE).unwrap_or_default();
+        let imported_groups = groups.len();
+        for mut group in groups {
+            group.name = group_name(&group.name)?;
+            all_groups.retain(|g| g.id != group.id);
+            all_groups.push(group);
+        }
+        let mut all_devices = self.devices();
+        let imported_devices = devices.len();
+        for mut device in devices {
+            if let Some(old) = all_devices.iter().find(|d| d.id == device.id)
+                && device.secret.is_empty()
+            {
+                device.secret = old.secret.clone();
+            }
+            all_devices.retain(|d| d.id != device.id);
+            all_devices.push(device);
+        }
+        all_devices.sort_by_key(|d| d.name.to_lowercase());
+        self.write(DEVICES_FILE, &all_devices).map_err(save_error)?;
+        // A damaged file (missing parent, loop) is straightened out when read.
+        self.write_groups(&mut all_groups).map_err(save_error)?;
+        Ok((imported_devices, imported_groups))
+    }
+
     /// Puts a saved device in a folder (`None`: at the top).
     pub fn move_device(&self, id: &str, group: Option<&str>) -> Result<(), String> {
         if let Some(group) = group
@@ -271,6 +307,20 @@ impl Store {
     pub fn set_uac_agent_declined(&self, declined: bool) -> std::io::Result<()> {
         let mut prefs = self.read::<Prefs>(PREFS_FILE).unwrap_or_default();
         prefs.uac_agent_declined = declined;
+        self.write(PREFS_FILE, &prefs)
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn service_update_declined(&self) -> Option<u32> {
+        self.read::<Prefs>(PREFS_FILE)
+            .unwrap_or_default()
+            .service_update_declined
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn set_service_update_declined(&self, revision: u32) -> std::io::Result<()> {
+        let mut prefs = self.read::<Prefs>(PREFS_FILE).unwrap_or_default();
+        prefs.service_update_declined = Some(revision);
         self.write(PREFS_FILE, &prefs)
     }
 
@@ -385,6 +435,48 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         (Store::new(Some(dir.clone())), dir)
+    }
+
+    #[test]
+    fn import_adds_and_replaces_by_id() {
+        let (store, dir) = store();
+        let device = |id: &str, name: &str, secret: &str, group: Option<&str>| SavedDevice {
+            id: id.into(),
+            name: name.into(),
+            secret: secret.into(),
+            group: group.map(Into::into),
+        };
+        store
+            .save_device(device("111", "Vecchio", "s1", None))
+            .unwrap();
+        store
+            .save_device(device("222", "Altro", "s2", None))
+            .unwrap();
+        let groups = vec![DeviceGroup {
+            id: "g1".into(),
+            name: " Clienti ".into(),
+            parent: None,
+            collapsed: false,
+        }];
+        let devices = vec![
+            device("111", "Nuovo", "", Some("g1")),
+            device("333", "Terzo", "s3", Some("g1")),
+        ];
+        assert_eq!(store.import(devices, groups).unwrap(), (2, 1));
+        let all = store.devices();
+        assert_eq!(all.len(), 3);
+        let first = all.iter().find(|d| d.id == "111").unwrap();
+        assert_eq!(
+            (first.name.as_str(), first.secret.as_str()),
+            ("Nuovo", "s1")
+        );
+        assert_eq!(first.group.as_deref(), Some("g1"));
+        assert_eq!(store.groups()[0].name, "Clienti");
+        // The same file again changes nothing.
+        let again = vec![device("333", "Terzo", "s3", Some("g1"))];
+        store.import(again, Vec::new()).unwrap();
+        assert_eq!(store.devices().len(), 3);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -89,8 +89,18 @@ impl HostInput {
 }
 
 async fn send(channel: &Arc<dyn DataChannel>, msg: &ControlMsg) {
-    let _ = channel.send_text(&msg.to_json()).await;
+    // Never waits for long: a stuck connection (e.g. after this computer slept) must not
+    // freeze the session loop, whose liveness check then ends the session.
+    if tokio::time::timeout(SEND_TIMEOUT, channel.send_text(&msg.to_json()))
+        .await
+        .is_err()
+    {
+        tracing::warn!("control message not sent within {SEND_TIMEOUT:?}");
+    }
 }
+
+/// Longest wait for a control message to be queued.
+const SEND_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Tells the other side the session ends and waits (at most `BYE_FLUSH`) until the
 /// message has left: the connection is closed right after, which would otherwise drop it.

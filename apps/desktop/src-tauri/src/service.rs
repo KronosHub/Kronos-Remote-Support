@@ -265,6 +265,9 @@ enum Command {
     RefreshPresence,
     /// Close this session's connection for good (the summary was acknowledged).
     EndSession(SessionId),
+    /// Host before login: someone logged on, leave the server to their app (ADR 0056).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Retire,
 }
 
 /// A device of this app seen on the local network.
@@ -397,6 +400,8 @@ struct Shared {
     connecting: Mutex<HashMap<SessionId, oneshot::Sender<String>>>,
     /// LAN discovery (peers on the local network), when this device's id is known.
     lan: Mutex<Option<Arc<transport::lan::LanDiscovery>>>,
+    /// Host before login only: the user's app took over; finish the open sessions and exit.
+    retired: AtomicBool,
     store: Store,
 }
 
@@ -563,6 +568,7 @@ impl Service {
             display_name: Mutex::new(store.display_name()),
             connecting: Mutex::new(HashMap::new()),
             lan: Mutex::new(None),
+            retired: AtomicBool::new(false),
             store,
         });
         let (commands, rx) = mpsc::unbounded_channel();
@@ -572,6 +578,9 @@ impl Service {
             shared: shared.clone(),
             commands: commands.clone(),
         };
+        if crate::logon_host() {
+            watch_logon(commands.clone());
+        }
         tauri::async_runtime::spawn(run(ctx, rx));
         Ok(Self {
             commands,
@@ -706,6 +715,16 @@ impl Service {
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn set_uac_agent_declined(&self, declined: bool) {
         let _ = self.shared.store.set_uac_agent_declined(declined);
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn service_update_declined(&self) -> Option<u32> {
+        self.shared.store.service_update_declined()
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn set_service_update_declined(&self, revision: u32) {
+        let _ = self.shared.store.set_service_update_declined(revision);
     }
 
     pub fn devices(&self) -> Vec<DeviceView> {
@@ -934,6 +953,7 @@ impl Service {
 
     /// The session in which we already view `target`, if any.
     pub fn viewing(&self, target: &PeerId) -> Option<SessionId> {
+        self.drop_stale_views();
         let viewers = self.shared.viewers.lock().unwrap();
         viewers
             .iter()
@@ -950,6 +970,36 @@ impl Service {
     pub fn close_view(&self, session: SessionId) {
         if let Some(viewer) = self.shared.viewers.lock().unwrap().get(&session) {
             let _ = viewer.commands.send(ViewerCommand::Stop);
+        }
+        self.drop_stale_views();
+    }
+
+    /// Forgets viewed sessions whose task is gone without cleaning up (it can no longer
+    /// receive commands), and closes their windows: otherwise the device looked still
+    /// connected and a new connection to it only showed the dead window.
+    fn drop_stale_views(&self) {
+        let stale: Vec<SessionId> = {
+            let mut viewers = self.shared.viewers.lock().unwrap();
+            let stale: Vec<SessionId> = viewers
+                .iter()
+                .filter(|(_, v)| v.commands.is_closed())
+                .map(|(session, _)| *session)
+                .collect();
+            for session in &stale {
+                viewers.remove(session);
+            }
+            stale
+        };
+        for session in stale {
+            tracing::warn!(session, "viewer session ended without cleanup, closing it");
+            emit(
+                &self.app,
+                UiEvent::ViewClosed {
+                    session,
+                    reason: "connessione persa".into(),
+                    duration_secs: 0,
+                },
+            );
         }
     }
 
@@ -1133,6 +1183,9 @@ async fn run(ctx: Ctx, mut commands: UnboundedReceiver<Command>) {
     }
 
     loop {
+        if ctx.shared.retired.load(Ordering::Relaxed) {
+            return retire(&ctx, &mut sessions, &mut commands, &mut internal).await;
+        }
         ctx.set_status(Link::Connecting, None, None);
         let attempt = tokio::time::timeout(
             CONNECT_TIMEOUT,
@@ -1184,6 +1237,9 @@ async fn run(ctx: Ctx, mut commands: UnboundedReceiver<Command>) {
             }
             Err(_) => "timeout di connessione al server".into(),
         };
+        if ctx.shared.retired.load(Ordering::Relaxed) {
+            continue;
+        }
         ctx.set_status(Link::Offline, None, Some(error.clone()));
         ctx.log("warn", format!("offline: {error}"));
 
@@ -1212,10 +1268,72 @@ async fn run(ctx: Ctx, mut commands: UnboundedReceiver<Command>) {
                     Some(Command::EndSession(session)) => {
                         handle_internal(&ctx, &mut sessions, Internal::SessionDone(session)).await;
                     }
+                    Some(Command::Retire) => {
+                        ctx.shared.retired.store(true, Ordering::Relaxed);
+                        break;
+                    }
                     None => return,
                 },
                 Some(msg) = internal.recv() => handle_internal(&ctx, &mut sessions, msg).await,
             }
+        }
+    }
+}
+
+/// Host before login: tells the service loop once someone has logged on (ADR 0056).
+fn watch_logon(commands: UnboundedSender<Command>) {
+    #[cfg(windows)]
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let logged_on = tauri::async_runtime::spawn_blocking(agent::windows::user_logged_on)
+                .await
+                .unwrap_or(false);
+            if logged_on {
+                tracing::info!("a user logged on: handing over to their app");
+                let _ = commands.send(Command::Retire);
+                return;
+            }
+        }
+    });
+    #[cfg(not(windows))]
+    let _ = commands;
+}
+
+/// Host before login, after a user logged on: off the server and the local network (the
+/// user's app has the id now), the sessions already open go on until they end, then the
+/// process exits.
+async fn retire(
+    ctx: &Ctx,
+    sessions: &mut Sessions,
+    commands: &mut UnboundedReceiver<Command>,
+    internal: &mut UnboundedReceiver<Internal>,
+) {
+    ctx.shared.lan.lock().unwrap().take();
+    let open = ctx.shared.hosting.lock().unwrap().len();
+    tracing::info!(open, "host before login: retired");
+    let mut check = tokio::time::interval(Duration::from_secs(1));
+    loop {
+        tokio::select! {
+            _ = check.tick() => {
+                if ctx.shared.hosting.lock().unwrap().is_empty() && sessions.active.is_empty() {
+                    tracing::info!("host before login: no session left, exiting");
+                    ctx.app.exit(0);
+                    return;
+                }
+            }
+            cmd = commands.recv() => match cmd {
+                Some(Command::EndSession(session)) => {
+                    handle_internal(ctx, sessions, Internal::SessionDone(session)).await;
+                }
+                Some(_) => {}
+                None => return,
+            },
+            Some(msg) = internal.recv() => match msg {
+                // Nobody may connect to it any more.
+                Internal::LanIncoming(_) => {}
+                msg => handle_internal(ctx, sessions, msg).await,
+            },
         }
     }
 }
@@ -1263,6 +1381,12 @@ async fn online(
             msg = client.recv() => {
                 let Some(msg) = msg else { break "connessione al server persa".to_owned() };
                 if let ServerMessage::Error { code: ErrorCode::Replaced, .. } = msg {
+                    // Before login, the user's app registering with the same id means
+                    // someone logged on: hand over instead of taking the id back.
+                    if crate::logon_host() {
+                        ctx.shared.retired.store(true, Ordering::Relaxed);
+                        break "l'app dell'utente ha preso il posto dell'host prima dell'accesso".to_owned();
+                    }
                     break "questo ID è stato collegato da un'altra installazione".to_owned();
                 }
                 if let ServerMessage::Presence { online } = msg {
@@ -1303,6 +1427,10 @@ async fn online(
                 // Same as a session that finished: close the connection, tell the server.
                 Some(Command::EndSession(session)) => {
                     handle_internal(ctx, sessions, Internal::SessionDone(session)).await;
+                }
+                Some(Command::Retire) => {
+                    ctx.shared.retired.store(true, Ordering::Relaxed);
+                    break "accesso a Windows: subentra l'app dell'utente".to_owned();
                 }
                 None => break "chiusura".to_owned(),
             },
@@ -1718,27 +1846,33 @@ fn lan_serve(ctx: &Ctx, lan: transport::lan::LanSession) {
 }
 
 /// Drives trickle-ICE over the LAN link: feed every incoming payload to the session until
-/// the body (view/serve) finishes or the LAN link closes, then close the session.
+/// the body (view/serve) finishes, then close the session. The LAN link is only needed to
+/// set the session up: if it drops (e.g. one computer slept), the session goes on, and its
+/// own checks end it if the partner is really gone. Aborting the body there left a session
+/// that looked open forever, and the device could not be connected to again.
 async fn pump_lan_signals(
     mut peer: PeerSession,
     mut incoming: tokio::sync::mpsc::UnboundedReceiver<signaling_proto::SignalPayload>,
     body: tauri::async_runtime::JoinHandle<()>,
 ) {
     tokio::pin!(body);
+    let mut linked = true;
     loop {
         tokio::select! {
-            payload = incoming.recv() => match payload {
+            payload = incoming.recv(), if linked => match payload {
                 Some(payload) => {
                     if let Err(e) = peer.handle_signal(payload).await {
                         tracing::debug!("LAN signal failed: {e:#}");
                     }
                 }
-                None => break,
+                None => {
+                    tracing::info!(session = peer.id, "LAN link closed, the session goes on");
+                    linked = false;
+                }
             },
             _ = &mut body => break,
         }
     }
-    body.abort();
     peer.close().await;
 }
 
@@ -2006,8 +2140,9 @@ async fn serve_partner(
     let hosting_since = Instant::now();
     let config = StreamConfig {
         source: Source::Screen { display_id: None },
-        // Windows: use the SYSTEM agent (if running) so UAC/lock screen work.
-        agent_product: Some(crate::agent_product().to_owned()),
+        // Windows: use the SYSTEM agent (if running) so UAC/lock screen work. The host before
+        // login is SYSTEM itself and captures directly.
+        agent_product: (!crate::logon_host()).then(|| crate::agent_product().to_owned()),
         ..StreamConfig::default()
     };
     let mut chat = ChatLimiter::default();
@@ -2148,6 +2283,17 @@ async fn linger(channel: &Arc<dyn DataChannel>) {
 
 /// Shows the approval popup and waits for the answer (rejects on timeout).
 async fn ask_user(app: &AppHandle, shared: &Arc<Shared>, session: SessionId, from: &str) -> bool {
+    // Before login nobody can approve: only the personal password gets in.
+    if crate::logon_host() {
+        log(
+            app,
+            "info",
+            format!(
+                "connessione da {from} rifiutata: prima dell'accesso a Windows serve la password personale"
+            ),
+        );
+        return false;
+    }
     let (tx, rx) = oneshot::channel();
     shared.approvals.lock().unwrap().insert(session, tx);
     crate::show_main_window(app);

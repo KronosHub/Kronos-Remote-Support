@@ -2,6 +2,20 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.8.4 — 2026-10-19
+- Windows: con **Controllo finestre di amministratore** attivo e una password personale, il PC resta raggiungibile
+  anche dopo un riavvio, quando è ancora sulla schermata di accesso. Ti colleghi con la password personale ed entri
+  in Windows da remoto; la sessione continua senza interruzioni anche dopo l'accesso. Al primo avvio dopo
+  l'aggiornamento Windows chiede una volta il permesso di amministratore per aggiornare il servizio (oppure premi
+  **Aggiorna** accanto a Controllo finestre di amministratore).
+- I miei dispositivi: in **Organizza** puoi **esportare** la lista in un file (nella cartella Download) e
+  **importarla** su un altro computer. Puoi includere le password salvate: in quel caso il file è cifrato con una
+  password che scegli tu.
+- Sessione in rete locale rimasta ferma dopo lo stop del computer che controlla: la finestra restava aperta a
+  0 kbit/s, Disconnetti non la chiudeva e non ci si poteva più collegare a quel dispositivo senza riavviare l'app.
+  Ora la sessione si chiude da sola con il resoconto (o continua, se il partner c'è ancora) e ci si ricollega
+  normalmente.
+
 ## 1.8.3 — 2026-10-19
 - Mac controllato con il monitor in stop: collegandoti ora vedi subito la schermata con il campo della password.
   Prima si vedeva solo lo sfondo e bisognava disconnettersi e ricollegarsi: l'app scambiava il monitor spento per un

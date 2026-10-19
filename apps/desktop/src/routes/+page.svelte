@@ -287,6 +287,97 @@
       await reloadDevices();
     }
   }
+  /** Export of "my devices" (ADR 0057): with the saved passwords, protected by one. */
+  let exportDialog = $state<{
+    withPasswords: boolean;
+    password: string;
+    confirm: string;
+    error: string;
+    busy: boolean;
+  } | null>(null);
+  /** An encrypted file being imported, waiting for its password. */
+  let importDialog = $state<{ content: string; password: string; error: string; busy: boolean } | null>(null);
+  let importInput = $state<HTMLInputElement | null>(null);
+  /** Outcome of the last export or import, shown above the list for a while. */
+  let devicesMessage = $state<{ text: string; error: boolean } | null>(null);
+  let devicesMessageTimer: ReturnType<typeof setTimeout> | undefined;
+  const MIN_FILE_PASSWORD = 8;
+  function showDevicesMessage(text: string, error = false) {
+    devicesMessage = { text, error };
+    clearTimeout(devicesMessageTimer);
+    devicesMessageTimer = setTimeout(() => (devicesMessage = null), 15000);
+  }
+  function openExport() {
+    exportDialog = { withPasswords: true, password: "", confirm: "", error: "", busy: false };
+  }
+  async function exportDevices(event: SubmitEvent) {
+    event.preventDefault();
+    if (!exportDialog || exportDialog.busy) return;
+    const { withPasswords, password, confirm } = exportDialog;
+    if (withPasswords && password.length < MIN_FILE_PASSWORD) {
+      exportDialog.error = `La password deve avere almeno ${MIN_FILE_PASSWORD} caratteri.`;
+      return;
+    }
+    if (withPasswords && password !== confirm) {
+      exportDialog.error = "Le due password non coincidono.";
+      return;
+    }
+    exportDialog.busy = true;
+    try {
+      const path = await invoke<string>("export_devices", { password: withPasswords ? password : null });
+      exportDialog = null;
+      showDevicesMessage(`Lista esportata in ${path}`);
+      addLog("info", `lista dei dispositivi esportata in ${path}`);
+    } catch (e) {
+      if (exportDialog) {
+        exportDialog.error = String(e);
+        exportDialog.busy = false;
+      }
+    }
+  }
+  async function pickImportFile(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    if (file.size > 4 * 1024 * 1024) {
+      showDevicesMessage("File troppo grande: non è una lista di dispositivi.", true);
+      return;
+    }
+    try {
+      const content = await file.text();
+      if (await invoke<boolean>("devices_file_locked", { content })) {
+        importDialog = { content, password: "", error: "", busy: false };
+      } else {
+        await importDevices(content, null);
+      }
+    } catch (e) {
+      showDevicesMessage(String(e), true);
+    }
+  }
+  type Imported = { devices: number; groups: number; tree: DeviceTree };
+  async function importDevices(content: string, password: string | null) {
+    const result = await invoke<Imported>("import_devices", { content, password });
+    setTree(result.tree);
+    const what = `${result.devices} ${result.devices === 1 ? "dispositivo" : "dispositivi"}`;
+    const folders = result.groups > 0 ? ` e ${result.groups} ${result.groups === 1 ? "cartella" : "cartelle"}` : "";
+    showDevicesMessage(`Importati ${what}${folders}.`);
+    addLog("info", `importati ${what}${folders} nella lista dei dispositivi`);
+  }
+  async function importLocked(event: SubmitEvent) {
+    event.preventDefault();
+    if (!importDialog || importDialog.busy) return;
+    importDialog.busy = true;
+    try {
+      await importDevices(importDialog.content, importDialog.password);
+      importDialog = null;
+    } catch (e) {
+      if (importDialog) {
+        importDialog.error = String(e);
+        importDialog.busy = false;
+      }
+    }
+  }
   async function undoMove() {
     if (!lastMove) return;
     const { previous } = lastMove;
@@ -370,7 +461,7 @@
   let appVersion = $state("");
   type Permissions = { required: boolean; screen: boolean; accessibility: boolean };
   let permissions = $state<Permissions | null>(null);
-  type UacSupport = { supported: boolean; active: boolean; toggleable: boolean };
+  type UacSupport = { supported: boolean; active: boolean; toggleable: boolean; outdated: boolean };
   let uac = $state<UacSupport | null>(null);
   let uacBusy = $state(false);
   /** Windows: the virtual monitor for PCs without one (ADR 0049). */
@@ -902,6 +993,19 @@
     try {
       uac = await invoke<UacSupport>("set_uac_support", { enable: !uac.active });
       addLog("info", uac.active ? "controllo finestre amministratore attivo" : "controllo finestre amministratore disattivato");
+    } catch (e) {
+      addLog("error", String(e));
+    } finally {
+      uacBusy = false;
+    }
+  }
+  /** Reinstalls the service with this version (it keeps its own copy of the app). */
+  async function updateUac() {
+    if (!uac || uacBusy) return;
+    uacBusy = true;
+    try {
+      uac = await invoke<UacSupport>("set_uac_support", { enable: true });
+      addLog("info", "servizio Windows aggiornato");
     } catch (e) {
       addLog("error", String(e));
     } finally {
@@ -1762,10 +1866,15 @@
         {#if uac.toggleable}
           <p class="hint small">
             Permette a chi ti assiste di usare anche le finestre di amministratore di Windows e la schermata
-            di blocco. Richiede i permessi di amministratore una volta.
+            di blocco. Con la password personale il PC resta raggiungibile anche dopo un riavvio, prima che
+            qualcuno entri in Windows. Richiede i permessi di amministratore una volta.
           </p>
           <div class="row">
-            {#if uac.active}
+            {#if uac.active && uac.outdated}
+              <button class="primary attention" disabled={uacBusy} onclick={updateUac}>Aggiorna</button>
+              <button class="icon-btn" disabled={uacBusy} onclick={toggleUac}>Disattiva</button>
+              <span class="muted small">attivo, da aggiornare per il collegamento dopo il riavvio</span>
+            {:else if uac.active}
               <button class="icon-btn" disabled={uacBusy} onclick={toggleUac}>Disattiva</button>
               <span class="muted small">attivo</span>
             {:else}
@@ -1967,18 +2076,31 @@
             <button class="icon-btn" disabled={picked.length === 0} onclick={openMoveDialog}>
               Sposta in…{picked.length > 0 ? ` (${picked.length})` : ""}
             </button>
+            <button class="icon-btn" title="Salva la lista in un file" onclick={openExport}>Esporta</button>
+            <button class="icon-btn" title="Aggiungi i dispositivi di un file esportato"
+              onclick={() => importInput?.click()}>Importa</button>
             <button class="icon-btn primary" onclick={stopOrganizing}>Fine</button>
           </div>
         {:else if devices.length > 0 || groups.length > 0}
-          <button class="icon-btn" title="Crea cartelle e sposta i dispositivi" onclick={startOrganizing}>
+          <button class="icon-btn" title="Crea cartelle, sposta, esporta e importa i dispositivi"
+            onclick={startOrganizing}>
             Organizza
           </button>
+        {:else}
+          <button class="icon-btn" title="Aggiungi i dispositivi di un file esportato"
+            onclick={() => importInput?.click()}>Importa</button>
         {/if}
+        <input class="hidden-file" type="file" accept=".json,application/json" bind:this={importInput}
+          onchange={pickImportFile} />
       </div>
       {#if organizing}
         <p class="hint small">
-          Seleziona i dispositivi (o una cartella intera) e premi "Sposta in…". Premi "Fine" quando hai finito.
+          Seleziona i dispositivi (o una cartella intera) e premi "Sposta in…". Con "Esporta" salvi la lista in
+          un file, con "Importa" aggiungi quella di un altro computer. Premi "Fine" quando hai finito.
         </p>
+      {/if}
+      {#if devicesMessage}
+        <p class="small" class:error={devicesMessage.error} class:hint={!devicesMessage.error}>{devicesMessage.text}</p>
       {/if}
       {#if lastMove}
         <div class="undo-bar small">
@@ -2239,6 +2361,64 @@
       <div class="actions">
         <button type="button" onclick={() => (groupDialog = null)}>Annulla</button>
         <button class="primary" type="submit" disabled={!groupDialog.name.trim()}>Salva</button>
+      </div>
+    </form>
+  </div>
+{/if}
+
+{#if exportDialog}
+  <div class="backdrop">
+    <form class="modal" onsubmit={exportDevices}>
+      <h2>Esporta la lista dei dispositivi</h2>
+      <p class="hint small">Il file viene salvato nella cartella Download.</p>
+      <label class="check">
+        <input type="checkbox" bind:checked={exportDialog.withPasswords} />
+        Includi le password salvate
+      </label>
+      {#if exportDialog.withPasswords}
+        <p class="hint small">
+          Con le password il file permette di entrare nei dispositivi senza conferma: viene cifrato con una
+          password che ti servirà per importarlo. Senza, contiene solo nomi e cartelle.
+        </p>
+        <!-- svelte-ignore a11y_autofocus -->
+        <input type="password" placeholder="Password del file (almeno {MIN_FILE_PASSWORD} caratteri)"
+          autocomplete="new-password" autofocus bind:value={exportDialog.password} />
+        <input type="password" placeholder="Ripeti la password" autocomplete="new-password"
+          bind:value={exportDialog.confirm} />
+      {:else}
+        <p class="hint small">
+          Il file conterrà solo nomi e cartelle: dopo l'importazione dovrai collegarti di nuovo con la password
+          personale di ogni dispositivo.
+        </p>
+      {/if}
+      {#if exportDialog.error}<p class="error">{exportDialog.error}</p>{/if}
+      <div class="actions">
+        <button type="button" onclick={() => (exportDialog = null)}>Annulla</button>
+        <button class="primary" type="submit" disabled={exportDialog.busy}>
+          {exportDialog.busy ? "Esportazione…" : "Esporta"}
+        </button>
+      </div>
+    </form>
+  </div>
+{/if}
+
+{#if importDialog}
+  <div class="backdrop">
+    <form class="modal" onsubmit={importLocked}>
+      <h2>Importa la lista dei dispositivi</h2>
+      <p class="hint small">
+        Il file è protetto: scrivi la password scelta quando è stato esportato. I dispositivi già presenti con
+        lo stesso ID vengono aggiornati, gli altri aggiunti.
+      </p>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input type="password" placeholder="Password del file" autocomplete="off" autofocus
+        bind:value={importDialog.password} />
+      {#if importDialog.error}<p class="error">{importDialog.error}</p>{/if}
+      <div class="actions">
+        <button type="button" onclick={() => (importDialog = null)}>Annulla</button>
+        <button class="primary" type="submit" disabled={importDialog.busy || !importDialog.password}>
+          {importDialog.busy ? "Importazione…" : "Importa"}
+        </button>
       </div>
     </form>
   </div>
@@ -3034,6 +3214,16 @@
   }
   .row-actions .primary {
     margin-top: 0;
+  }
+  .row-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .hidden-file {
+    display: none;
+  }
+  .modal input[type="password"] + input[type="password"] {
+    margin-top: 8px;
   }
   .undo-bar {
     display: flex;
