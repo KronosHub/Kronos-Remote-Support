@@ -2,6 +2,10 @@
 # (in-app updater, ADR 0023) as a release of this repository. Manual trigger only:
 #   gh workflow run release.yml -R KronosHub/Kronos-Remote-Support -f tag=v1.2.1
 #
+# One job creates the release as a draft, the four builds upload into it, and the last job
+# publishes it once they all succeed. Before, every build created the release on its own and two
+# of them could create it at the same second (v1.8.2: Windows files in a second copy).
+#
 # Secrets: TAURI_SIGNING_PRIVATE_KEY(+_PASSWORD) to sign update packages,
 # APPLE_CERTIFICATE(+_PASSWORD), APPLE_SIGNING_IDENTITY, KEYCHAIN_PASSWORD for macOS code signing
 # (self-signed stable identity, imported by hand: Tauri's own import rejects untrusted certs).
@@ -18,7 +22,50 @@ permissions:
   contents: write
 
 jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      id: ${{ steps.draft.outputs.id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      # Release notes = CHANGELOG.md from this version's section down (10 versions), so the
+      # app can show every change newer than the installed version. Fails without a section.
+      - name: Draft release
+        id: draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          awk -v v="${TAG#v}" '
+            /^## / { if (!on && ($2 == v)) on = 1; if (on && ++n > 10) exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          [ -s notes.md ] || { echo "::error::CHANGELOG.md has no section for ${TAG#v}"; exit 1; }
+          {
+            echo 'Si installa dal pulsante "Aggiornamenti" nell'"'"'app.'
+            echo 'Kronos Quick Support (file KronosQuickSupport_*): versione senza installazione per farsi assistere.'
+            echo 'KronosVirtualMonitor.exe: monitor virtuale 1920×1080 per PC Windows senza monitor (si installa anche dall'"'"'app, sezione Aggiornamenti).'
+            echo
+            cat notes.md
+          } > body.md
+          # A re-run reuses the release of this tag (draft or not) instead of making another.
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            -q ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1)
+          if [ -z "$id" ]; then
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag --draft \
+              --title "Kronos Remote Support $TAG" --notes-file body.md
+            id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+              -q ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1)
+          fi
+          [ -n "$id" ] || { echo "::error::no release for $TAG"; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
   desktop:
+    needs: release
     strategy:
       fail-fast: false
       matrix:
@@ -79,27 +126,17 @@ jobs:
           security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
           rm "$RUNNER_TEMP/cert.p12"
           security find-identity -p codesigning "$kc"
-      # Release notes = CHANGELOG.md from this version's section down (10 versions), so the
-      # app can show every change newer than the installed version. Fails without a section.
+      # The draft's notes also go into latest.json, where the app reads them.
       - name: Release notes
         id: notes
         shell: bash
         env:
-          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          awk -v v="${TAG#v}" '
-            /^## / { if (!on && ($2 == v)) on = 1; if (on && ++n > 10) exit }
-            on { print }
-          ' CHANGELOG.md > notes.md
-          [ -s notes.md ] || { echo "::error::CHANGELOG.md has no section for ${TAG#v}"; exit 1; }
           {
             echo 'body<<EOF_NOTES'
-            echo 'Si installa dal pulsante "Aggiornamenti" nell'"'"'app.'
-            echo 'Kronos Quick Support (file KronosQuickSupport_*): versione senza installazione per farsi assistere.'
-            echo 'KronosVirtualMonitor.exe: monitor virtuale 1920×1080 per PC Windows senza monitor (si installa anche dall'"'"'app, sezione Aggiornamenti).'
-            echo
-            cat notes.md
+            gh api "repos/$GITHUB_REPOSITORY/releases/${{ needs.release.outputs.id }}" -q .body
             echo 'EOF_NOTES'
           } >> "$GITHUB_OUTPUT"
       # Windows: the virtual monitor program (ADR 0049), bundled in the installer (app updates
@@ -123,11 +160,10 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_SIGNING_IDENTITY || '' }}
         with:
           projectPath: apps/desktop
+          # The draft made by the first job; the tag turns its "untagged" links into real ones.
+          releaseId: ${{ needs.release.outputs.id }}
           tagName: ${{ inputs.tag }}
-          releaseName: Kronos Remote Support ${{ inputs.tag }}
           releaseBody: ${{ steps.notes.outputs.body }}
-          releaseDraft: false
-          prerelease: false
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
@@ -168,3 +204,21 @@ jobs:
               gh release upload "$TAG" KronosVirtualMonitor.exe --clobber -R "${{ github.repository }}" ;;
           esac
           gh release upload "$TAG" "$file" --clobber -R "${{ github.repository }}"
+
+  publish:
+    needs: [release, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      # Each build merges its platforms into latest.json: check none was lost before the
+      # apps can see the version (4 builds: 11 platforms).
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p latest.json
+          count=$(jq '.platforms | length' latest.json)
+          [ "$count" -ge 11 ] || { echo "::error::latest.json has $count platforms, expected 11: release left as a draft"; exit 1; }
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/${{ needs.release.outputs.id }}" \
+            -F draft=false -f make_latest=true --jq '.html_url'

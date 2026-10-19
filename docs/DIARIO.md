@@ -565,3 +565,18 @@
 - Fuori da Organizza la lista non sposta né modifica nulla; in Organizza selezione multipla, "Sposta in…" con
   conferma e Annulla per 10 s. ADR 0054. Solo interfaccia: backend invariato.
 - Controllata con dati finti in Chrome headless.
+
+## 2026-10-19 — Campo password invisibile sul Mac con monitor in stop (v1.8.3)
+- Segnalazione: collegandosi a questo Mac dal portatile si vedeva lo sfondo ma non il campo della password; serviva
+  disconnettersi e ricollegarsi.
+- Causa dal log dell'host: a ogni primo collegamento "no monitor: sharing a virtual one". Il monitor in stop non è
+  tra i display attivi, quindi l'host creava lo schermo virtuale (ADR 0048) mentre la schermata di blocco compariva
+  sul monitor vero. Al secondo collegamento il monitor era acceso.
+- Correzione (ADR 0055): monitor in stop riconosciuto e risvegliato, attesa fino a 5 s; schermo virtuale lasciato se
+  un monitor vero torna attivo. Provato su questo Mac con `pmset displaysleepnow`: Asleep, poi On in 20 ms.
+- Nota: gli strumenti locali in scratchpad erano stati in parte puliti dal sistema (manca `settings.toml` di rustup
+  e cmake): servono `RUSTUP_TOOLCHAIN=stable-aarch64-apple-darwin` e cmake da `pip install cmake`
+  con `CMAKE_POLICY_VERSION_MINIMUM=3.5`.
+- Workflow di release: con la 1.8.2 due compilazioni avevano creato la release nello stesso secondo (i file Windows
+  erano finiti in una seconda copia, spostati a mano). Ora un primo job crea la release come bozza, le quattro
+  compilazioni caricano lì (`releaseId`) e un job finale la pubblica solo se `latest.json` ha tutte le 11 piattaforme.

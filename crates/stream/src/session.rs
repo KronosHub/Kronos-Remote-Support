@@ -179,6 +179,10 @@ pub async fn serve_host(
     mut on_event: impl FnMut(HostEvent),
 ) {
     let allow_control = config.allow_control;
+    // No display sleep or screen lock while someone is controlling this machine; a monitor
+    // already asleep is woken up, so the login or lock screen is on it (ADR 0055).
+    let awake = crate::awake::KeepAwake::new();
+    awake.user_active();
     // A Mac without a monitor gets a virtual one for the session (ADR 0048).
     let mut screen_keeper: Option<VirtualScreen> = None;
     ensure_screen(&config, &mut screen_keeper).await;
@@ -260,8 +264,6 @@ pub async fn serve_host(
     let mut reported_error: Option<String> = None;
     // Shared only once the viewer turns it on (`ClipboardMode`).
     let mut clipboard = ClipboardShare::new(files);
-    // No display sleep or screen lock while someone is controlling this machine.
-    let awake = crate::awake::KeepAwake::new();
     // Ends the session if the viewer goes silent (its app hung or the network died
     // without the connection noticing).
     let mut last_heard = Instant::now();
@@ -380,6 +382,11 @@ pub async fn serve_host(
                 if last_heard.elapsed() > PEER_TIMEOUT {
                     tracing::warn!("no message from the viewer for {:?}, ending", last_heard.elapsed());
                     break "il partner non risponde".to_owned();
+                }
+                if monitor_back(&screen_keeper).await {
+                    // Without the virtual screen its capture ends and restarts on the real one.
+                    tracing::info!("a monitor is on again: leaving the virtual screen");
+                    screen_keeper = None;
                 }
             }
             msg = recv(&channel) => match heard(&mut last_heard, msg) {
@@ -691,15 +698,32 @@ type VirtualScreen = Arc<capture::virtual_display::VirtualDisplay>;
 #[cfg(not(target_os = "macos"))]
 enum VirtualScreen {}
 
+/// How long a sleeping monitor gets to wake up before the session falls back to a
+/// virtual one.
+#[cfg(target_os = "macos")]
+const WAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// macOS: with no monitor at all, makes a virtual one (kept in `keeper`) so there is
-/// something to share. Elsewhere, nothing (a missing monitor leaves the session waiting).
+/// something to share. A monitor that is only asleep (being woken by `KeepAwake`) is waited
+/// for instead: the login or lock screen appears there. Elsewhere, nothing (a missing
+/// monitor leaves the session waiting).
 #[cfg(target_os = "macos")]
 async fn ensure_screen(config: &StreamConfig, keeper: &mut Option<VirtualScreen>) {
+    use capture::virtual_display::{Monitors, monitors};
     if keeper.is_some() || !matches!(config.source, crate::Source::Screen { .. }) {
         return;
     }
     let made = tokio::task::spawn_blocking(|| {
-        let none = capture::virtual_display::no_monitor()
+        let mut state = monitors();
+        if state == Monitors::Asleep {
+            tracing::info!("the monitor is asleep: waking it up");
+            let deadline = Instant::now() + WAKE_TIMEOUT;
+            while state == Monitors::Asleep && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(200));
+                state = monitors();
+            }
+        }
+        let none = state != Monitors::On
             || match capture::displays() {
                 Ok(displays) => displays.is_empty(),
                 Err(e) => matches!(e, capture::CaptureError::NoDisplay),
@@ -719,6 +743,22 @@ async fn ensure_screen(config: &StreamConfig, keeper: &mut Option<VirtualScreen>
 
 #[cfg(not(target_os = "macos"))]
 async fn ensure_screen(_config: &StreamConfig, _keeper: &mut Option<VirtualScreen>) {}
+
+/// macOS: true when the session shares a virtual screen but a real monitor is on again
+/// (woken up late, or plugged in): the virtual one should go, so the capture moves there.
+#[cfg(target_os = "macos")]
+async fn monitor_back(keeper: &Option<VirtualScreen>) -> bool {
+    use capture::virtual_display::{Monitors, monitors};
+    keeper.is_some()
+        && tokio::task::spawn_blocking(|| monitors() == Monitors::On)
+            .await
+            .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn monitor_back(_keeper: &Option<VirtualScreen>) -> bool {
+    false
+}
 
 #[derive(Debug, Clone)]
 pub enum ViewerEvent {

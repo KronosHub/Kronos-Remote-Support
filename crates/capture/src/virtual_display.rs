@@ -42,15 +42,51 @@ unsafe extern "C" {
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
+    fn CGGetOnlineDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
 }
 
-/// True when the Mac has no active display at all (no monitor connected, lid closed
-/// without one...), i.e. nothing to capture without a virtual one.
-pub fn no_monitor() -> bool {
+/// The Mac's real monitors (the virtual display left out).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Monitors {
+    /// At least one is on and can be captured.
+    On,
+    /// Connected but all asleep (display sleep): they come back with user activity, and
+    /// the login or lock screen shows up on them, not on a virtual display.
+    Asleep,
+    /// None at all (no monitor connected, lid closed without one...).
+    None,
+}
+
+const MAX_DISPLAYS: usize = 32;
+
+/// The displays CoreGraphics lists: `online` ones include those asleep, active ones are
+/// drawing. `None` when the call fails.
+fn display_list(online: bool) -> Option<Vec<u32>> {
+    let mut ids = [0u32; MAX_DISPLAYS];
     let mut count = 0u32;
-    // SAFETY: with a null list, CoreGraphics only writes the number of active displays.
-    let error = unsafe { CGGetActiveDisplayList(0, std::ptr::null_mut(), &mut count) };
-    error == 0 && count == 0
+    // SAFETY: the list has room for `MAX_DISPLAYS` ids and CoreGraphics writes at most that.
+    let error = unsafe {
+        if online {
+            CGGetOnlineDisplayList(MAX_DISPLAYS as u32, ids.as_mut_ptr(), &mut count)
+        } else {
+            CGGetActiveDisplayList(MAX_DISPLAYS as u32, ids.as_mut_ptr(), &mut count)
+        }
+    };
+    (error == 0).then(|| ids[..(count as usize).min(MAX_DISPLAYS)].to_vec())
+}
+
+/// The state of the real monitors; `On` when CoreGraphics cannot tell (nothing virtual is
+/// made then).
+pub fn monitors() -> Monitors {
+    let virtual_id = current().map(|d| d.id);
+    let real = |online| {
+        display_list(online).map(|ids| ids.into_iter().filter(|&id| Some(id) != virtual_id).count())
+    };
+    match (real(false), real(true)) {
+        (Some(0), Some(0)) => Monitors::None,
+        (Some(0), _) => Monitors::Asleep,
+        _ => Monitors::On,
+    }
 }
 
 /// The serial queue the display reports on (created once, never released).
@@ -100,8 +136,14 @@ impl VirtualDisplay {
 
 /// The virtual display shared by the sessions that need one, created on first use and
 /// removed when the last of them drops it.
+static CURRENT: Mutex<Weak<VirtualDisplay>> = Mutex::new(Weak::new());
+
+/// The shared virtual display, if one exists now.
+fn current() -> Option<Arc<VirtualDisplay>> {
+    CURRENT.lock().unwrap().upgrade()
+}
+
 pub fn shared() -> Result<Arc<VirtualDisplay>> {
-    static CURRENT: Mutex<Weak<VirtualDisplay>> = Mutex::new(Weak::new());
     let mut current = CURRENT.lock().unwrap();
     if let Some(display) = current.upgrade() {
         return Ok(display);

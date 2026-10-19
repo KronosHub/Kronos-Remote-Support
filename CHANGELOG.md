@@ -2,6 +2,11 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.8.3 — 2026-10-19
+- Mac controllato con il monitor in stop: collegandoti ora vedi subito la schermata con il campo della password.
+  Prima si vedeva solo lo sfondo e bisognava disconnettersi e ricollegarsi: l'app scambiava il monitor spento per un
+  Mac senza monitor e mostrava uno schermo virtuale. Ora risveglia il monitor e mostra quello.
+
 ## 1.8.2 — 2026-10-16
 - I miei dispositivi: per mettere i dispositivi nelle cartelle ora si preme **Organizza**. Selezioni uno o più
   dispositivi (o una cartella intera), premi **Sposta in…**, scegli la cartella e confermi con **Sposta**; per qualche

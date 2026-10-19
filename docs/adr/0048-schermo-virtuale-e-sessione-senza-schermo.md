@@ -1,7 +1,7 @@
 # ADR 0048 — Schermo virtuale sul Mac senza monitor; sessione aperta senza schermo
 
 **Data:** 2026-10-15
-**Stato:** accettato
+**Stato:** accettato; un monitor in stop non conta più come "senza monitor" (ADR 0055)
 
 ## Contesto
 Collegandosi a un PC Windows o a un Mac senza monitor, la sessione si chiudeva dopo ~2 s: la cattura non trova
