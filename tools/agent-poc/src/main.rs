@@ -42,7 +42,7 @@ fn real_main() -> anyhow::Result<()> {
             let name = args.get(2).cloned().unwrap_or_else(|| service.into());
             let product = args.get(3).cloned().unwrap_or_else(|| "poc".into());
             let app = args.get(4).map(std::path::PathBuf::from);
-            agent::windows::run_service(&name, &product, app.as_deref())?;
+            agent::windows::run_service(&name, &product, app.as_deref(), None)?;
         }
         Some("--agent") => {
             let product = args.get(2).cloned().unwrap_or_else(|| "poc".into());
