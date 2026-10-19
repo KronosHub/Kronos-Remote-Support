@@ -53,13 +53,13 @@ jobs:
             cat notes.md
           } > body.md
           # A re-run reuses the release of this tag (draft or not) instead of making another.
+          # The id of a new one comes from the create call: a fresh draft is not always listed yet.
+          # The tag exists (checked out above), so creating the release never makes a new tag.
           id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
-            -q ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1)
+            -q ".[] | select(.tag_name == \"$TAG\") | .id" | sed -n 1p)
           if [ -z "$id" ]; then
-            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag --draft \
-              --title "Kronos Remote Support $TAG" --notes-file body.md
-            id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
-              -q ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1)
+            id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" -f tag_name="$TAG" \
+              -f name="Kronos Remote Support $TAG" -F body=@body.md -F draft=true -q .id)
           fi
           [ -n "$id" ] || { echo "::error::no release for $TAG"; exit 1; }
           echo "id=$id" >> "$GITHUB_OUTPUT"
