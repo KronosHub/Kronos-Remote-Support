@@ -2,6 +2,9 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.8.6 — 2026-10-20
+- Windows: aprendo **Trasferimento file** l'app si bloccava del tutto. Ora la finestra si apre normalmente.
+
 ## 1.8.5 — 2026-10-19
 - Windows con Desktop remoto: se la sessione dell'utente resta aperta ma scollegata (finestra RDP chiusa senza
   uscire), il servizio non avvia più la copia per la schermata di accesso, che con lo stesso ID avrebbe disturbato

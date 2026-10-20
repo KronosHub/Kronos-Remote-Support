@@ -612,3 +612,11 @@
 - Rileggendo il codice della 1.8.4: in quel caso il servizio avrebbe avviato l'host prima dell'accesso con lo stesso
   ID dell'app nella sessione scollegata. Corretto: l'host parte solo senza utenti in nessuna sessione. Messaggio
   chiaro al viewer quando la sessione è scollegata.
+
+## 2026-10-20 — Trasferimento file bloccava l'app su Windows (v1.8.6)
+- Segnalazione: su Windows, aprendo il trasferimento file l'app si bloccava del tutto. Causa: `open_files_window`
+  era un comando sincrono che crea una finestra; su Windows Tauri esegue i comandi sincroni sul thread principale,
+  che serve anche alla finestra nuova (stallo). Ora il comando è asincrono, come vanno create le finestre.
+- Discusso il Microsoft Store: possibile per l'app completa con il suo installer EXE (serve la firma con un
+  certificato riconosciuto: SignPath o certificato a pagamento), pubblico privato limitato agli account Microsoft
+  personali; Quick Support resta sul download diretto. In attesa della firma.

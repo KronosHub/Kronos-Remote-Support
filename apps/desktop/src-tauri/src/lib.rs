@@ -490,8 +490,10 @@ pub(crate) fn open_view_window(app: &AppHandle, session: u64, peer: &str) {
 
 /// Opens (or brings forward) the file manager of a session we view (ADR 0053): this
 /// computer's folders on one side, the partner's on the other.
+/// Async on purpose: a window built from a synchronous command deadlocks the whole app on
+/// Windows (Tauri runs those on the main thread, which the new window needs too).
 #[tauri::command]
-fn open_files_window(app: AppHandle, session: u64, peer: String) -> Result<(), String> {
+async fn open_files_window(app: AppHandle, session: u64, peer: String) -> Result<(), String> {
     let label = format!("files-{session}");
     if let Some(window) = app.get_webview_window(&label) {
         let _ = window.unminimize();
