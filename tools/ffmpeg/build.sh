@@ -62,7 +62,7 @@ case "$target" in
     ;;
   x86_64-pc-windows-msvc)
     (cd "$src" && ./configure "${common[@]}" \
-      --toolchain=msvc --target-os=win64 --arch=x86_64 \
+      --toolchain=msvc --target-os=win64 --arch=x86_64 --extra-cflags=-MD \
       --enable-swscale --enable-mediafoundation --enable-encoder=h264_mf)
     ;;
   *)

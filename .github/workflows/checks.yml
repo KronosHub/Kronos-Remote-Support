@@ -114,8 +114,8 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # Windows: the same minimal FFmpeg with Media Foundation, built with MSVC from the
-      # MSYS2 shell of the runner (ADR 0058).
-      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      # MSYS2 shell of the runner (ADR 0058). MSVC is set up for this step only: exported to
+      # the others it would make rustc pick Git's link.exe.
       - name: FFmpeg cache (Windows)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -126,10 +126,11 @@ jobs:
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'ffmpeg'
           if (-not (Test-Path "$dir\lib\avcodec.lib")) {
+            $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
             $env:MSYS2_PATH_TYPE = 'inherit'
             $env:CHERE_INVOKING = '1'
-            # MSYS2's own link.exe would shadow MSVC's linker.
-            C:\msys64\usr\bin\bash.exe -lc 'pacman -Sy --noconfirm --needed make nasm diffutils patch && rm -f /usr/bin/link.exe && tools/ffmpeg/build.sh x86_64-pc-windows-msvc "$(cygpath -u "$RUNNER_TEMP")/ffmpeg"'
+            cmd /c "call `"$vcvars`" && C:\msys64\usr\bin\bash.exe -lc `"tools/ffmpeg/ci-windows.sh '$dir'`""
             if ($LASTEXITCODE) { exit 1 }
           }
           "FFMPEG_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
