@@ -125,7 +125,7 @@ cargo run --release -p capture-poc -- --seconds 10         # cattura schermo →
 | `crates/protocol` | Messaggi del canale di controllo |
 | `crates/signaling-proto` | Messaggi JSON tra client e server |
 | `crates/capture` | Cattura dello schermo (macOS: ScreenCaptureKit) |
-| `crates/codec` | Codifica video H.264 (OpenH264) |
+| `crates/codec` | Codifica video H.264: chip video (VideoToolbox, Media Foundation via FFmpeg minimo, `tools/ffmpeg`) o OpenH264 |
 | `tools/` | Prototipi a riga di comando (`capture-poc`, `peer-poc`) |
 | `deploy/` | Signaling su Cloudflare Workers (`deploy/cloudflare`) e installazione del server su VM Linux (systemd + Caddy, HTTPS automatico) |
 | `docs/` | Architettura, roadmap, stato, diario e decisioni (ADR) |
@@ -181,3 +181,8 @@ Kronos Quick Support non controlla gli aggiornamenti.
 ## Licenza
 
 [MIT](LICENSE) © 2026 Kronos Informatica
+
+L'app per macOS e Windows include [FFmpeg](https://ffmpeg.org) (libavcodec, libavutil, libswscale) sotto licenza
+[LGPL 2.1 o successiva](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html), in una versione ridotta compilata da
+[`tools/ffmpeg/build.sh`](tools/ffmpeg/build.sh) con le modifiche in [`tools/ffmpeg/patches`](tools/ffmpeg/patches):
+chiunque può ricompilarla e ricollegarla all'app partendo da questo repository.

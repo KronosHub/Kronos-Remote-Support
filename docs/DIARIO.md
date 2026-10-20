@@ -627,3 +627,14 @@
   (ADR 0042). macOS ridispone gli schermi rimasti dopo il distacco: la posizione letta al riavvio della cattura
   poteva essere quella vecchia e non veniva più aggiornata, quindi l'area del mouse restava spostata.
 - Ora l'host ricontrolla ogni 2 s la posizione dello schermo condiviso e, se cambia, aggiorna l'area dell'input.
+
+## 2026-10-20 — Codifica video hardware (v1.9.0)
+- Richiesta: testo sfocato rispetto a VNC; dai log, OpenH264 troppo lento a 2560×1440 e risoluzione ridotta a
+  1920×1080. L'utente ha chiesto la codifica sul chip video, con attenzione al carico del sistema.
+- Primo tentativo con chiamate dirette a VideoToolbox interrotto (filtro di sicurezza automatico); scelto con l'utente
+  un FFmpeg minimo come ponte verso i codificatori hardware, con due patch (pacchetto subito, bitrate al volo) e uno
+  strato C. Mac senza copie (CVPixelBuffer di ScreenCaptureKit direttamente al codificatore). ADR 0058.
+- Misurato su questo Mac con uno strumento firmato come l'app (per il permesso di registrazione schermo): processore
+  da 20,3 s a 1,2–1,6 s su 20 s, 22 → 29 fps, latenza 115 → 17 ms; decodifica WebCodecs verificata in Chrome.
+- Windows (Media Foundation + swscale) compilato nei workflow su un ramo di prova; prima prova reale sul PC
+  dell'utente.

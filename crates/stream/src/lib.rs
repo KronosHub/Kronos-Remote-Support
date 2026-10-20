@@ -472,11 +472,13 @@ fn encode_loop(
         let ts = frame.captured_at.duration_since(start).as_millis() as u64;
         // Full size on the media engine: the captured image as it is, no copy. Otherwise
         // BGRA, shrunk on the CPU while the bandwidth is low.
+        #[cfg(target_os = "macos")]
         let native = match (&frame.native, scale) {
-            #[cfg(target_os = "macos")]
             (Some(image), 100) => encoder.encode_native(image.as_ptr(), ts),
             _ => None,
         };
+        #[cfg(not(target_os = "macos"))]
+        let native: Option<codec::Result<Option<codec::EncodedFrame>>> = None;
         let result = match native {
             Some(result) => result,
             None => {

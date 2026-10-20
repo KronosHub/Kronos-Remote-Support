@@ -2,6 +2,14 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.9.0 — 2026-10-20
+- Il video del computer controllato ora è compresso dal chip video (Mac: VideoToolbox; Windows: Intel, AMD o NVIDIA
+  tramite Media Foundation) invece che dal processore. Sul Mac di prova il carico è sceso da un core intero a circa
+  il 7%, la fluidità è salita da 22 a 29 fotogrammi al secondo e il ritardo di circa 100 ms.
+- Testo più nitido: non serve più abbassare la risoluzione per alleggerire il computer, lo schermo resta a piena
+  risoluzione (fino a 2560×1600).
+- Se il chip video non è disponibile l'app continua da sola con la compressione di prima.
+
 ## 1.8.7 — 2026-10-20
 - Computer controllato con più monitor: staccandone uno durante la sessione, i clic del mouse potevano finire nel
   punto sbagliato (spostati in alto) sullo schermo rimasto. Ora l'app segue la nuova posizione dello schermo e il

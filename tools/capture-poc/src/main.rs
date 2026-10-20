@@ -130,11 +130,13 @@ fn main() -> Result<()> {
 
         let t0 = Instant::now();
         let ts = frame.captured_at.duration_since(start).as_millis() as u64;
+        #[cfg(target_os = "macos")]
         let encoded = match &frame.native {
-            #[cfg(target_os = "macos")]
             Some(image) => encoder.encode_native(image.as_ptr(), ts),
-            _ => None,
+            None => None,
         };
+        #[cfg(not(target_os = "macos"))]
+        let encoded: Option<codec::Result<Option<codec::EncodedFrame>>> = None;
         let encoded = match encoded {
             Some(result) => result?,
             None => encoder.encode_bgra(&frame.pixels(), frame.width, frame.height, ts)?,

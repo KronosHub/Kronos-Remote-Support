@@ -117,15 +117,20 @@ pub fn new_encoder(
     settings: &EncoderSettings,
     hardware: bool,
 ) -> Result<(Box<dyn VideoEncoder>, Option<CodecError>)> {
-    let mut failure = None;
     #[cfg(kronos_hw)]
-    if hardware {
+    let failure = if hardware {
         match hardware::HwEncoder::new(settings) {
             Ok(encoder) => return Ok((Box::new(encoder), None)),
-            Err(e) => failure = Some(e),
+            Err(e) => Some(e),
         }
-    }
-    let _ = hardware;
+    } else {
+        None
+    };
+    #[cfg(not(kronos_hw))]
+    let failure = {
+        let _ = hardware;
+        None
+    };
     Ok((Box::new(H264Encoder::new(settings)?), failure))
 }
 

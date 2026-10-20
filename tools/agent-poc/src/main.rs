@@ -68,6 +68,7 @@ fn real_main() -> anyhow::Result<()> {
                 max_fps: 15,
                 max_size: Some((1280, 720)),
                 show_cursor: true,
+                native: false,
             };
             let mut cap = agent::client::AgentCapturer::start(
                 || async { agent::windows::connect("poc").await },
@@ -106,6 +107,7 @@ fn real_main() -> anyhow::Result<()> {
                     max_fps: 5,
                     max_size: Some((640, 360)),
                     show_cursor: true,
+                    native: false,
                 },
             )
             .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -157,6 +159,7 @@ fn real_main() -> anyhow::Result<()> {
                     max_fps: 5,
                     max_size: Some((640, 360)),
                     show_cursor: true,
+                    native: false,
                 },
             )
             .map_err(|e| anyhow::anyhow!("{e}"))?;
