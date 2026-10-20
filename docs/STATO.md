@@ -132,7 +132,10 @@
 ## Da fare per l'open source (ADR 0039, 0040)
 0. Archiviare il vecchio repository delle release quando non restano installazioni precedenti alla 1.2.1 (la 1.2.1 è
    pubblicata anche lì, solo `latest.json`).
-1. SignPath Foundation (firma gratuita; policy e privacy già nel README) e segnalazione falso positivo a WithSecure.
+1. SignPath Foundation: domanda inviata il 2026-10-20, in attesa di risposta. All'approvazione: app GitHub di
+   SignPath sul repository, secret `SIGNPATH_API_TOKEN`, firma nel workflow (prima i programmi, poi gli installer);
+   poi Microsoft Store con l'installer EXE firmato (account individuale gratuito, nome da prenotare). Segnalazione
+   falso positivo a WithSecure ancora da fare.
 2. Facoltativi: interruttore host per gli appunti (`allow_clipboard`), segreto personale cifrato con DPAPI su
    Windows, TURN di Cloudflare con credenziali temporanee, ID LAN mostrato come "non verificato", rimozione del
    servizio Windows alla disinstallazione.
