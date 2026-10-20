@@ -2,6 +2,11 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.8.7 — 2026-10-20
+- Computer controllato con più monitor: staccandone uno durante la sessione, i clic del mouse potevano finire nel
+  punto sbagliato (spostati in alto) sullo schermo rimasto. Ora l'app segue la nuova posizione dello schermo e il
+  mouse torna preciso entro un paio di secondi.
+
 ## 1.8.6 — 2026-10-20
 - Windows: aprendo **Trasferimento file** l'app si bloccava del tutto. Ora la finestra si apre normalmente.
 

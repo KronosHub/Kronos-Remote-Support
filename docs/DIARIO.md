@@ -620,3 +620,10 @@
 - Discusso il Microsoft Store: possibile per l'app completa con il suo installer EXE (serve la firma con un
   certificato riconosciuto: SignPath o certificato a pagamento), pubblico privato limitato agli account Microsoft
   personali; Quick Support resta sul download diretto. In attesa della firma.
+
+## 2026-10-20 — Mouse spostato dopo aver staccato un monitor (v1.8.7)
+- Segnalazione: controllando da Windows il Mac 160 809 053 e staccando il monitor in uso, video e tastiera
+  funzionavano ma i clic finivano più in alto. Dal log del Mac: display 1 sparito, cattura ripresa sul display 7
+  (ADR 0042). macOS ridispone gli schermi rimasti dopo il distacco: la posizione letta al riavvio della cattura
+  poteva essere quella vecchia e non veniva più aggiornata, quindi l'area del mouse restava spostata.
+- Ora l'host ricontrolla ogni 2 s la posizione dello schermo condiviso e, se cambia, aggiorna l'area dell'input.

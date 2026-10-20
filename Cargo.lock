@@ -1464,7 +1464,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-remoto"
-version = "1.8.6"
+version = "1.8.7"
 dependencies = [
  "agent",
  "anyhow",

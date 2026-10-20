@@ -22,6 +22,8 @@ const MIN_KEYFRAME_REQUEST_GAP: Duration = Duration::from_millis(500);
 const PEER_TIMEOUT: Duration = Duration::from_secs(20);
 /// How often that is checked.
 const LIVENESS_CHECK: Duration = Duration::from_secs(5);
+/// How often the host checks where the shared screen sits (see `serve_host`).
+const BOUNDS_CHECK: Duration = Duration::from_secs(2);
 
 /// Notes that the partner just spoke (any control message, even one we ignore).
 fn heard<T>(at: &mut Instant, value: T) -> T {
@@ -278,6 +280,10 @@ pub async fn serve_host(
     // without the connection noticing).
     let mut last_heard = Instant::now();
     let mut liveness = tokio::time::interval(LIVENESS_CHECK);
+    // Where the shared screen sits can change while it is captured: unplugging another
+    // monitor rearranges the rest, and its position read at the restart may still be the
+    // old one. The input area follows it, or clicks land off target.
+    let mut bounds_check = tokio::time::interval(BOUNDS_CHECK);
     // This computer's own mouse and keyboard, blocked on the viewer's request; `released`
     // fires when the person here takes them back (Esc ×3).
     let mut local_block: Option<input::block::LocalBlock> = None;
@@ -385,6 +391,29 @@ pub async fn serve_host(
                         let retry = if handle.is_some() { RESTART_RETRY } else { NO_SCREEN_RETRY };
                         tracing::debug!("cannot (re)start the screen capture: {e:#}");
                         restart_at = Some(tokio::time::Instant::now() + retry);
+                    }
+                }
+            }
+            _ = bounds_check.tick(), if input.is_some() && restart_at.is_none() => {
+                let Some(current) = handle.as_mut() else { continue };
+                let id = current.display_id;
+                let now = tokio::task::spawn_blocking(move || {
+                    capture::displays()
+                        .ok()?
+                        .into_iter()
+                        .find(|d| d.id == id)
+                        .map(|d| d.bounds)
+                })
+                .await
+                .ok()
+                .flatten();
+                if let Some(bounds) = now
+                    && bounds != current.bounds
+                {
+                    tracing::info!(display = id, old = ?current.bounds, new = ?bounds, "shared screen moved, following it");
+                    current.bounds = bounds;
+                    if let Some(sink) = &input {
+                        sink.set_area(area(bounds));
                     }
                 }
             }
