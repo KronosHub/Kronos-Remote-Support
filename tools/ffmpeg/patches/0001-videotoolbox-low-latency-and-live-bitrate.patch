@@ -1,0 +1,82 @@
+--- a/libavcodec/videotoolboxenc.c	2026-10-20 16:38:36
++++ b/libavcodec/videotoolboxenc.c	2026-10-20 16:38:36
+@@ -279,6 +279,10 @@
+     int max_slice_bytes;
+     int power_efficient;
+     int max_ref_frames;
++
++    /* Kronos: bitrate the session runs at, so a change of avctx->bit_rate between
++     * frames (adaptive streaming) is applied to the running session. */
++    int64_t applied_bit_rate;
+ } VTEncContext;
+ 
+ static void vtenc_free_buf_node(BufNode *info)
+@@ -2576,7 +2580,43 @@
+     *dict_out = dict;
+     return 0;
+ }
++
++/* Kronos: applies a new avctx->bit_rate (and rc_max_rate) to the running session. */
++static void vtenc_update_bit_rate(AVCodecContext *avctx, VTEncContext *vtctx)
++{
++    SInt32 bit_rate = avctx->bit_rate;
++    CFNumberRef num;
+ 
++    if (avctx->codec_id != AV_CODEC_ID_H264 || bit_rate <= 0 ||
++        avctx->bit_rate == vtctx->applied_bit_rate)
++        return;
++    vtctx->applied_bit_rate = avctx->bit_rate;
++
++    num = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &bit_rate);
++    if (num) {
++        VTSessionSetProperty(vtctx->session, kVTCompressionPropertyKey_AverageBitRate, num);
++        CFRelease(num);
++    }
++    if (avctx->rc_max_rate > 0) {
++        int64_t bytes = avctx->rc_max_rate >> 3, seconds = 1;
++        CFNumberRef values[2] = {
++            CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt64Type, &bytes),
++            CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt64Type, &seconds),
++        };
++        if (values[0] && values[1]) {
++            CFArrayRef limits = CFArrayCreate(kCFAllocatorDefault, (const void **)values, 2,
++                                              &kCFTypeArrayCallBacks);
++            if (limits) {
++                VTSessionSetProperty(vtctx->session,
++                                     kVTCompressionPropertyKey_DataRateLimits, limits);
++                CFRelease(limits);
++            }
++        }
++        if (values[0]) CFRelease(values[0]);
++        if (values[1]) CFRelease(values[1]);
++    }
++}
++
+ static int vtenc_send_frame(AVCodecContext *avctx,
+                             VTEncContext   *vtctx,
+                             const AVFrame  *frame)
+@@ -2591,6 +2631,8 @@
+     if (!node)
+         return AVERROR(ENOMEM);
+ 
++    vtenc_update_bit_rate(avctx, vtctx);
++
+     status = create_cv_pixel_buffer(avctx, frame, &cv_img, node);
+     if (status)
+         goto out;
+@@ -2665,6 +2707,15 @@
+         }
+ 
+         vtctx->frame_ct_in++;
++
++        /* Kronos: without B-frames, wait for this frame's output so the packet comes back
++         * now instead of with the next frame (one frame of latency, and the last change of
++         * a screen that stops moving held back). A frame the encoder drops just yields no
++         * packet. */
++        if (!vtctx->has_b_frames && (avctx->flags & AV_CODEC_FLAG_LOW_DELAY)) {
++            CMTime until = CMTimeMake(frame->pts * avctx->time_base.num, avctx->time_base.den);
++            VTCompressionSessionCompleteFrames(vtctx->session, until);
++        }
+     } else if(!vtctx->flushing) {
+         vtctx->flushing = true;
+ 

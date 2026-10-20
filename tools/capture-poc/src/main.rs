@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use capture::CaptureConfig;
 use clap::Parser;
-use codec::{EncoderSettings, H264Encoder};
+use codec::EncoderSettings;
 
 #[derive(Parser)]
 #[command(about = "Capture the screen and encode it to a raw H.264 file")]
@@ -38,6 +38,10 @@ struct Args {
     bitrate: u32,
     #[arg(long, short, default_value = "capture.h264")]
     output: PathBuf,
+    /// Encode on the media engine (ADR 0058) and capture without copying; software
+    /// (OpenH264) otherwise.
+    #[arg(long)]
+    hardware: bool,
 }
 
 #[derive(Default)]
@@ -82,17 +86,22 @@ fn main() -> Result<()> {
         max_fps: args.fps,
         max_size: Some(encoder_box(args.max_width, args.max_height)),
         show_cursor: true,
+        native: args.hardware,
     };
     let mut capturer = capture::start(&config).context(
         "starting capture (on macOS grant Screen Recording permission to the terminal app)",
     )?;
     let (width, height) = capturer.output_size();
 
-    let mut encoder = H264Encoder::new(&EncoderSettings {
+    let settings = EncoderSettings {
         fps: args.fps,
         bitrate_bps: args.bitrate * 1000,
         ..EncoderSettings::new(width, height)
-    })?;
+    };
+    let (mut encoder, failure) = codec::new_encoder(&settings, args.hardware)?;
+    if let Some(e) = failure {
+        println!("hardware encoder unavailable: {e}");
+    }
     let mut out = BufWriter::new(File::create(&args.output)?);
 
     println!(
@@ -102,6 +111,7 @@ fn main() -> Result<()> {
         args.output.display()
     );
 
+    let cpu_at_start = cpu_seconds();
     let start = Instant::now();
     let deadline = start + Duration::from_secs(args.seconds);
     let mut stats = Stats::default();
@@ -120,7 +130,15 @@ fn main() -> Result<()> {
 
         let t0 = Instant::now();
         let ts = frame.captured_at.duration_since(start).as_millis() as u64;
-        let encoded = encoder.encode_bgra(&frame.data, frame.width, frame.height, ts)?;
+        let encoded = match &frame.native {
+            #[cfg(target_os = "macos")]
+            Some(image) => encoder.encode_native(image.as_ptr(), ts),
+            _ => None,
+        };
+        let encoded = match encoded {
+            Some(result) => result?,
+            None => encoder.encode_bgra(&frame.pixels(), frame.width, frame.height, ts)?,
+        };
         let done = Instant::now();
         stats.encode_time += done - t0;
 
@@ -138,6 +156,8 @@ fn main() -> Result<()> {
     drop(capturer);
 
     report(&stats, start.elapsed(), &args);
+    println!("encoder           {:>8}", encoder.name());
+    println!("process CPU time  {:>8.2} s", cpu_seconds() - cpu_at_start);
     Ok(())
 }
 
@@ -191,4 +211,37 @@ fn report(s: &Stats, elapsed: Duration, args: &Args) {
         fps_out.max(1.0),
         args.output.display()
     );
+}
+
+/// User + system CPU time of this process so far, in seconds (0 where not measured).
+#[cfg(not(unix))]
+fn cpu_seconds() -> f64 {
+    0.0
+}
+
+/// User + system CPU time of this process so far, in seconds.
+#[cfg(unix)]
+fn cpu_seconds() -> f64 {
+    #[repr(C)]
+    struct Timeval {
+        sec: i64,
+        usec: i64,
+    }
+    #[repr(C)]
+    struct Rusage {
+        user: Timeval,
+        system: Timeval,
+        rest: [i64; 14],
+    }
+    unsafe extern "C" {
+        fn getrusage(who: i32, usage: *mut Rusage) -> i32;
+    }
+    let mut usage = std::mem::MaybeUninit::<Rusage>::zeroed();
+    // SAFETY: RUSAGE_SELF (0) and a buffer the size of `struct rusage`.
+    if unsafe { getrusage(0, usage.as_mut_ptr()) } != 0 {
+        return 0.0;
+    }
+    let usage = unsafe { usage.assume_init() };
+    let secs = |t: &Timeval| t.sec as f64 + t.usec as f64 / 1e6;
+    secs(&usage.user) + secs(&usage.system)
 }

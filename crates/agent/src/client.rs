@@ -124,6 +124,7 @@ impl AgentCapturer {
                                     height,
                                     data,
                                     captured_at: Instant::now(),
+                                    native: None,
                                 };
                                 // Blocks while the encoder is busy: the agent then waits too.
                                 if frames_tx.send(Ok(frame)).is_err() {

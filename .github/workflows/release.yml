@@ -103,6 +103,45 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.rust_targets }}
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # macOS: the minimal FFmpeg for hardware encoding (ADR 0058), cached per target and
+      # build script/patch; the app falls back to OpenH264 without it.
+      - name: FFmpeg cache (macOS)
+        if: startsWith(matrix.platform, 'macos')
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg
+          key: ffmpeg-${{ matrix.rust_targets }}-${{ hashFiles('tools/ffmpeg/**') }}
+      - name: FFmpeg (macOS)
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/ffmpeg"
+          [ -f "$dir/lib/libavcodec.a" ] || tools/ffmpeg/build.sh "${{ matrix.rust_targets }}" "$dir"
+          echo "FFMPEG_DIR=$dir" >> "$GITHUB_ENV"
+      # Windows: the same minimal FFmpeg with Media Foundation, built with MSVC from the
+      # MSYS2 shell of the runner (ADR 0058).
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        if: startsWith(matrix.platform, 'windows')
+      - name: FFmpeg cache (Windows)
+        if: startsWith(matrix.platform, 'windows')
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}\ffmpeg
+          key: ffmpeg-x86_64-pc-windows-msvc-${{ hashFiles('tools/ffmpeg/**') }}
+      - name: FFmpeg (Windows)
+        if: startsWith(matrix.platform, 'windows')
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'ffmpeg'
+          if (-not (Test-Path "$dir\lib\avcodec.lib")) {
+            $env:MSYS2_PATH_TYPE = 'inherit'
+            $env:CHERE_INVOKING = '1'
+            # MSYS2's own link.exe would shadow MSVC's linker.
+            C:\msys64\usr\bin\bash.exe -lc 'pacman -Sy --noconfirm --needed make nasm diffutils patch && rm -f /usr/bin/link.exe && tools/ffmpeg/build.sh x86_64-pc-windows-msvc "$(cygpath -u "$RUNNER_TEMP")/ffmpeg"'
+            if ($LASTEXITCODE) { exit 1 }
+          }
+          "FFMPEG_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Frontend dependencies
         working-directory: apps/desktop
         run: npm ci

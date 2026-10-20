@@ -42,6 +42,33 @@ jobs:
       - run: cargo test --workspace
       - run: ./scripts/e2e-local.sh
 
+  # Hardware encoding (ADR 0058): FFmpeg, the C layer and the native capture path. Runners
+  # are virtual machines: the encoder test skips itself when there is no media engine.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable branch (2026-10-09)
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg
+          key: ffmpeg-aarch64-apple-darwin-${{ hashFiles('tools/ffmpeg/**') }}
+      - name: FFmpeg
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/ffmpeg"
+          [ -f "$dir/lib/libavcodec.a" ] || tools/ffmpeg/build.sh aarch64-apple-darwin "$dir"
+          echo "FFMPEG_DIR=$dir" >> "$GITHUB_ENV"
+      - run: cargo clippy -p codec -p capture -p stream -p capture-poc --all-targets -- -D warnings
+      - run: cargo test -p codec -p capture
+
   linux-x11:
     runs-on: ubuntu-24.04
     steps:
@@ -86,10 +113,32 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Windows: the same minimal FFmpeg with Media Foundation, built with MSVC from the
+      # MSYS2 shell of the runner (ADR 0058).
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: FFmpeg cache (Windows)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}\ffmpeg
+          key: ffmpeg-x86_64-pc-windows-msvc-${{ hashFiles('tools/ffmpeg/**') }}
+      - name: FFmpeg (Windows)
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'ffmpeg'
+          if (-not (Test-Path "$dir\lib\avcodec.lib")) {
+            $env:MSYS2_PATH_TYPE = 'inherit'
+            $env:CHERE_INVOKING = '1'
+            # MSYS2's own link.exe would shadow MSVC's linker.
+            C:\msys64\usr\bin\bash.exe -lc 'pacman -Sy --noconfirm --needed make nasm diffutils patch && rm -f /usr/bin/link.exe && tools/ffmpeg/build.sh x86_64-pc-windows-msvc "$(cygpath -u "$RUNNER_TEMP")/ffmpeg"'
+            if ($LASTEXITCODE) { exit 1 }
+          }
+          "FFMPEG_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - run: cargo build --release -p agent -p agent-poc -p windesk
       # Sound (Opus + WASAPI): the Windows code paths only build here and in the release.
       - run: cargo clippy -p audio -p stream --all-targets -- -D warnings
       - run: cargo test --release -p audio
+      # The hardware encoder (Media Foundation); skips itself on runners without a GPU.
+      - run: cargo test --release -p codec
       # Virtual monitor program (ADR 0049) and the app's Windows code, which otherwise only
       # builds in the release.
       - name: Virtual monitor and app (Windows)

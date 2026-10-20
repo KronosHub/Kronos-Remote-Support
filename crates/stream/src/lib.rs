@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use capture::{CaptureConfig, Capturer, Frame, TestPattern};
-use codec::{EncoderSettings, H264Encoder};
+use codec::{EncoderSettings, VideoEncoder};
 use tokio::sync::{mpsc, oneshot, watch};
 use transport::video::VideoSender;
 
@@ -49,6 +49,9 @@ pub struct StreamConfig {
     /// (e.g. "remote"), so UAC prompts and the lock screen work. Ignored when no agent is
     /// running, or off-Windows.
     pub agent_product: Option<String>,
+    /// Encode on the media engine when this build and machine can (ADR 0058); OpenH264
+    /// otherwise.
+    pub hardware_encoding: bool,
 }
 
 impl Default for StreamConfig {
@@ -67,6 +70,7 @@ impl Default for StreamConfig {
             allow_control: true,
             allow_clipboard: true,
             agent_product: None,
+            hardware_encoding: true,
         }
     }
 }
@@ -197,6 +201,8 @@ fn open_source(config: &StreamConfig) -> Result<Box<dyn Capturer>> {
                     config.max_size
                 }),
                 show_cursor: true,
+                // The hardware encoder reads the captured image as it is (no copy).
+                native: config.hardware_encoding && codec::HARDWARE_BUILT,
             };
             #[cfg(windows)]
             if let Some(product) = agent_product_if_available(config) {
@@ -296,8 +302,9 @@ fn encode_loop(
         high_resolution,
         size,
     } = controls;
-    let new_encoder = |(width, height): (u32, u32)| {
-        H264Encoder::new(&EncoderSettings {
+    let hardware_failed = std::cell::Cell::new(false);
+    let new_encoder = |(width, height): (u32, u32)| -> codec::Result<Box<dyn VideoEncoder>> {
+        let settings = EncoderSettings {
             fps: config.fps,
             bitrate_bps: rate::max_bitrate_for(
                 u64::from(width) * u64::from(height),
@@ -305,7 +312,16 @@ fn encode_loop(
             ),
             keyframe_interval: config.keyframe_interval,
             ..EncoderSettings::new(width, height)
-        })
+        };
+        // Once the hardware refused, stay on software for this stream.
+        let hardware = config.hardware_encoding && !hardware_failed.get();
+        let (encoder, failure) = codec::new_encoder(&settings, hardware)?;
+        if let Some(e) = failure {
+            hardware_failed.set(true);
+            tracing::warn!("hardware encoder unavailable, using software: {e}");
+        }
+        tracing::info!(encoder = encoder.name(), size = ?(width, height), "video encoder ready");
+        Ok(encoder)
     };
     let setup = open_source(&config).and_then(|source| {
         let encoder = new_encoder(source.output_size())?;
@@ -447,10 +463,6 @@ fn encode_loop(
         }
         let (width, height) = encoder.size();
         let work_started = Instant::now();
-        let scaled = (scale < 100).then(|| {
-            capture::scale::shrink_bgra(&frame.data, frame.width, frame.height, width, height)
-        });
-        let data = scaled.as_deref().unwrap_or(&frame.data);
 
         if want_keyframe {
             encoder.force_keyframe();
@@ -458,12 +470,30 @@ fn encode_loop(
         }
         last_encoded = Some(Instant::now());
         let ts = frame.captured_at.duration_since(start).as_millis() as u64;
-        let result = encoder.encode_bgra(data, width, height, ts);
+        // Full size on the media engine: the captured image as it is, no copy. Otherwise
+        // BGRA, shrunk on the CPU while the bandwidth is low.
+        let native = match (&frame.native, scale) {
+            #[cfg(target_os = "macos")]
+            (Some(image), 100) => encoder.encode_native(image.as_ptr(), ts),
+            _ => None,
+        };
+        let result = match native {
+            Some(result) => result,
+            None => {
+                let pixels = frame.pixels();
+                let scaled = (scale < 100).then(|| {
+                    capture::scale::shrink_bgra(&pixels, frame.width, frame.height, width, height)
+                });
+                let data = scaled.as_deref().unwrap_or(&pixels);
+                encoder.encode_bgra(data, width, height, ts)
+            }
+        };
         let took = work_started.elapsed();
         encode_avg = Some(encode_avg.map_or(took, |avg| avg.mul_f64(0.9) + took.mul_f64(0.1)));
         encoded_frames = encoded_frames.saturating_add(1);
         let full_rate = Duration::from_secs(1) / config.fps.max(1);
         if cpu_cap == 100
+            && !encoder.is_hardware()
             && encoded_frames >= HEAVY_SAMPLE
             && u64::from(width) * u64::from(height) > rate::FULL_HD_PIXELS
             && encode_avg.is_some_and(|avg| avg > full_rate.mul_f64(HEAVY_ENCODE))

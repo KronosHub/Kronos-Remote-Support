@@ -1,0 +1,107 @@
+--- a/libavcodec/mfenc.c	2026-10-20 17:12:37
++++ b/libavcodec/mfenc.c	2026-10-20 17:12:59
+@@ -55,6 +55,9 @@
+     int opt_enc_quality;
+     int opt_enc_scenario;
+     int opt_enc_hw;
++    /* Kronos: bitrate the encoder runs at, so a change of avctx->bit_rate between frames
++     * (adaptive streaming) reaches the running encoder. */
++    int64_t applied_bit_rate;
+ } MFContext;
+ 
+ static int mf_choose_output_type(AVCodecContext *avctx);
+@@ -103,6 +106,45 @@
+     return 0;
+ }
+ 
++/* Kronos: like mf_wait_events, but only takes the events already queued (never blocks). */
++static int mf_poll_events(AVCodecContext *avctx)
++{
++    MFContext *c = avctx->priv_data;
++
++    while (c->async_events) {
++        IMFMediaEvent *ev = NULL;
++        MediaEventType ev_id = 0;
++        HRESULT hr = IMFMediaEventGenerator_GetEvent(c->async_events, MF_EVENT_FLAG_NO_WAIT, &ev);
++        if (hr == MF_E_NO_EVENTS_AVAILABLE)
++            break;
++        if (FAILED(hr)) {
++            av_log(avctx, AV_LOG_ERROR, "IMFMediaEventGenerator_GetEvent() failed: %s\n",
++                   ff_hr_str(hr));
++            return AVERROR_EXTERNAL;
++        }
++        IMFMediaEvent_GetType(ev, &ev_id);
++        switch (ev_id) {
++        case ff_METransformNeedInput:
++            if (!c->draining)
++                c->async_need_input = 1;
++            break;
++        case ff_METransformHaveOutput:
++            c->async_have_output = 1;
++            break;
++        case ff_METransformDrainComplete:
++            c->draining_done = 1;
++            break;
++        case ff_METransformMarker:
++            c->async_marker = 1;
++            break;
++        default: ;
++        }
++        IMFMediaEvent_Release(ev);
++    }
++
++    return 0;
++}
++
+ static AVRational mf_get_tb(AVCodecContext *avctx)
+ {
+     if (avctx->time_base.num > 0 && avctx->time_base.den > 0)
+@@ -495,10 +537,36 @@
+ 
+     if (!c->frame->buf[0]) {
+         ret = ff_encode_get_frame(avctx, c->frame);
++        /* Kronos: low delay, no new frame: still hand out output that is ready, so a
++         * frame's packet does not wait for the next frame. */
++        if (ret == AVERROR(EAGAIN) && (avctx->flags & AV_CODEC_FLAG_LOW_DELAY) &&
++            c->async_events) {
++            if ((ret = mf_poll_events(avctx)) < 0)
++                return ret;
++            if (!c->async_have_output)
++                return AVERROR(EAGAIN);
++            ret = mf_receive_sample(avctx, &sample);
++            if (ret < 0)
++                return ret;
++            ret = mf_sample_to_avpacket(avctx, sample, avpkt);
++            IMFSample_Release(sample);
++            return ret;
++        }
+         if (ret < 0 && ret != AVERROR_EOF)
+             return ret;
+     }
+ 
++    /* Kronos: a new avctx->bit_rate (and rc_max_rate) for the running encoder. */
++    if (c->is_video && c->codec_api && avctx->bit_rate > 0 &&
++        avctx->bit_rate != c->applied_bit_rate) {
++        c->applied_bit_rate = avctx->bit_rate;
++        ICodecAPI_SetValue(c->codec_api, &ff_CODECAPI_AVEncCommonMeanBitRate,
++                           FF_VAL_VT_UI4(avctx->bit_rate));
++        if (avctx->rc_max_rate > 0)
++            ICodecAPI_SetValue(c->codec_api, &ff_CODECAPI_AVEncCommonMaxBitRate,
++                               FF_VAL_VT_UI4(avctx->rc_max_rate));
++    }
++
+     if (c->frame->buf[0]) {
+         sample = mf_avframe_to_sample(avctx, c->frame);
+         if (!sample) {
+@@ -724,6 +792,11 @@
+ 
+         if (c->opt_enc_scenario >= 0)
+             ICodecAPI_SetValue(c->codec_api, &ff_CODECAPI_AVScenarioInfo, FF_VAL_VT_UI4(c->opt_enc_scenario));
++
++        /* Kronos: no lookahead, every frame out at once. */
++        if (avctx->flags & AV_CODEC_FLAG_LOW_DELAY)
++            ICodecAPI_SetValue(c->codec_api, &ff_CODECAPI_AVLowLatencyMode, FF_VAL_VT_BOOL(1));
++        c->applied_bit_rate = avctx->bit_rate;
+     }
+ 
+     return 0;

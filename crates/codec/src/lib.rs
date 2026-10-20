@@ -1,7 +1,11 @@
 //! Video encoding for the remote desktop stream.
 //!
-//! Phase 1 uses OpenH264 (software, built from source). Hardware encoders
-//! (VideoToolbox, Media Foundation, VAAPI) can later sit behind the same API.
+//! [`new_encoder`] picks the platform's hardware H.264 encoder through a minimal FFmpeg
+//! (ADR 0058: VideoToolbox on macOS) when the app was built with it, and OpenH264 (software,
+//! built from source) otherwise or when the hardware cannot be used.
+
+#[cfg(kronos_hw)]
+mod hardware;
 
 use openh264::OpenH264API;
 use openh264::Timestamp;
@@ -27,6 +31,8 @@ pub enum CodecError {
     TooLarge(u32, u32),
     #[error("openh264: {0}")]
     OpenH264(#[from] openh264::Error),
+    #[error("hardware encoder: {0}")]
+    Hardware(String),
 }
 
 pub type Result<T> = std::result::Result<T, CodecError>;
@@ -69,6 +75,58 @@ impl EncoderSettings {
 pub struct EncodedFrame {
     pub data: Vec<u8>,
     pub keyframe: bool,
+}
+
+/// What the stream needs from an H.264 encoder.
+pub trait VideoEncoder {
+    fn size(&self) -> (u32, u32);
+    /// Next encoded frame will be an IDR.
+    fn force_keyframe(&mut self);
+    /// New target bitrate and frame rate, from the next frame (capped at the initial bitrate).
+    fn set_rate(&mut self, bitrate_bps: u32, fps: u32);
+    /// Encodes a tightly packed BGRA frame of the encoder's size; `None`: no output.
+    fn encode_bgra(
+        &mut self,
+        bgra: &[u8],
+        width: u32,
+        height: u32,
+        timestamp_ms: u64,
+    ) -> Result<Option<EncodedFrame>>;
+    /// Encodes the capture's own image without copying it (macOS: a `CVPixelBufferRef` of
+    /// the encoder's size). `None` when this encoder cannot: pass BGRA instead.
+    fn encode_native(
+        &mut self,
+        _image: *mut std::ffi::c_void,
+        _timestamp_ms: u64,
+    ) -> Option<Result<Option<EncodedFrame>>> {
+        None
+    }
+    /// Short name for the logs ("VideoToolbox", "OpenH264").
+    fn name(&self) -> &'static str;
+    fn is_hardware(&self) -> bool {
+        false
+    }
+}
+
+/// Whether this build can encode in hardware at all (the machine may still refuse).
+pub const HARDWARE_BUILT: bool = cfg!(kronos_hw);
+
+/// The hardware encoder if `hardware` and it opens, else OpenH264. The error of a failed
+/// hardware attempt comes back too, for the logs.
+pub fn new_encoder(
+    settings: &EncoderSettings,
+    hardware: bool,
+) -> Result<(Box<dyn VideoEncoder>, Option<CodecError>)> {
+    let mut failure = None;
+    #[cfg(kronos_hw)]
+    if hardware {
+        match hardware::HwEncoder::new(settings) {
+            Ok(encoder) => return Ok((Box::new(encoder), None)),
+            Err(e) => failure = Some(e),
+        }
+    }
+    let _ = hardware;
+    Ok((Box::new(H264Encoder::new(settings)?), failure))
 }
 
 pub struct H264Encoder {
@@ -195,6 +253,30 @@ impl H264Encoder {
             data: bitstream.to_vec(),
             keyframe: matches!(frame_type, FrameType::IDR | FrameType::I),
         }))
+    }
+}
+
+impl VideoEncoder for H264Encoder {
+    fn size(&self) -> (u32, u32) {
+        H264Encoder::size(self)
+    }
+    fn force_keyframe(&mut self) {
+        H264Encoder::force_keyframe(self);
+    }
+    fn set_rate(&mut self, bitrate_bps: u32, fps: u32) {
+        H264Encoder::set_rate(self, bitrate_bps, fps);
+    }
+    fn encode_bgra(
+        &mut self,
+        bgra: &[u8],
+        width: u32,
+        height: u32,
+        timestamp_ms: u64,
+    ) -> Result<Option<EncodedFrame>> {
+        H264Encoder::encode_bgra(self, bgra, width, height, timestamp_ms)
+    }
+    fn name(&self) -> &'static str {
+        "OpenH264"
     }
 }
 

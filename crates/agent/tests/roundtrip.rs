@@ -55,6 +55,7 @@ fn capture_and_input_through_the_agent() {
         max_fps: 30,
         max_size: Some((320, 180)),
         show_cursor: true,
+        native: false,
     };
     let app_end = pipe(backend.clone(), &rt);
     let mut capturer = AgentCapturer::start(move || async move { Ok(app_end) }, &config).unwrap();

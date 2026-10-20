@@ -89,6 +89,7 @@ impl Capturer for TestPattern {
             height: self.height,
             data: self.render(),
             captured_at: Instant::now(),
+            native: None,
         };
         self.frame_no = self.frame_no.wrapping_add(1);
         Ok(Some(frame))

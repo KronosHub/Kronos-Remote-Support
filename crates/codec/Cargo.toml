@@ -9,3 +9,6 @@ description = "Video encoding for the remote desktop stream"
 openh264 = "0.9"
 openh264-sys2 = "0.9"
 thiserror.workspace = true
+
+[build-dependencies]
+cc = "1"

@@ -102,6 +102,7 @@ where
                     max_fps,
                     max_size,
                     show_cursor,
+                    native: false,
                 };
                 spawn_capture(backend.clone(), config, stop, out_tx.clone());
             }

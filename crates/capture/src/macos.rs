@@ -118,7 +118,9 @@ impl MacCapturer {
             .with_pixel_format(PixelFormat::BGRA)
             .with_shows_cursor(config.show_cursor)
             .with_minimum_frame_interval(&CMTime::new(1, fps as i32))
-            .with_queue_depth(3);
+            // Native frames keep their buffer while queued, pending and as the last frame
+            // (for keyframes on a static screen): room for those plus the ones in flight.
+            .with_queue_depth(if config.native { 6 } else { 3 });
 
         let (tx, rx) = mpsc::sync_channel(CHANNEL_DEPTH);
         let stopped = Arc::new(Mutex::new(None));
@@ -129,7 +131,13 @@ impl MacCapturer {
         let mut stream =
             SCStream::new_with_delegate(&filter, &stream_config, watcher).map_err(backend)?;
         stream
-            .add_output_handler(FrameSink { tx }, SCStreamOutputType::Screen)
+            .add_output_handler(
+                FrameSink {
+                    tx,
+                    native: config.native,
+                },
+                SCStreamOutputType::Screen,
+            )
             .map_err(backend)?;
         stream.start_capture().map_err(backend)?;
 
@@ -220,6 +228,39 @@ impl Drop for MacCapturer {
 
 struct FrameSink {
     tx: SyncSender<Frame>,
+    native: bool,
+}
+
+/// A ScreenCaptureKit pixel buffer (BGRA, in GPU-shared memory), kept alive for as long as
+/// the frame is: a hardware encoder reads it directly.
+pub struct NativeImage(screencapturekit::cv::CVPixelBuffer);
+
+impl NativeImage {
+    /// The `CVPixelBufferRef`, valid while `self` lives.
+    pub fn as_ptr(&self) -> *mut std::ffi::c_void {
+        self.0.as_ptr()
+    }
+
+    /// Copies the image into tightly packed BGRA.
+    pub fn to_bgra(&self) -> Option<Vec<u8>> {
+        bgra_of(&self.0).map(|(data, _, _)| data)
+    }
+}
+
+impl Clone for NativeImage {
+    fn clone(&self) -> Self {
+        // SAFETY: a live pixel buffer; the clone holds its own retain.
+        let buffer =
+            unsafe { screencapturekit::cv::CVPixelBuffer::from_raw_borrowed(self.0.as_ptr()) }
+                .expect("non-null pixel buffer");
+        Self(buffer)
+    }
+}
+
+impl std::fmt::Debug for NativeImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NativeImage({:?})", self.0.as_ptr())
+    }
 }
 
 impl SCStreamOutputTrait for FrameSink {
@@ -231,7 +272,12 @@ impl SCStreamOutputTrait for FrameSink {
         if sample.frame_status() != Some(SCFrameStatus::Complete) {
             return;
         }
-        let Some(frame) = copy_frame(&sample) else {
+        let frame = if self.native {
+            native_frame(&sample)
+        } else {
+            copy_frame(&sample)
+        };
+        let Some(frame) = frame else {
             return;
         };
         match self.tx.try_send(frame) {
@@ -241,10 +287,22 @@ impl SCStreamOutputTrait for FrameSink {
     }
 }
 
-/// Copies the pixel buffer into a tightly packed BGRA `Vec`, removing row padding.
-fn copy_frame(sample: &CMSampleBuffer) -> Option<Frame> {
+/// The pixel buffer as it is, no copy (native capture).
+fn native_frame(sample: &CMSampleBuffer) -> Option<Frame> {
     let captured_at = Instant::now();
     let pixel_buffer = sample.pixel_buffer()?;
+    let (width, height) = (pixel_buffer.width() as u32, pixel_buffer.height() as u32);
+    Some(Frame {
+        width,
+        height,
+        data: Vec::new(),
+        captured_at,
+        native: Some(NativeImage(pixel_buffer)),
+    })
+}
+
+/// Tightly packed BGRA copy of a pixel buffer (row padding removed), with its size.
+fn bgra_of(pixel_buffer: &screencapturekit::cv::CVPixelBuffer) -> Option<(Vec<u8>, u32, u32)> {
     let guard = pixel_buffer.lock(CVPixelBufferLockFlags::READ_ONLY).ok()?;
     let (width, height, stride) = (guard.width(), guard.height(), guard.bytes_per_row());
     // SAFETY: the buffer stays locked for the lifetime of `guard`.
@@ -255,11 +313,19 @@ fn copy_frame(sample: &CMSampleBuffer) -> Option<Frame> {
     for row in src.chunks(stride).take(height) {
         data.extend_from_slice(&row[..row_len]);
     }
+    Some((data, width as u32, height as u32))
+}
 
+/// Copies the pixel buffer into a tightly packed BGRA `Vec`, removing row padding.
+fn copy_frame(sample: &CMSampleBuffer) -> Option<Frame> {
+    let captured_at = Instant::now();
+    let pixel_buffer = sample.pixel_buffer()?;
+    let (data, width, height) = bgra_of(&pixel_buffer)?;
     Some(Frame {
-        width: width as u32,
-        height: height as u32,
+        width,
+        height,
         data,
         captured_at,
+        native: None,
     })
 }

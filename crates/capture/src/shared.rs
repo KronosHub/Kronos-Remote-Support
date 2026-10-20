@@ -20,6 +20,7 @@ struct Key {
     max_size: Option<(u32, u32)>,
     max_fps: u32,
     show_cursor: bool,
+    native: bool,
 }
 
 impl Key {
@@ -29,6 +30,7 @@ impl Key {
             max_size: config.max_size,
             max_fps: config.max_fps,
             show_cursor: config.show_cursor,
+            native: config.native,
         }
     }
 }

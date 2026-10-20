@@ -154,6 +154,7 @@ impl Capturer for X11Capturer {
             height: self.output.1,
             data,
             captured_at,
+            native: None,
         }))
     }
 }

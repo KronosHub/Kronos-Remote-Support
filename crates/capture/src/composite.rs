@@ -114,6 +114,8 @@ impl CompositeCapturer {
                 let config = CaptureConfig {
                     display_id: Some(display.id),
                     max_size: Some((place.width, place.height)),
+                    // Painted onto the canvas: BGRA needed.
+                    native: false,
                     ..config.clone()
                 };
                 let (stop, updates, started) =
@@ -224,6 +226,7 @@ impl Capturer for CompositeCapturer {
             height: self.size.1,
             data: self.canvas.clone(),
             captured_at,
+            native: None,
         }))
     }
 }
@@ -336,6 +339,7 @@ mod tests {
                 data: [self.value, self.value, self.value, 255]
                     .repeat((self.size.0 * self.size.1) as usize),
                 captured_at: Instant::now(),
+                native: None,
             }))
         }
     }

@@ -77,6 +77,10 @@ pub struct CaptureConfig {
     /// Downscale (keeping aspect ratio) so the output fits in this `(width, height)` box.
     pub max_size: Option<(u32, u32)>,
     pub show_cursor: bool,
+    /// Hand frames over as the system's own image where the backend can (macOS: the
+    /// ScreenCaptureKit pixel buffer, for a hardware encoder) instead of copying them to
+    /// BGRA; [`Frame::pixels`] copies on demand. Ignored elsewhere.
+    pub native: bool,
 }
 
 impl Default for CaptureConfig {
@@ -86,17 +90,43 @@ impl Default for CaptureConfig {
             max_fps: 30,
             max_size: Some((1920, 1080)),
             show_cursor: true,
+            native: false,
         }
     }
 }
 
-/// One captured frame in tightly packed BGRA.
+/// One captured frame: tightly packed BGRA in `data`, or (native capture) an empty `data`
+/// and the system image in `native`.
 #[derive(Debug, Clone)]
 pub struct Frame {
     pub width: u32,
     pub height: u32,
     pub data: Vec<u8>,
     pub captured_at: Instant,
+    pub native: Option<NativeImage>,
+}
+
+#[cfg(target_os = "macos")]
+pub use macos::NativeImage;
+
+/// No native images on this platform.
+#[cfg(not(target_os = "macos"))]
+#[derive(Debug, Clone)]
+pub enum NativeImage {}
+
+impl Frame {
+    /// The frame in tightly packed BGRA, copied out of the native image if needed (empty
+    /// if that fails).
+    pub fn pixels(&self) -> std::borrow::Cow<'_, [u8]> {
+        if !self.data.is_empty() {
+            return std::borrow::Cow::Borrowed(&self.data);
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(native) = &self.native {
+            return std::borrow::Cow::Owned(native.to_bgra().unwrap_or_default());
+        }
+        std::borrow::Cow::Borrowed(&self.data)
+    }
 }
 
 /// A running capture session. Dropping it stops the capture.

@@ -981,6 +981,7 @@ dependencies = [
 name = "codec"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "openh264",
  "openh264-sys2",
  "thiserror 2.0.21",
