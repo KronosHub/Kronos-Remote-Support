@@ -719,7 +719,7 @@ pub fn uninstall_service(name: &str) -> Result<()> {
 
 /// Bumped whenever the service or the pre-login host change: an app finding an older
 /// revision installed offers to reinstall the service, which refreshes its protected copy.
-pub const SERVICE_REVISION: u32 = 2;
+pub const SERVICE_REVISION: u32 = 3;
 const REVISION_FILE: &str = "revision";
 
 /// Files of the user's app data the pre-login host needs: the device key (same id), the
@@ -778,9 +778,9 @@ pub fn session_user(session: u32) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
-/// True if a user is logged on in a session other than `console` (active or disconnected,
-/// e.g. Remote Desktop).
-fn other_user_session(console: u32) -> bool {
+/// Sessions with a user logged on (active or disconnected, e.g. Remote Desktop), with the
+/// user's name; None if they cannot be listed.
+fn user_sessions() -> Option<Vec<(u32, String)>> {
     use windows_sys::Win32::System::RemoteDesktop::{
         WTS_CURRENT_SERVER_HANDLE, WTS_SESSION_INFOW, WTSEnumerateSessionsW, WTSFreeMemory,
     };
@@ -788,29 +788,40 @@ fn other_user_session(console: u32) -> bool {
     let mut count = 0u32;
     if unsafe { WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &mut list, &mut count) } == 0
     {
-        // Cannot tell: better no second host than two fighting over the id.
-        return true;
+        return None;
     }
     let sessions: Vec<u32> = unsafe { std::slice::from_raw_parts(list, count as usize) }
         .iter()
         .map(|s| s.SessionId)
         .collect();
     unsafe { WTSFreeMemory(list.cast()) };
-    sessions
-        .into_iter()
-        .any(|id| id != console && session_user(id).is_some())
+    Some(
+        sessions
+            .into_iter()
+            .filter_map(|id| session_user(id).map(|user| (id, user)))
+            .collect(),
+    )
+}
+
+/// True if a user is logged on in a session other than `console` (active or disconnected,
+/// e.g. Remote Desktop).
+fn other_user_session(console: u32) -> bool {
+    // Cannot tell: better no second host than two fighting over the id.
+    user_sessions().is_none_or(|sessions| sessions.iter().any(|(id, _)| *id != console))
 }
 
 /// True if this process's session was left disconnected (Remote Desktop closed without
 /// signing out): it has no screen to capture and takes no input until someone connects to
 /// it again or signs in at the PC.
 pub fn session_disconnected() -> bool {
+    current_session().is_some_and(is_disconnected)
+}
+
+/// True if `session` is left disconnected (see [`session_disconnected`]).
+fn is_disconnected(session: u32) -> bool {
     use windows_sys::Win32::System::RemoteDesktop::{
         WTS_CURRENT_SERVER_HANDLE, WTSConnectState, WTSDisconnected, WTSFreeMemory,
         WTSQuerySessionInformationW,
-    };
-    let Some(session) = current_session() else {
-        return false;
     };
     let mut buffer: *mut u16 = std::ptr::null_mut();
     let mut bytes = 0u32;
@@ -835,10 +846,34 @@ pub fn session_disconnected() -> bool {
     state == WTSDisconnected
 }
 
-/// True once someone has logged on in this process's session (the pre-login host then
-/// leaves the server to the user's app).
+/// Moves the disconnected `session` to the console, where this process runs
+/// (`--to-console <session>`, started by the service as SYSTEM): its desktop gets the
+/// console's screen and input, so it can be shared. Only on computers marked as reached
+/// remotely only: at a physical PC the desktop would appear unlocked on its monitor.
+pub fn move_session_to_console(session: u32) -> Result<()> {
+    use windows_sys::Win32::System::RemoteDesktop::{WTS_CURRENT_SESSION, WTSConnectSessionW};
+    let password = wide("");
+    if unsafe { WTSConnectSessionW(session, WTS_CURRENT_SESSION, password.as_ptr(), 0) } == 0 {
+        bail!("WTSConnectSessionW: {}", std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// The user marked this computer as reached remotely only, with no one at a monitor
+/// (`remote_only` in the preferences copied for the pre-login host).
+fn remote_only(dir: &Path) -> bool {
+    std::fs::read(dir.join(LOGON_FILES[2]))
+        .ok()
+        .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
+        .and_then(|prefs| prefs.get("remote_only")?.as_bool())
+        .unwrap_or(false)
+}
+
+/// True once someone has logged on, at this computer or through Remote Desktop (the
+/// pre-login host then leaves the server to the user's app, which starts in that session).
 pub fn user_logged_on() -> bool {
     current_session().and_then(session_user).is_some()
+        || user_sessions().is_some_and(|sessions| !sessions.is_empty())
 }
 
 /// Roaming app data folder of the user logged on in `session` (SYSTEM only).
@@ -900,6 +935,11 @@ fn private_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// True if the user logged on in `session` has run the app (it has a device key).
+fn user_has_app(session: u32, identifier: &str) -> bool {
+    user_app_data(session).is_ok_and(|dir| dir.join(identifier).join(LOGON_FILES[0]).is_file())
+}
+
 /// Copies the logged-on user's id and personal password into the pre-login host's folder.
 /// Without a device key (the app never ran for this user) nothing changes; without a
 /// personal password the host is not started (nobody could get in).
@@ -941,6 +981,8 @@ struct LogonHost {
     last_sync: Option<std::time::Instant>,
     /// The user whose files were copied last.
     synced_user: Option<String>,
+    /// Last time a disconnected session was moved to the console.
+    last_move: Option<std::time::Instant>,
 }
 
 impl LogonHost {
@@ -956,15 +998,27 @@ impl LogonHost {
             return;
         }
         let Ok(dir) = logon_dir(name) else { return };
-        match session_user(session) {
-            Some(user) => {
+        // The id and password come from the user at the console or, on a computer used only
+        // through Remote Desktop, from the one logged on there.
+        let source = session_user(session)
+            .map(|user| (session, user))
+            .or_else(|| {
+                user_sessions()?
+                    .into_iter()
+                    .find(|(id, _)| user_has_app(*id, identifier))
+            });
+        if source.as_ref().is_some_and(|(id, _)| *id != session) && remote_only(&dir) {
+            self.move_to_console(exe, identifier, session);
+        }
+        match source {
+            Some((source, user)) => {
                 let due = self.synced_user.as_deref() != Some(user.as_str())
                     || self
                         .last_sync
                         .is_none_or(|t| t.elapsed() > LOGON_SYNC_EVERY);
                 if due {
                     self.last_sync = Some(std::time::Instant::now());
-                    match sync_logon_files(session, identifier, &dir) {
+                    match sync_logon_files(source, identifier, &dir) {
                         Ok(()) => self.synced_user = Some(user),
                         Err(e) => tracing::debug!("pre-login host: cannot copy the files: {e:#}"),
                     }
@@ -990,6 +1044,41 @@ impl LogonHost {
                     }
                 }
             }
+        }
+    }
+
+    /// Remote-only computer, nobody at the console: a Remote Desktop session closed without
+    /// signing out has no screen, so it is moved to the console, where it can be shared.
+    fn move_to_console(&mut self, exe: &Path, identifier: &str, console: u32) {
+        if self
+            .last_move
+            .is_some_and(|t| t.elapsed() < LOGON_RELAUNCH_GAP)
+        {
+            return;
+        }
+        let Some(sessions) = user_sessions() else {
+            return;
+        };
+        let Some((id, _)) = sessions
+            .into_iter()
+            .find(|(id, _)| is_disconnected(*id) && user_has_app(*id, identifier))
+        else {
+            return;
+        };
+        self.last_move = Some(std::time::Instant::now());
+        tracing::info!(
+            session = id,
+            "remote-only computer: moving the disconnected session to the console"
+        );
+        match launch_in_session(console, exe, &format!("--to-console {id}")) {
+            Ok(h) => unsafe {
+                WaitForSingleObject(h, 10_000);
+                CloseHandle(h);
+            },
+            Err(e) => tracing::warn!(
+                session = id,
+                "cannot move the session to the console: {e:#}"
+            ),
         }
     }
 

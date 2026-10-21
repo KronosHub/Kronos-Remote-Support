@@ -223,14 +223,7 @@ pub async fn serve_host(
         config.bitrate_bps,
     ));
     if let Some(handle) = &handle {
-        send(
-            &channel,
-            &ControlMsg::StreamStarted {
-                width: handle.width,
-                height: handle.height,
-            },
-        )
-        .await;
+        send(&channel, &stream_started(handle)).await;
         on_event(HostEvent::Started {
             width: handle.width,
             height: handle.height,
@@ -338,7 +331,8 @@ pub async fn serve_host(
                 StreamChange::Resized { width, height } => {
                     // Resolution lowered or restored for the bandwidth: the viewer restarts
                     // its decoder on the new size, as for another monitor.
-                    send(&channel, &ControlMsg::StreamStarted { width, height }).await;
+                    let hardware = handle.as_ref().map(StreamHandle::hardware);
+                    send(&channel, &ControlMsg::StreamStarted { width, height, hardware }).await;
                 }
                 StreamChange::Ended => {
                     // E.g. leaving the login or lock screen replaced the display or changed its
@@ -379,11 +373,7 @@ pub async fn serve_host(
                         if let Some(sink) = &input {
                             sink.set_area(area(handle.bounds));
                         }
-                        send(&channel, &ControlMsg::StreamStarted {
-                            width: handle.width,
-                            height: handle.height,
-                        })
-                        .await;
+                        send(&channel, &stream_started(handle)).await;
                         send_displays(&channel, &config, handle.display_id).await;
                         on_event(HostEvent::Started { width: handle.width, height: handle.height });
                     }
@@ -526,11 +516,7 @@ pub async fn serve_host(
                             if let Some(sink) = &input {
                                 sink.set_area(area(handle.bounds));
                             }
-                            send(&channel, &ControlMsg::StreamStarted {
-                                width: handle.width,
-                                height: handle.height,
-                            })
-                            .await;
+                            send(&channel, &stream_started(handle)).await;
                             send_displays(&channel, &config, handle.display_id).await;
                             on_event(HostEvent::Started { width: handle.width, height: handle.height });
                         }
@@ -597,6 +583,14 @@ fn area(r: capture::Rect) -> input::Area {
 }
 
 /// Tells the viewer which monitors exist and which one it is seeing.
+fn stream_started(handle: &StreamHandle) -> ControlMsg {
+    ControlMsg::StreamStarted {
+        width: handle.width,
+        height: handle.height,
+        hardware: Some(handle.hardware()),
+    }
+}
+
 async fn send_displays(channel: &Arc<dyn DataChannel>, config: &StreamConfig, current: u32) {
     let displays = match config.source {
         crate::Source::Screen { .. } => tokio::task::spawn_blocking(capture::displays)
@@ -811,6 +805,8 @@ pub enum ViewerEvent {
     Started {
         width: u32,
         height: u32,
+        /// Encoded by the host's video chip (true) or processor (false); None: older host.
+        hardware: Option<bool>,
     },
     Frame(VideoFrame),
     Rtt(Duration),
@@ -940,8 +936,8 @@ pub async fn run_viewer(
                 }
             }
             msg = recv(&channel) => match heard(&mut last_heard, msg) {
-                Some(ControlMsg::StreamStarted { width, height }) => {
-                    on_event(ViewerEvent::Started { width, height });
+                Some(ControlMsg::StreamStarted { width, height, hardware }) => {
+                    on_event(ViewerEvent::Started { width, height, hardware });
                 }
                 Some(ControlMsg::StreamError { message }) => {
                     on_event(ViewerEvent::Error(message.clone()));

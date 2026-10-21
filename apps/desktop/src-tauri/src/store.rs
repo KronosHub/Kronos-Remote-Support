@@ -69,6 +69,11 @@ struct Prefs {
     /// The user's name, shown to partners.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     display_name: Option<String>,
+    /// Windows: reached remotely only, nobody at a monitor; the service moves a Remote
+    /// Desktop session left disconnected to the console so it can be shared. Read by the
+    /// service from its copy of this file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    remote_only: bool,
 }
 
 pub struct Store {
@@ -346,6 +351,17 @@ impl Store {
     pub fn set_display_name(&self, name: Option<&str>) -> std::io::Result<()> {
         let mut prefs = self.read::<Prefs>(PREFS_FILE).unwrap_or_default();
         prefs.display_name = name.map(str::to_owned);
+        self.write(PREFS_FILE, &prefs)
+    }
+
+    pub fn remote_only(&self) -> bool {
+        self.read::<Prefs>(PREFS_FILE)
+            .is_some_and(|p| p.remote_only)
+    }
+
+    pub fn set_remote_only(&self, enabled: bool) -> std::io::Result<()> {
+        let mut prefs = self.read::<Prefs>(PREFS_FILE).unwrap_or_default();
+        prefs.remote_only = enabled;
         self.write(PREFS_FILE, &prefs)
     }
 

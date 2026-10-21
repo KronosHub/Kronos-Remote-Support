@@ -595,6 +595,16 @@ fn set_display_name(service: State<'_, Service>, name: String) -> Option<String>
 }
 
 #[tauri::command]
+fn remote_only(service: State<'_, Service>) -> bool {
+    service.remote_only()
+}
+
+#[tauri::command]
+fn set_remote_only(service: State<'_, Service>, enabled: bool) -> Result<bool, String> {
+    service.set_remote_only(enabled)
+}
+
+#[tauri::command]
 fn set_block_input(service: State<'_, Service>, session: u64, enabled: bool) {
     service.set_block_input(session, enabled);
 }
@@ -804,6 +814,19 @@ pub fn run() {
                     agent_product(),
                     true,
                 );
+                std::process::exit(if r.is_ok() { 0 } else { 1 });
+            }
+            // Started by the service in the console session (remote-only computer).
+            Some("--to-console") => {
+                init_logging(agent::windows::log_dir());
+                let r = args
+                    .get(2)
+                    .and_then(|s| s.parse().ok())
+                    .ok_or_else(|| anyhow::anyhow!("missing session"))
+                    .and_then(agent::windows::move_session_to_console);
+                if let Err(e) = &r {
+                    tracing::warn!("cannot move the session to the console: {e:#}");
+                }
                 std::process::exit(if r.is_ok() { 0 } else { 1 });
             }
             Some("--uninstall-service") => {
@@ -1029,6 +1052,8 @@ pub fn run() {
             set_block_input,
             display_name,
             set_display_name,
+            remote_only,
+            set_remote_only,
             audio_supported,
             close_view,
             end_session,

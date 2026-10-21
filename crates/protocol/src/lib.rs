@@ -16,10 +16,13 @@ pub enum ControlMsg {
         seq: u32,
         sent_us: u64,
     },
-    /// Host → viewer: screen sharing started with this output size.
+    /// Host → viewer: screen sharing started with this output size; `hardware` tells
+    /// whether the video chip (true) or the processor (false) encodes it. Older hosts omit it.
     StreamStarted {
         width: u32,
         height: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hardware: Option<bool>,
     },
     /// Host → viewer: screen sharing could not start or stopped (e.g. missing permission).
     StreamError {
@@ -179,12 +182,22 @@ mod tests {
         let msg = ControlMsg::StreamStarted {
             width: 1920,
             height: 1080,
+            hardware: Some(true),
         };
         assert_eq!(
             msg.to_json(),
-            r#"{"t":"stream_started","width":1920,"height":1080}"#
+            r#"{"t":"stream_started","width":1920,"height":1080,"hardware":true}"#
         );
         assert_eq!(ControlMsg::from_json(msg.to_json().as_bytes()), Some(msg));
+        // From a host before 1.9.1.
+        assert_eq!(
+            ControlMsg::from_json(br#"{"t":"stream_started","width":1920,"height":1080}"#),
+            Some(ControlMsg::StreamStarted {
+                width: 1920,
+                height: 1080,
+                hardware: None,
+            })
+        );
         assert_eq!(
             ControlMsg::RequestKeyframe.to_json(),
             r#"{"t":"request_keyframe"}"#

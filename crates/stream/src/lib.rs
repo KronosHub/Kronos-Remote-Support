@@ -99,6 +99,7 @@ pub struct StreamHandle {
     keyframe: Arc<AtomicBool>,
     bitrate: Arc<AtomicU32>,
     high_resolution: Arc<AtomicBool>,
+    hardware: Arc<AtomicBool>,
     size: watch::Receiver<(u32, u32)>,
     thread: Option<JoinHandle<()>>,
 }
@@ -129,6 +130,11 @@ impl StreamHandle {
     /// HD on (the default): up to the captured size; off: at most 1080p.
     pub fn set_high_resolution(&self, enabled: bool) {
         self.high_resolution.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Whether the video chip encodes the stream now (false: the processor, OpenH264).
+    pub fn hardware(&self) -> bool {
+        self.hardware.load(Ordering::Relaxed)
     }
 
     /// The next frame sent will be an IDR (viewer joined, lost packets or decoder error).
@@ -228,6 +234,7 @@ pub async fn start(config: StreamConfig, video: Arc<VideoSender>) -> Result<Stre
     let keyframe = Arc::new(AtomicBool::new(true));
     let bitrate = Arc::new(AtomicU32::new(config.bitrate_bps));
     let high_resolution = Arc::new(AtomicBool::new(true));
+    let hardware = Arc::new(AtomicBool::new(false));
     let (ready_tx, ready_rx) = oneshot::channel::<Result<SourceInfo>>();
     // Small queue: if the network side falls behind, drop and resync with a keyframe
     // rather than building latency.
@@ -240,6 +247,7 @@ pub async fn start(config: StreamConfig, video: Arc<VideoSender>) -> Result<Stre
             keyframe: keyframe.clone(),
             bitrate: bitrate.clone(),
             high_resolution: high_resolution.clone(),
+            hardware: hardware.clone(),
             size: size_tx,
         };
         std::thread::Builder::new()
@@ -275,6 +283,7 @@ pub async fn start(config: StreamConfig, video: Arc<VideoSender>) -> Result<Stre
         keyframe,
         bitrate,
         high_resolution,
+        hardware,
         size: size_rx,
         thread: Some(thread),
     })
@@ -286,6 +295,7 @@ struct Controls {
     keyframe: Arc<AtomicBool>,
     bitrate: Arc<AtomicU32>,
     high_resolution: Arc<AtomicBool>,
+    hardware: Arc<AtomicBool>,
     size: watch::Sender<(u32, u32)>,
 }
 
@@ -300,6 +310,7 @@ fn encode_loop(
         keyframe,
         bitrate,
         high_resolution,
+        hardware: encoding_in_hardware,
         size,
     } = controls;
     let hardware_failed = std::cell::Cell::new(false);
@@ -320,6 +331,7 @@ fn encode_loop(
             hardware_failed.set(true);
             tracing::warn!("hardware encoder unavailable, using software: {e}");
         }
+        encoding_in_hardware.store(encoder.is_hardware(), Ordering::Relaxed);
         tracing::info!(encoder = encoder.name(), size = ?(width, height), "video encoder ready");
         Ok(encoder)
     };

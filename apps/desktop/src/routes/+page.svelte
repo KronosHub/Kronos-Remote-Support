@@ -25,7 +25,7 @@
     | { kind: "approval_request"; session: number; peer: string; timeout_secs: number }
     | { kind: "approval_closed"; session: number }
     | { kind: "view_opened"; session: number; peer: string; peer_name: string | null }
-    | { kind: "view_size"; session: number; width: number; height: number }
+    | { kind: "view_size"; session: number; width: number; height: number; hardware: boolean | null }
     | { kind: "view_rtt"; session: number; ms: number }
     | { kind: "view_resync"; session: number }
     | {
@@ -69,6 +69,8 @@
     peer: string;
     width: number | null;
     height: number | null;
+    /** The partner encodes the video on its video chip (true) or processor (false); null: unknown. */
+    hardware: boolean | null;
     rtt: number | null;
     fps: number | null;
     waiting: boolean;
@@ -464,6 +466,11 @@
   type UacSupport = { supported: boolean; active: boolean; toggleable: boolean; outdated: boolean };
   let uac = $state<UacSupport | null>(null);
   let uacBusy = $state(false);
+  /** Windows: reached remotely only, no monitor (a disconnected Remote Desktop session is
+   * moved to the console by the service so it can be shared). */
+  let remoteOnly = $state(false);
+  /** Asking whether this PC is reached remotely only (after unattended access is turned on). */
+  let remoteOnlyAsk = $state(false);
   /** Windows: the virtual monitor for PCs without one (ADR 0049). */
   type VirtualMonitor = {
     supported: boolean;
@@ -631,6 +638,7 @@
           }
           view.width = event.width;
           view.height = event.height;
+          view.hardware = event.hardware;
           view.noScreen = null;
         }
         break;
@@ -803,6 +811,7 @@
     reloadDevices();
     refreshPresence();
     invoke<boolean>("get_autostart").then((a) => (autostart = a));
+    invoke<boolean>("remote_only").then((r) => (remoteOnly = r));
     invoke<string | null>("display_name").then((n) => {
       displayName = n;
       nameDraft = n ?? "";
@@ -1049,9 +1058,11 @@
       return;
     }
     try {
+      const wasUnattended = status.unattended;
       status = await invoke<Status>("set_personal_password", { password: personalDialog.first });
       personalDialog = null;
       addLog("info", "password personale impostata: accesso non presidiato attivo");
+      if (!wasUnattended && uac?.supported && !quick) remoteOnlyAsk = true;
     } catch (e) {
       if (personalDialog) personalDialog.error = String(e);
     }
@@ -1078,6 +1089,18 @@
   function cancelName() {
     nameDraft = displayName ?? "";
     editingName = false;
+  }
+
+  async function setRemoteOnly(enabled: boolean) {
+    remoteOnlyAsk = false;
+    try {
+      remoteOnly = await invoke<boolean>("set_remote_only", { enabled });
+      addLog("info", remoteOnly
+        ? "computer usato solo da remoto: la sessione di Desktop remoto chiusa resta condivisibile"
+        : "computer con monitor: la sessione di Desktop remoto chiusa non viene spostata");
+    } catch (e) {
+      addLog("error", String(e));
+    }
   }
 
   async function toggleAutostart() {
@@ -1116,6 +1139,7 @@
       peer: "",
       width: null,
       height: null,
+      hardware: null,
       rtt: null,
       fps: null,
       waiting: true,
@@ -1626,9 +1650,12 @@
         {/if}
         {#if view.width}
           <span class="stat {level(view.rtt, 150, 300)}"
-            title="Risoluzione, fotogrammi al secondo e latenza (giallo da 150 ms, rosso da 300 ms)">
+            title={"Risoluzione, compressione, fotogrammi al secondo e latenza (giallo da 150 ms, rosso da 300 ms)" +
+              (view.hardware === null ? "" : view.hardware
+                ? "\nGPU: il video è compresso dal chip video del computer controllato"
+                : "\nCPU: il video è compresso dal processore del computer controllato (chip video non disponibile)")}>
             <span class="stat-k">Video</span>
-            <span class="stat-v mono" style="min-width: 28ch">{pad(`${view.width}×${view.height}`, 9)} · {pad(view.fps === null ? "–" : view.fps.toFixed(0), 2)} fps · {pad(view.rtt === null ? "–" : view.rtt.toFixed(0), 4)} ms</span>
+            <span class="stat-v mono" style="min-width: 34ch">{pad(`${view.width}×${view.height}`, 9)} {view.hardware === null ? "   " : view.hardware ? "GPU" : "CPU"} · {pad(view.fps === null ? "–" : view.fps.toFixed(0), 2)} fps · {pad(view.rtt === null ? "–" : view.rtt.toFixed(0), 4)} ms</span>
           </span>
         {/if}
         {#if view.net}
@@ -1912,6 +1939,15 @@
           </button>
           <button class="icon-btn" onclick={disablePersonal}>Disattiva</button>
         </div>
+        {#if uac?.supported && !quick}
+          <label class="check" title="Per server e macchine virtuali raggiunti solo da remoto, senza nessuno davanti a un monitor">
+            <input type="checkbox" checked={remoteOnly} onchange={() => setRemoteOnly(!remoteOnly)} />
+            Computer usato solo da remoto (senza monitor)
+          </label>
+          {#if remoteOnly && !uac.active}
+            <p class="hint small">Serve il controllo finestre di amministratore (UAC) attivo.</p>
+          {/if}
+        {/if}
       {:else}
         <p class="hint small">
           Imposta una password personale per controllare questo computer senza conferma{#if quick}, finché
@@ -2305,6 +2341,30 @@
   </div>
 </div>
 
+{/if}
+
+{#if remoteOnlyAsk}
+  <div class="backdrop">
+    <div class="modal" role="alertdialog" aria-labelledby="remote-only-title">
+      <h2 id="remote-only-title">Computer usato solo da remoto?</h2>
+      <p class="hint">
+        Rispondi <strong>Sì</strong> per un server o una macchina virtuale senza monitor, raggiunti solo da remoto
+        (Desktop remoto/RDP o Kronos). Chiudendo Desktop remoto senza uscire, la sessione di Windows viene
+        spostata sullo schermo del computer, così puoi collegarti con Kronos e vederla.
+      </p>
+      <p class="hint">
+        Rispondi <strong>No</strong> per un PC con un monitor: spostandola, la sessione comparirebbe sbloccata
+        davanti a chiunque sia lì. Si può cambiare in seguito da Accesso non presidiato.
+      </p>
+      {#if !uac?.active}
+        <p class="hint small">Serve anche il controllo finestre di amministratore (UAC) attivo.</p>
+      {/if}
+      <div class="actions">
+        <button type="button" onclick={() => setRemoteOnly(false)}>No, ha un monitor</button>
+        <button class="primary" type="button" onclick={() => setRemoteOnly(true)}>Sì, solo da remoto</button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 {#if confirmDialog}

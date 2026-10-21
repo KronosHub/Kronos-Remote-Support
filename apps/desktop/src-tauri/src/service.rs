@@ -100,6 +100,8 @@ pub enum UiEvent {
         session: SessionId,
         width: u32,
         height: u32,
+        /// Encoded by the partner's video chip (true) or processor (false); None: older host.
+        hardware: Option<bool>,
     },
     ViewRtt {
         session: SessionId,
@@ -910,6 +912,19 @@ impl Service {
         }
         *self.shared.display_name.lock().unwrap() = name.clone();
         name
+    }
+
+    pub fn remote_only(&self) -> bool {
+        self.shared.store.remote_only()
+    }
+
+    pub fn set_remote_only(&self, enabled: bool) -> Result<bool, String> {
+        self.shared
+            .store
+            .set_remote_only(enabled)
+            .map_err(|e| format!("impossibile salvare l'impostazione: {e}"))?;
+        tracing::info!(enabled, "remote-only computer");
+        Ok(enabled)
     }
 
     pub fn set_block_input(&self, session: SessionId, enabled: bool) {
@@ -2444,13 +2459,18 @@ async fn view_partner(
         commands,
         true,
         |event| match event {
-            ViewerEvent::Started { width, height } => shared.view_event(
+            ViewerEvent::Started {
+                width,
+                height,
+                hardware,
+            } => shared.view_event(
                 app,
                 session,
                 UiEvent::ViewSize {
                     session,
                     width,
                     height,
+                    hardware,
                 },
             ),
             ViewerEvent::Frame(frame) => shared.send_frame(session, &frame),

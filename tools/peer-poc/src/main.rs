@@ -537,7 +537,9 @@ async fn view(
         commands,
         share_clipboard,
         |event| match event {
-            ViewerEvent::Started { width, height } => println!("Host streaming {width}x{height}"),
+            ViewerEvent::Started { width, height, .. } => {
+                println!("Host streaming {width}x{height}")
+            }
             ViewerEvent::Frame(frame) => {
                 if first_frame.is_none() {
                     first_frame = Some(Instant::now());
