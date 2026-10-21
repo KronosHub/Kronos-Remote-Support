@@ -107,10 +107,15 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(3);
 /// Tells the other side the session ends and waits (at most `BYE_FLUSH`) until the
 /// message has left: the connection is closed right after, which would otherwise drop it.
 async fn send_bye(channel: &Arc<dyn DataChannel>, reason: &str) {
+    send_goodbye(channel, reason, false).await;
+}
+
+async fn send_goodbye(channel: &Arc<dyn DataChannel>, reason: &str, updating: bool) {
     send(
         channel,
         &ControlMsg::Bye {
             reason: reason.to_owned(),
+            updating,
         },
     )
     .await;
@@ -181,6 +186,8 @@ pub enum HostCommand {
     Chat(String),
     /// Stop the clipboard file transfer under way.
     CancelTransfer,
+    /// This app is about to quit to install an update: tell the viewer, then end.
+    Updating,
 }
 
 /// Host: streams until the viewer leaves, the channel closes or `Stop` arrives.
@@ -537,11 +544,15 @@ pub async fn serve_host(
                         Err(e) => tracing::warn!("cannot switch to display {id}: {e:#}"),
                     }
                 }
-                Some(ControlMsg::Bye { reason }) => break reason,
+                Some(ControlMsg::Bye { reason, .. }) => break reason,
                 Some(_) => {}
                 None => break "connessione chiusa".to_owned(),
             },
             cmd = commands.recv() => match cmd {
+                Some(HostCommand::Updating) => {
+                    send_goodbye(&channel, "il computer remoto si sta aggiornando", true).await;
+                    break "chiusa per aggiornare l'app".to_owned();
+                }
                 Some(HostCommand::CancelTransfer) => {
                     clipboard.cancel_transfer(&channel, true).await;
                     on_event(HostEvent::Clipboard("trasferimento annullato".into()));
@@ -856,6 +867,8 @@ pub enum ViewerEvent {
     },
     /// The host may set its screen to this window's size (`ViewerCommand::MatchResolution`).
     ResolutionAdjustable,
+    /// The host is quitting to install an update (the session ends next).
+    PartnerUpdating,
     /// The host's sound cannot be played (here or on the host); the button goes off.
     AudioUnavailable(String),
     /// A clipboard file transfer moved on.
@@ -1007,7 +1020,12 @@ pub async fn run_viewer(
                     on_event(ViewerEvent::ScreenUnavailable(message));
                 }
                 Some(ControlMsg::ResolutionAdjustable) => on_event(ViewerEvent::ResolutionAdjustable),
-                Some(ControlMsg::Bye { reason }) => break reason,
+                Some(ControlMsg::Bye { reason, updating }) => {
+                    if updating {
+                        on_event(ViewerEvent::PartnerUpdating);
+                    }
+                    break reason;
+                }
                 Some(_) => {}
                 None => break "connessione chiusa".to_owned(),
             },

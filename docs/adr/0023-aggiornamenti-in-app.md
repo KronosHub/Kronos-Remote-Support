@@ -37,3 +37,7 @@ Aggiornare l'app con un pulsante, senza scaricare a mano gli installer.
   (con il controllo finestre di amministratore attivo, ADR 0033) e la approva; poi l'app si chiude e l'MSI la
   riavvia a installazione finita. Se l'UAC viene rifiutato l'app resta aperta e mostra l'errore.
 - La prima volta serve ancora qualcuno al PC: la versione installata è quella vecchia, con il flusso vecchio.
+- Prima di chiudersi per aggiornare, l'app avvisa chi la sta controllando: `Bye { updating: true }` (campo nuovo,
+  ignorato dai peer vecchi), dopo il "Sì" all'UAC per l'MSI. Il viewer chiude la sua finestra invece di restare
+  fermo sull'ultima immagine fino al timeout; il riepilogo nella finestra principale dice perché. Il pacchetto
+  viene scaricato prima di chiudere le sessioni, così un download fallito non le interrompe.

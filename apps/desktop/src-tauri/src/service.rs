@@ -187,6 +187,8 @@ pub enum UiEvent {
     ViewClosed {
         session: SessionId,
         reason: String,
+        /// The partner quit to install an update: the viewer window closes by itself.
+        updating: bool,
         /// How long the session lasted, for the end-of-session popup.
         duration_secs: u64,
     },
@@ -1026,10 +1028,35 @@ impl Service {
                 UiEvent::ViewClosed {
                     session,
                     reason: "connessione persa".into(),
+                    updating: false,
                     duration_secs: 0,
                 },
             );
         }
+    }
+
+    /// Before quitting to install an update: every partner controlling this computer is told
+    /// (its viewer closes) and the sessions end. Waits for them, a few seconds at most.
+    pub async fn end_hosting_for_update(&self) {
+        let sessions: Vec<SessionId> = {
+            let hosting = self.shared.hosting.lock().unwrap();
+            for host in hosting.values() {
+                let _ = host.commands.send(HostCommand::Updating);
+            }
+            hosting.keys().copied().collect()
+        };
+        if sessions.is_empty() {
+            return;
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(3), async {
+            while sessions
+                .iter()
+                .any(|s| self.shared.hosting.lock().unwrap().contains_key(s))
+            {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await;
     }
 
     pub fn stop_hosting(&self, session: SessionId) {
@@ -2469,6 +2496,7 @@ async fn view_partner(
 
     let mut last_rtt_emit: Option<Instant> = None;
     let mut ended = String::from("sessione terminata");
+    let mut partner_updating = false;
     let mut chat = ChatLimiter::default();
     session::run_viewer(
         channel,
@@ -2595,6 +2623,7 @@ async fn view_partner(
                     ended = reason;
                 }
             }
+            ViewerEvent::PartnerUpdating => partner_updating = true,
         },
     )
     .await;
@@ -2611,6 +2640,7 @@ async fn view_partner(
         UiEvent::ViewClosed {
             session,
             reason: ended,
+            updating: partner_updating,
             duration_secs: viewing_since.elapsed().as_secs(),
         },
     );

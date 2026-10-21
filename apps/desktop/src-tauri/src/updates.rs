@@ -2,7 +2,7 @@
 //! `Remote-Desktop-releases` repository (ADR 0023).
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::UpdaterExt;
 
 #[derive(Debug, Clone, Serialize)]
@@ -62,10 +62,15 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
         downloaded += chunk as u64;
         let _ = progress_app.emit("update_progress", Progress { downloaded, total });
     };
+    // Signature checked by `download`.
+    let bytes = update.download(progress, || {}).await.map_err(err)?;
+    // Partners controlling this computer get told before the app quits: their viewer closes
+    // instead of freezing on the last picture.
+    let service = app.state::<crate::service::Service>();
     // Installed from the MSI (for all users): its installer needs an administrator. Asked
-    // here, while the app still runs, so whoever controls this PC remotely sees the UAC
-    // prompt and can approve it; the stock updater quits first and the prompt waits for
-    // someone at the PC.
+    // here, while the app still runs and the session is still open, so whoever controls
+    // this PC remotely sees the UAC prompt and can approve it; the stock updater quits first
+    // and the prompt waits for someone at the PC.
     #[cfg(windows)]
     if update
         .download_url
@@ -73,8 +78,6 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
         .to_ascii_lowercase()
         .ends_with(".msi")
     {
-        // Signature checked by `download`.
-        let bytes = update.download(progress, || {}).await.map_err(err)?;
         let version = update.version.clone();
         let started = tauri::async_runtime::spawn_blocking(move || install_msi(&version, &bytes))
             .await
@@ -84,14 +87,13 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
             return Err(err("permesso di amministratore negato"));
         }
         tracing::info!(version = %update.version, "MSI update started, quitting");
+        service.end_hosting_for_update().await;
         // The installer replaces the app and starts it again when done.
         app.exit(0);
         return Ok(());
     }
-    update
-        .download_and_install(progress, || {})
-        .await
-        .map_err(err)?;
+    service.end_hosting_for_update().await;
+    update.install(bytes).map_err(err)?;
     tracing::info!(version = %update.version, "update installed, restarting");
     app.restart();
 }

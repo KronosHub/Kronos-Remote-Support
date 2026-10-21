@@ -7,6 +7,8 @@ Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, qu
   l'app è ancora aperta, così si può approvare anche da remoto (con il controllo finestre di amministratore
   attivo); a installazione finita Kronos riparte da solo. Vale dai prossimi aggiornamenti: questo va ancora
   approvato dal PC.
+- Quando il computer che stai controllando si aggiorna, la tua finestra di controllo si chiude da sola (con il
+  motivo nel riepilogo) invece di restare bloccata sull'ultima immagine. Serve la 2.0.1 su entrambi i computer.
 
 ## 2.0.0 — 2026-10-21
 Versione **ottimizzata**: stesse funzioni, meno lavoro per il computer.

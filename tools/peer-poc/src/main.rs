@@ -572,6 +572,7 @@ async fn view(
             ViewerEvent::ScreenUnavailable(e) => println!("Host has no screen yet: {e}"),
             ViewerEvent::AudioUnavailable(e) => println!("Sound unavailable: {e}"),
             ViewerEvent::ResolutionAdjustable => println!("Host can match its resolution"),
+            ViewerEvent::PartnerUpdating => println!("Host is quitting to update"),
             ViewerEvent::Transfer(p) => println!("Transfer: {}/{} bytes", p.done, p.total),
             ViewerEvent::InputBlocked { blocked, message } => {
                 println!(

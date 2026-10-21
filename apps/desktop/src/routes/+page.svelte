@@ -59,7 +59,7 @@
     | { kind: "view_control_unavailable"; session: number; message: string }
     | { kind: "view_no_screen"; session: number; message: string }
     | { kind: "view_displays"; session: number; displays: DisplayInfo[]; current: number }
-    | { kind: "view_closed"; session: number; reason: string; duration_secs: number }
+    | { kind: "view_closed"; session: number; reason: string; updating: boolean; duration_secs: number }
     | { kind: "hosting_started"; session: number; peer: string }
     | { kind: "hosting_ended"; session: number; peer: string; duration_secs: number }
     | { kind: "connection_path"; session: number; path: Path | null };
@@ -816,7 +816,12 @@
         if (view?.session === event.session) view.rtt = event.ms;
         break;
       case "view_closed":
-        if (view?.session === event.session) endVideo(event.reason);
+        if (view?.session === event.session) {
+          endVideo(event.reason);
+          // The partner quit to install an update: nothing more to see here (the summary in
+          // the main window says why).
+          if (event.updating) getCurrentWindow().close();
+        }
         // Main window: summary popup for the session we controlled.
         if (viewSession === null) {
           sessionEnded = {

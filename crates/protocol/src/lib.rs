@@ -35,9 +35,12 @@ pub enum ControlMsg {
     },
     /// Viewer → host: decoder lost sync (start, packet loss, decode error); send an IDR.
     RequestKeyframe,
-    /// Either side ends the session.
+    /// Either side ends the session. `updating`: the host quits to install an update (the
+    /// viewer closes its window); older peers ignore it.
     Bye {
         reason: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        updating: bool,
     },
     /// Viewer → host: mouse/keyboard event to replay on the host.
     Input {
@@ -207,6 +210,19 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 hardware: None,
+            })
+        );
+        // Older peers send and expect no `updating`.
+        let bye = ControlMsg::Bye {
+            reason: "x".into(),
+            updating: false,
+        };
+        assert_eq!(bye.to_json(), r#"{"t":"bye","reason":"x"}"#);
+        assert_eq!(
+            ControlMsg::from_json(br#"{"t":"bye","reason":"x","updating":true}"#),
+            Some(ControlMsg::Bye {
+                reason: "x".into(),
+                updating: true,
             })
         );
         assert_eq!(
