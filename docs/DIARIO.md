@@ -638,3 +638,14 @@
   da 20,3 s a 1,2–1,6 s su 20 s, 22 → 29 fps, latenza 115 → 17 ms; decodifica WebCodecs verificata in Chrome.
 - Windows (Media Foundation + swscale) compilato nei workflow su un ramo di prova; prima prova reale sul PC
   dell'utente.
+
+## 2026-10-21 — Windows usato solo con Desktop remoto; GPU/CPU nella barra (v1.9.1)
+- Segnalazione: VM Windows gestita via RDP non raggiungibile dopo il riavvio (anche con "Avvia all'accesso"), e non
+  visibile dopo aver chiuso RDP. Dal codice: l'host prima dell'accesso copiava ID e password solo dall'utente alla
+  console, mai presente su quella VM; e non si ritirava a un accesso RDP (due host con lo stesso ID).
+- Corretto; in più, su richiesta dell'utente, opzione "Computer usato solo da remoto" chiesta all'attivazione
+  dell'accesso non presidiato: il servizio sposta la sessione RDP scollegata sulla console (come `tscon`), così
+  Kronos la vede. Spenta di default: su un PC con monitor lascerebbe il desktop sbloccato (ADR 0059).
+- Richiesta: indicare GPU o CPU accanto alla risoluzione. L'host lo manda in `StreamStarted` (campo facoltativo).
+- Push e workflow rifiutati (403): l'account GitHub in uso non ha più i permessi sul repository pubblico.
+

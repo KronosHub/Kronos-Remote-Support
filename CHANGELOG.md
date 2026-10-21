@@ -2,6 +2,16 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.9.1 — 2026-10-21
+- Nella barra delle statistiche, accanto alla risoluzione, compare **GPU** se il video è compresso dal chip video
+  del computer controllato o **CPU** se lo comprime il processore (servono entrambi i computer aggiornati).
+- Windows usato solo con Desktop remoto (server, macchine virtuali): dopo un riavvio il computer è raggiungibile con
+  Kronos anche se nessuno è mai entrato dallo schermo del computer.
+- Nuova opzione **Computer usato solo da remoto (senza monitor)**, chiesta quando si attiva l'accesso non presidiato:
+  chiudendo Desktop remoto senza uscire, la sessione di Windows resta visibile e controllabile con Kronos. Da non
+  attivare su un PC con un monitor. Dopo l'aggiornamento premere **Aggiorna** sul controllo finestre di
+  amministratore.
+
 ## 1.9.0 — 2026-10-20
 - Il video del computer controllato ora è compresso dal chip video (Mac: VideoToolbox; Windows: Intel, AMD o NVIDIA
   tramite Media Foundation) invece che dal processore. Sul Mac di prova il carico è sceso da un core intero a circa
