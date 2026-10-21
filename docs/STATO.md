@@ -108,8 +108,8 @@
 - Test reali macOS: 1080p@30 ok (~17 ms/frame); Retina 3340x2160 solo ~11 fps (dettagli in DIARIO.md)
 
 ## Prossimo passo
-- **Permessi GitHub**: l'account `albarth84` non ha più scrittura su `KronosHub/Kronos-Remote-Support` (push e
-  workflow rifiutati con 403, 2026-10-21); la 1.9.1 è nel ramo locale `remote-only`, da spingere e rilasciare.
+- **Account GitHub**: push, workflow e release con l'account `KronosHub` (`gh auth switch -u KronosHub`);
+  `albarth84` non ha più scrittura sul repository (403, 2026-10-21).
 - **Provare la 1.9.1 sulla VM Windows dell'utente** (solo RDP): Aggiorna del servizio, opzione "solo da remoto",
   riavvio senza accesso, accesso RDP, chiusura di RDP senza uscire; GPU/CPU nella barra.
 - **Provare la 1.7.0 su Windows**: monitor virtuale dall'app (UAC, conferma del driver, schermo 1920×1080 visto
