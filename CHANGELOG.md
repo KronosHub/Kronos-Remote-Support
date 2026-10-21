@@ -2,6 +2,14 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.9.3 — 2026-10-21
+- **Immagine più nitida** quando il tuo schermo è più grande di quello del computer controllato: l'ingrandimento usa
+  un filtro che mantiene netti i bordi del testo invece di sfocarlo.
+- Nuovo menu nella barra del viewer per la **dimensione dell'immagine**: **Adatta** (riempie la finestra, come
+  prima), **Intero ×N** (il multiplo esatto più grande che entra: ogni pixel diventa un quadrato perfetto, il testo
+  più nitido possibile) e **Pixel reali** (1:1, con le barre di scorrimento se l'immagine non entra). La scelta
+  viene ricordata. Basta aggiornare il computer da cui controlli.
+
 ## 1.9.2 — 2026-10-21
 - **Trasferimento file**: se nella cartella di destinazione c'è già un elemento con lo stesso nome, l'app chiede se
   **sovrascriverlo** o **creare una copia** (per esempio "report (2).pdf"). Per sovrascrivere sul computer

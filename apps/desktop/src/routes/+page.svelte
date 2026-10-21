@@ -521,6 +521,95 @@
   let canvas = $state<HTMLCanvasElement | null>(null);
   let remote: RemoteVideo | null = null;
 
+  // ---- Picture size in the viewer ----------------------------------------------------
+  /**
+   * "fit": fills the window (enlarged with the bicubic shader); "whole": the largest whole
+   * multiple of the remote pixels that fits, every pixel an exact square; "native": one
+   * remote pixel per screen pixel, with scroll bars when larger than the window.
+   */
+  type Zoom = "fit" | "whole" | "native";
+  const zoomModes: Zoom[] = ["fit", "whole", "native"];
+  let zoom = $state<Zoom>(
+    (() => {
+      try {
+        const saved = localStorage.getItem("viewZoom") as Zoom | null;
+        return saved && zoomModes.includes(saved) ? saved : "fit";
+      } catch {
+        return "fit";
+      }
+    })(),
+  );
+  let screenEl = $state<HTMLDivElement | null>(null);
+  let screenBox = $state({ width: 0, height: 0 });
+  let pixelRatio = $state(window.devicePixelRatio || 1);
+  /** Size of the frames being painted (0 before the first one). */
+  let frameSize = $state({ width: 0, height: 0 });
+  /** Largest whole multiple of the frame that fits the window (at least 1). */
+  const wholeMultiple = $derived(
+    frameSize.width && screenBox.width
+      ? Math.max(
+          1,
+          Math.floor(
+            Math.min(
+              (screenBox.width * pixelRatio) / frameSize.width,
+              (screenBox.height * pixelRatio) / frameSize.height,
+            ),
+          ),
+        )
+      : 1,
+  );
+  /** Size of the picture on screen, in CSS and in device pixels. */
+  const picture = $derived.by(() => {
+    const { width, height } = frameSize;
+    if (!width || !height || !screenBox.width || !screenBox.height) return null;
+    let device: { width: number; height: number };
+    if (zoom === "fit") {
+      const scale = Math.min(screenBox.width / width, screenBox.height / height) * pixelRatio;
+      device = { width: Math.floor(width * scale), height: Math.floor(height * scale) };
+    } else {
+      const k = zoom === "whole" ? wholeMultiple : 1;
+      device = { width: width * k, height: height * k };
+    }
+    return {
+      ...device,
+      cssWidth: device.width / pixelRatio,
+      cssHeight: device.height / pixelRatio,
+      filter: zoom === "fit" ? ("bicubic" as const) : ("nearest" as const),
+    };
+  });
+
+  $effect(() => {
+    if (picture) remote?.renderer.setOutput(picture.width, picture.height, picture.filter);
+  });
+
+  $effect(() => {
+    const el = screenEl;
+    if (!el) return;
+    // Client size: without the scroll bars of a 1:1 picture larger than the window.
+    const observer = new ResizeObserver(() => {
+      screenBox = { width: el.clientWidth, height: el.clientHeight };
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  });
+
+  $effect(() => {
+    // Moving the window to a screen with another scale factor.
+    const query = matchMedia(`(resolution: ${pixelRatio}dppx)`);
+    const changed = () => (pixelRatio = window.devicePixelRatio || 1);
+    query.addEventListener("change", changed);
+    return () => query.removeEventListener("change", changed);
+  });
+
+  function setZoom(value: Zoom) {
+    zoom = value;
+    try {
+      localStorage.setItem("viewZoom", value);
+    } catch {
+      // not saved: the default comes back next time
+    }
+  }
+
   /** "quick": share-only Quick access build (no installation); unknown until asked. */
   let mode = $state<"quick" | "full" | null>(null);
   const quick = $derived(mode === "quick");
@@ -632,7 +721,7 @@
         if (view?.session === event.session) {
           // A new size means a new stream (other monitor, or resolution adapted to the
           // bandwidth): restart the decoder, unless it already shows the new size.
-          const painted = canvas && canvas.width === event.width && canvas.height === event.height;
+          const painted = frameSize.width === event.width && frameSize.height === event.height;
           if (view.width !== null && (view.width !== event.width || view.height !== event.height) && !painted) {
             remote?.restart();
           }
@@ -1249,6 +1338,7 @@
   async function startVideo(session: number) {
     await tick(); // the viewer canvas is rendered now
     if (!view || view.session !== session || !canvas) return;
+    frameSize = { width: 0, height: 0 };
     if (!webCodecsSupported()) {
       view.error = "Questo sistema non supporta la decodifica video (WebCodecs).";
       return;
@@ -1262,6 +1352,7 @@
       () => {
         if (view) view.waiting = false;
       },
+      (width, height) => (frameSize = { width, height }),
     );
     const frames = new Channel<ArrayBuffer>();
     const video = remote;
@@ -1306,18 +1397,9 @@
     invoke("send_input", { session: view.session, event });
   }
 
-  /**
-   * Area of the canvas element showing the picture: the canvas fills the window and the
-   * image is centred in it at the stream's aspect ratio (black bars on the other sides).
-   */
+  /** Area showing the picture: the canvas is sized to it (`picture`), centred in the window. */
   function pictureRect() {
-    const r = canvas!.getBoundingClientRect();
-    const { width, height } = canvas!;
-    if (!width || !height) return r;
-    const scale = Math.min(r.width / width, r.height / height);
-    const w = width * scale;
-    const h = height * scale;
-    return { left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, width: w, height: h };
+    return canvas!.getBoundingClientRect();
   }
 
   /** Pointer position normalized to the displayed image. */
@@ -1394,6 +1476,8 @@
   }
 
   function onWheel(e: WheelEvent) {
+    // Without control the wheel scrolls a 1:1 picture larger than the window.
+    if (!view?.control) return;
     e.preventDefault();
     // Pixel deltas (trackpads) arrive in small steps: one notch every ~100 px.
     const unit = e.deltaMode === 1 ? 3 : e.deltaMode === 2 ? 1 / 10 : 100;
@@ -1640,6 +1724,17 @@
               ? "HD attivo: con la rete buona fino a 2560×1600. Clic per limitare a 1080p (meno banda e CPU)"
               : "HD spento: al massimo 1080p. Clic per riattivarlo"}>HD</button>
         {/if}
+        <select
+          class="displays"
+          value={zoom}
+          onchange={(e) => setZoom(e.currentTarget.value as Zoom)}
+          title="Dimensione dell'immagine del partner. Adatta: riempie la finestra, ingrandita con un filtro che mantiene il testo nitido. Ingrandimento intero: ogni pixel del partner diventa un quadrato esatto di pixel del tuo schermo (il più grande che entra). Pixel reali: un pixel del partner per ogni pixel del tuo schermo, con le barre di scorrimento se non entra (senza controllo la rotellina scorre)"
+          aria-label="Dimensione dell'immagine"
+        >
+          <option value="fit">Adatta</option>
+          <option value="whole">Intero ×{wholeMultiple}</option>
+          <option value="native">Pixel reali</option>
+        </select>
         <button class="danger" onclick={disconnect}>{view.ended ? "Chiudi" : "Disconnetti"}</button>
       </div>
       <div class="toolbar-row stats">
@@ -1702,10 +1797,12 @@
         </div>
       {/if}
     </div>
-    <div class="screen">
+    <div class="screen" bind:this={screenEl}>
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <canvas
         bind:this={canvas}
+        style:width={picture ? `${picture.cssWidth}px` : null}
+        style:height={picture ? `${picture.cssHeight}px` : null}
         tabindex="0"
         class:controlling={view.control}
         onmousemove={onMouseMove}
@@ -3063,17 +3160,16 @@
     flex: 1;
     min-height: 0;
     position: relative;
-    display: grid;
-    /* Definite cell size, so the canvas' max-width/height (100%) fit the window. */
-    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
-    place-items: center;
-    overflow: hidden;
+    display: flex;
+    overflow: auto;
   }
-  /* Fills the window; the picture keeps its aspect ratio (scaled up or down). */
+  /* Sized by the script (`picture`); auto margins centre it, and become 0 when it is larger
+     than the window, so the scroll bars reach every edge. */
   .screen canvas {
+    flex: none;
+    margin: auto;
     width: 100%;
     height: 100%;
-    object-fit: contain;
   }
   .screen canvas:focus {
     outline: none;

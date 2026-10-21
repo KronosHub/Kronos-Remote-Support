@@ -1,6 +1,8 @@
+import { VideoRenderer } from "./video-renderer";
+
 /**
  * Decodes the partner's H.264 stream with WebCodecs (hardware accelerated where available)
- * and paints it on a canvas.
+ * and paints it on a canvas (`VideoRenderer`).
  *
  * Wire format of each message from the backend:
  *   [keyframe: u8][timestamp µs: u64 little endian][Annex B access unit]
@@ -40,21 +42,20 @@ function codecFromKeyframe(data: Uint8Array): string | null {
 
 export class RemoteVideo {
   private decoder: VideoDecoder | null = null;
-  private ctx: CanvasRenderingContext2D;
+  readonly renderer: VideoRenderer;
   private frames = 0;
   private fpsWindowStart = performance.now();
   private closed = false;
   private painted = false;
 
   constructor(
-    private canvas: HTMLCanvasElement,
+    canvas: HTMLCanvasElement,
     private needKeyframe: () => void,
     private onFps: (fps: number) => void,
     private onFirstFrame: () => void,
+    private onSize: (width: number, height: number) => void,
   ) {
-    const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
-    if (!ctx) throw new Error("canvas 2D non disponibile");
-    this.ctx = ctx;
+    this.renderer = new VideoRenderer(canvas);
   }
 
   push(message: ArrayBuffer) {
@@ -103,13 +104,9 @@ export class RemoteVideo {
       frame.close();
       return;
     }
-    const { displayWidth: w, displayHeight: h } = frame;
-    if (this.canvas.width !== w || this.canvas.height !== h) {
-      this.canvas.width = w;
-      this.canvas.height = h;
-    }
-    this.ctx.drawImage(frame, 0, 0);
+    const resized = this.renderer.paint(frame);
     frame.close();
+    if (resized) this.onSize(this.renderer.width, this.renderer.height);
 
     if (!this.painted) {
       this.painted = true;
