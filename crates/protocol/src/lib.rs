@@ -109,6 +109,17 @@ pub enum ControlMsg {
     BlockInput {
         enabled: bool,
     },
+    /// Host → viewer: this computer may set its screen to the viewer's window size (option
+    /// "used only remotely", ADR 0061). Older viewers ignore it.
+    ResolutionAdjustable,
+    /// Viewer → host: set the shared screen to the mode closest to `width`×`height` device
+    /// pixels (`scale` of them per point); 0×0 brings the host's own resolution back. Hosts
+    /// without the option ignore it.
+    MatchResolution {
+        width: u32,
+        height: u32,
+        scale: f32,
+    },
     /// Host → viewer: whether the host's own input is blocked now (after a request, or when
     /// the person at the host released it with Esc ×3); `message` explains a failure.
     InputBlocked {
@@ -198,6 +209,20 @@ mod tests {
                 hardware: None,
             })
         );
+        assert_eq!(
+            ControlMsg::ResolutionAdjustable.to_json(),
+            r#"{"t":"resolution_adjustable"}"#
+        );
+        let msg = ControlMsg::MatchResolution {
+            width: 2560,
+            height: 1440,
+            scale: 2.0,
+        };
+        assert_eq!(
+            msg.to_json(),
+            r#"{"t":"match_resolution","width":2560,"height":1440,"scale":2.0}"#
+        );
+        assert_eq!(ControlMsg::from_json(msg.to_json().as_bytes()), Some(msg));
         assert_eq!(
             ControlMsg::RequestKeyframe.to_json(),
             r#"{"t":"request_keyframe"}"#

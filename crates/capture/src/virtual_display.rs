@@ -20,6 +20,21 @@ use crate::{CaptureError, Result};
 /// Size of the virtual monitor: what most remote screens are viewed at.
 pub const WIDTH: u32 = 1920;
 pub const HEIGHT: u32 = 1080;
+/// Other sizes it offers, for a viewer whose window asks for one (ADR 0061); the first
+/// mode, `WIDTH`×`HEIGHT`, is the one it starts with.
+const OTHER_MODES: [(u32, u32); 9] = [
+    (1280, 720),
+    (1280, 800),
+    (1440, 900),
+    (1600, 900),
+    (1680, 1050),
+    (1920, 1200),
+    (2048, 1152),
+    (2560, 1440),
+    (2560, 1600),
+];
+/// Largest of all the modes.
+const MAX_PIXELS: (u32, u32) = (2560, 1600);
 /// How long to wait for the new display to become capturable.
 const APPEAR_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -197,8 +212,8 @@ fn make() -> Result<VirtualDisplay> {
         }
         let name = NSString::from_str("Kronos Remote Support");
         let _: () = msg_send![&descriptor, setName: &*name];
-        let _: () = msg_send![&descriptor, setMaxPixelsWide: WIDTH];
-        let _: () = msg_send![&descriptor, setMaxPixelsHigh: HEIGHT];
+        let _: () = msg_send![&descriptor, setMaxPixelsWide: MAX_PIXELS.0];
+        let _: () = msg_send![&descriptor, setMaxPixelsHigh: MAX_PIXELS.1];
         // A 24" monitor: macOS derives the default scaling from the physical size.
         let size = CGSize {
             width: 527.0,
@@ -221,15 +236,18 @@ fn make() -> Result<VirtualDisplay> {
         let settings: Retained<AnyObject> = msg_send![class(c"CGVirtualDisplaySettings")?, new];
         check(&settings, sel!(setHiDPI:))?;
         check(&settings, sel!(setModes:))?;
-        let allocated: Allocated<AnyObject> = msg_send![class(c"CGVirtualDisplayMode")?, alloc];
-        let mode: Option<Retained<AnyObject>> = msg_send![
-            allocated,
-            initWithWidth: WIDTH,
-            height: HEIGHT,
-            refreshRate: 60.0f64
-        ];
-        let mode = mode.ok_or_else(|| unsupported("CGVirtualDisplayMode"))?;
-        let modes = NSArray::from_retained_slice(&[mode]);
+        let mut modes = Vec::with_capacity(OTHER_MODES.len() + 1);
+        for (width, height) in std::iter::once((WIDTH, HEIGHT)).chain(OTHER_MODES) {
+            let allocated: Allocated<AnyObject> = msg_send![class(c"CGVirtualDisplayMode")?, alloc];
+            let mode: Option<Retained<AnyObject>> = msg_send![
+                allocated,
+                initWithWidth: width,
+                height: height,
+                refreshRate: 60.0f64
+            ];
+            modes.push(mode.ok_or_else(|| unsupported("CGVirtualDisplayMode"))?);
+        }
+        let modes = NSArray::from_retained_slice(&modes);
         let _: () = msg_send![&settings, setHiDPI: 0u32];
         let _: () = msg_send![&settings, setModes: &*modes];
         let applied: Bool = msg_send![&display, applySettings: &*settings];

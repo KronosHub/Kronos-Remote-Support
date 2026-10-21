@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFO};
+use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFO, MONITORINFOEXW};
 use windows_capture::dxgi_duplication_api::{DxgiDuplicationApi, DxgiDuplicationFormat, Error};
 use windows_capture::monitor::Monitor;
 
@@ -56,6 +56,28 @@ fn describe(index: usize, monitor: &Monitor) -> Result<Display> {
         primary,
         bounds,
     })
+}
+
+/// GDI name of the display (`\\.\DISPLAY1`), NUL-terminated, for the display mode calls.
+pub(crate) fn device_name(display_id: u32) -> Result<Vec<u16>> {
+    let monitor = monitors()?
+        .into_iter()
+        .nth(display_id as usize)
+        .ok_or(CaptureError::DisplayNotFound(display_id))?;
+    let mut info = MONITORINFOEXW::default();
+    info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    let handle = HMONITOR(monitor.as_raw_hmonitor());
+    if !unsafe { GetMonitorInfoW(handle, &mut info.monitorInfo) }.as_bool() {
+        return Err(CaptureError::DisplayNotFound(display_id));
+    }
+    let len = info
+        .szDevice
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(info.szDevice.len());
+    let mut name = info.szDevice[..len].to_vec();
+    name.push(0);
+    Ok(name)
 }
 
 fn monitors() -> Result<Vec<Monitor>> {

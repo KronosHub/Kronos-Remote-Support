@@ -8,6 +8,7 @@ pub mod clipboard;
 pub mod files;
 pub mod fs;
 pub mod rate;
+mod resize;
 pub mod session;
 mod sharing;
 mod sound;
@@ -52,6 +53,9 @@ pub struct StreamConfig {
     /// Encode on the media engine when this build and machine can (ADR 0058); OpenH264
     /// otherwise.
     pub hardware_encoding: bool,
+    /// Host: the viewer may set the shared screen to its window size (ADR 0061); only for
+    /// computers used remotely, where nobody sees the monitor change.
+    pub resize_display: bool,
 }
 
 impl Default for StreamConfig {
@@ -71,6 +75,7 @@ impl Default for StreamConfig {
             allow_clipboard: true,
             agent_product: None,
             hardware_encoding: true,
+            resize_display: false,
         }
     }
 }

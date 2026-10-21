@@ -231,6 +231,10 @@ pub enum UiEvent {
         session: SessionId,
         blocked: bool,
     },
+    /// The partner may set its screen to this window's size (ADR 0061).
+    ViewResolutionAdjustable {
+        session: SessionId,
+    },
     HostingEnded {
         session: SessionId,
         peer: String,
@@ -925,6 +929,16 @@ impl Service {
             .map_err(|e| format!("impossibile salvare l'impostazione: {e}"))?;
         tracing::info!(enabled, "remote-only computer");
         Ok(enabled)
+    }
+
+    pub fn match_resolution(&self, session: SessionId, width: u32, height: u32, scale: f32) {
+        if let Some(viewer) = self.shared.viewers.lock().unwrap().get(&session) {
+            let _ = viewer.commands.send(ViewerCommand::MatchResolution {
+                width,
+                height,
+                scale,
+            });
+        }
     }
 
     pub fn set_block_input(&self, session: SessionId, enabled: bool) {
@@ -2161,6 +2175,8 @@ async fn serve_partner(
         // Windows: use the SYSTEM agent (if running) so UAC/lock screen work. The host before
         // login is SYSTEM itself and captures directly.
         agent_product: (!crate::logon_host()).then(|| crate::agent_product().to_owned()),
+        // Computers used only remotely: the viewer may set the screen to its window size.
+        resize_display: shared.store.remote_only(),
         ..StreamConfig::default()
     };
     let mut chat = ChatLimiter::default();
@@ -2536,6 +2552,9 @@ async fn view_partner(
                 shared.view_event(app, session, UiEvent::ViewNotice { session, message });
             }
             ViewerEvent::Transfer(p) => shared.view_event(app, session, transfer_event(session, p)),
+            ViewerEvent::ResolutionAdjustable => {
+                shared.view_event(app, session, UiEvent::ViewResolutionAdjustable { session })
+            }
             ViewerEvent::InputBlocked { blocked, message } => {
                 shared.view_event(app, session, UiEvent::ViewInputBlocked { session, blocked });
                 if let Some(message) = message {

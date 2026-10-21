@@ -41,6 +41,7 @@
     | { kind: "view_clipboard"; session: number; enabled: boolean }
     | { kind: "view_audio"; session: number; enabled: boolean }
     | { kind: "view_input_blocked"; session: number; blocked: boolean }
+    | { kind: "view_resolution_adjustable"; session: number }
     | { kind: "hosting_input_blocked"; session: number; blocked: boolean }
     | { kind: "view_notice"; session: number; message: string }
     | { kind: "view_chat"; session: number; text: string }
@@ -92,6 +93,8 @@
     audio: boolean;
     /** The partner's own mouse and keyboard are blocked. */
     inputBlocked: boolean;
+    /** The partner may set its screen to this window's size ("solo da remoto", ADR 0061). */
+    resizable: boolean;
     /** Name the partner set in their app, if any. */
     peerName: string | null;
     transfer: Transfer | null;
@@ -469,6 +472,8 @@
   /** Windows: reached remotely only, no monitor (a disconnected Remote Desktop session is
    * moved to the console by the service so it can be shared). */
   let remoteOnly = $state(false);
+  /** "Solo da remoto" exists on Windows (session moved to the screen, ADR 0059) and on the Mac. */
+  const isMac = navigator.userAgent.includes("Mac OS X");
   /** Asking whether this PC is reached remotely only (after unattended access is turned on). */
   let remoteOnlyAsk = $state(false);
   /** Windows: the virtual monitor for PCs without one (ADR 0049). */
@@ -525,10 +530,12 @@
   /**
    * "fit": fills the window (enlarged with the bicubic shader); "whole": the largest whole
    * multiple of the remote pixels that fits, every pixel an exact square; "native": one
-   * remote pixel per screen pixel, with scroll bars when larger than the window.
+   * remote pixel per screen pixel, with scroll bars when larger than the window; "remote": the
+   * partner sets its screen to the window's size (only computers used remotely, ADR 0061),
+   * otherwise shown as "fit".
    */
-  type Zoom = "fit" | "whole" | "native";
-  const zoomModes: Zoom[] = ["fit", "whole", "native"];
+  type Zoom = "fit" | "whole" | "native" | "remote";
+  const zoomModes: Zoom[] = ["fit", "whole", "native", "remote"];
   let zoom = $state<Zoom>(
     (() => {
       try {
@@ -539,6 +546,7 @@
       }
     })(),
   );
+  const shownZoom = $derived<Zoom>(zoom === "remote" && !view?.resizable ? "fit" : zoom);
   let screenEl = $state<HTMLDivElement | null>(null);
   let screenBox = $state({ width: 0, height: 0 });
   let pixelRatio = $state(window.devicePixelRatio || 1);
@@ -563,18 +571,18 @@
     const { width, height } = frameSize;
     if (!width || !height || !screenBox.width || !screenBox.height) return null;
     let device: { width: number; height: number };
-    if (zoom === "fit") {
+    if (shownZoom === "fit" || shownZoom === "remote") {
       const scale = Math.min(screenBox.width / width, screenBox.height / height) * pixelRatio;
       device = { width: Math.floor(width * scale), height: Math.floor(height * scale) };
     } else {
-      const k = zoom === "whole" ? wholeMultiple : 1;
+      const k = shownZoom === "whole" ? wholeMultiple : 1;
       device = { width: width * k, height: height * k };
     }
     return {
       ...device,
       cssWidth: device.width / pixelRatio,
       cssHeight: device.height / pixelRatio,
-      filter: zoom === "fit" ? ("bicubic" as const) : ("nearest" as const),
+      filter: shownZoom === "whole" || shownZoom === "native" ? ("nearest" as const) : ("bicubic" as const),
     };
   });
 
@@ -599,6 +607,33 @@
     const changed = () => (pixelRatio = window.devicePixelRatio || 1);
     query.addEventListener("change", changed);
     return () => query.removeEventListener("change", changed);
+  });
+
+  /** Last size asked of the partner ("remote" mode), so it is asked again only when it changes. */
+  let askedResolution: string | null = null;
+  $effect(() => {
+    const v = view;
+    if (!v || v.ended) return;
+    const session = v.session;
+    const scale = pixelRatio;
+    const width = Math.round(screenBox.width * scale);
+    const height = Math.round(screenBox.height * scale);
+    // Asked again with HD (the partner's limit) or another monitor.
+    const key = `${session}:${width}x${height}@${scale}:${v.hd}:${v.currentDisplay}`;
+    if (shownZoom !== "remote") {
+      if (askedResolution !== null) {
+        askedResolution = null;
+        invoke("match_resolution", { session, width: 0, height: 0, scale });
+      }
+      return;
+    }
+    if (!width || !height || key === askedResolution) return;
+    // Resizing the window: ask once it stops, every change costs the partner a mode switch.
+    const timer = setTimeout(() => {
+      askedResolution = key;
+      invoke("match_resolution", { session, width, height, scale });
+    }, 800);
+    return () => clearTimeout(timer);
   });
 
   function setZoom(value: Zoom) {
@@ -790,6 +825,9 @@
         break;
       case "view_input_blocked":
         if (view?.session === event.session) view.inputBlocked = event.blocked;
+        break;
+      case "view_resolution_adjustable":
+        if (view?.session === event.session) view.resizable = true;
         break;
       case "hosting_input_blocked":
         hosting = hosting.map((h) => (h.session === event.session ? { ...h, blocked: event.blocked } : h));
@@ -1151,7 +1189,7 @@
       status = await invoke<Status>("set_personal_password", { password: personalDialog.first });
       personalDialog = null;
       addLog("info", "password personale impostata: accesso non presidiato attivo");
-      if (!wasUnattended && uac?.supported && !quick) remoteOnlyAsk = true;
+      if (!wasUnattended && (uac?.supported || isMac) && !quick) remoteOnlyAsk = true;
     } catch (e) {
       if (personalDialog) personalDialog.error = String(e);
     }
@@ -1185,8 +1223,10 @@
     try {
       remoteOnly = await invoke<boolean>("set_remote_only", { enabled });
       addLog("info", remoteOnly
-        ? "computer usato solo da remoto: la sessione di Desktop remoto chiusa resta condivisibile"
-        : "computer con monitor: la sessione di Desktop remoto chiusa non viene spostata");
+        ? isMac
+          ? "computer usato solo da remoto: chi controlla può adattare la risoluzione alla sua finestra"
+          : "computer usato solo da remoto: la sessione di Desktop remoto chiusa resta condivisibile e chi controlla può adattare la risoluzione"
+        : "computer con monitor: risoluzione e sessione non vengono cambiate da remoto");
     } catch (e) {
       addLog("error", String(e));
     }
@@ -1243,6 +1283,7 @@
       hd: true,
       audio: false,
       inputBlocked: false,
+      resizable: false,
       peerName: null,
       transfer: null,
       path: null,
@@ -1726,14 +1767,17 @@
         {/if}
         <select
           class="displays"
-          value={zoom}
+          value={shownZoom}
           onchange={(e) => setZoom(e.currentTarget.value as Zoom)}
-          title="Dimensione dell'immagine del partner. Adatta: riempie la finestra, ingrandita con un filtro che mantiene il testo nitido. Ingrandimento intero: ogni pixel del partner diventa un quadrato esatto di pixel del tuo schermo (il più grande che entra). Pixel reali: un pixel del partner per ogni pixel del tuo schermo, con le barre di scorrimento se non entra (senza controllo la rotellina scorre)"
+          title="Dimensione dell'immagine del partner. Adatta: riempie la finestra, ingrandita con un filtro che mantiene il testo nitido. Ingrandimento intero: ogni pixel del partner diventa un quadrato esatto di pixel del tuo schermo (il più grande che entra). Pixel reali: un pixel del partner per ogni pixel del tuo schermo, con le barre di scorrimento se non entra (senza controllo la rotellina scorre). Risoluzione adattata (solo computer usati da remoto): il partner porta il suo schermo alla risoluzione più vicina alla finestra, poi la ripristina alla fine"
           aria-label="Dimensione dell'immagine"
         >
           <option value="fit">Adatta</option>
           <option value="whole">Intero ×{wholeMultiple}</option>
           <option value="native">Pixel reali</option>
+          {#if view.resizable}
+            <option value="remote">Risoluzione adattata</option>
+          {/if}
         </select>
         <button class="danger" onclick={disconnect}>{view.ended ? "Chiudi" : "Disconnetti"}</button>
       </div>
@@ -2036,12 +2080,14 @@
           </button>
           <button class="icon-btn" onclick={disablePersonal}>Disattiva</button>
         </div>
-        {#if uac?.supported && !quick}
-          <label class="check" title="Per server e macchine virtuali raggiunti solo da remoto, senza nessuno davanti a un monitor">
+        {#if (uac?.supported || isMac) && !quick}
+          <label class="check" title={isMac
+            ? "Per Mac raggiunti solo da remoto, senza nessuno davanti a un monitor: chi controlla può portare lo schermo alla risoluzione della sua finestra"
+            : "Per server e macchine virtuali raggiunti solo da remoto, senza nessuno davanti a un monitor: la sessione di Desktop remoto chiusa resta condivisibile e chi controlla può portare lo schermo alla risoluzione della sua finestra"}>
             <input type="checkbox" checked={remoteOnly} onchange={() => setRemoteOnly(!remoteOnly)} />
             Computer usato solo da remoto (senza monitor)
           </label>
-          {#if remoteOnly && !uac.active}
+          {#if remoteOnly && uac?.supported && !uac.active}
             <p class="hint small">Serve il controllo finestre di amministratore (UAC) attivo.</p>
           {/if}
         {/if}
@@ -2444,16 +2490,28 @@
   <div class="backdrop">
     <div class="modal" role="alertdialog" aria-labelledby="remote-only-title">
       <h2 id="remote-only-title">Computer usato solo da remoto?</h2>
-      <p class="hint">
-        Rispondi <strong>Sì</strong> per un server o una macchina virtuale senza monitor, raggiunti solo da remoto
-        (Desktop remoto/RDP o Kronos). Chiudendo Desktop remoto senza uscire, la sessione di Windows viene
-        spostata sullo schermo del computer, così puoi collegarti con Kronos e vederla.
-      </p>
-      <p class="hint">
-        Rispondi <strong>No</strong> per un PC con un monitor: spostandola, la sessione comparirebbe sbloccata
-        davanti a chiunque sia lì. Si può cambiare in seguito da Accesso non presidiato.
-      </p>
-      {#if !uac?.active}
+      {#if isMac}
+        <p class="hint">
+          Rispondi <strong>Sì</strong> per un Mac senza monitor, raggiunto solo da remoto: chi lo controlla può
+          portare il suo schermo alla risoluzione della propria finestra (ripristinata alla fine).
+        </p>
+        <p class="hint">
+          Rispondi <strong>No</strong> per un Mac con un monitor: chi è davanti vedrebbe cambiare la risoluzione.
+          Si può cambiare in seguito da Accesso non presidiato.
+        </p>
+      {:else}
+        <p class="hint">
+          Rispondi <strong>Sì</strong> per un server o una macchina virtuale senza monitor, raggiunti solo da remoto
+          (Desktop remoto/RDP o Kronos). Chiudendo Desktop remoto senza uscire, la sessione di Windows viene
+          spostata sullo schermo del computer, così puoi collegarti con Kronos e vederla; chi controlla può
+          inoltre portare lo schermo alla risoluzione della propria finestra (ripristinata alla fine).
+        </p>
+        <p class="hint">
+          Rispondi <strong>No</strong> per un PC con un monitor: spostandola, la sessione comparirebbe sbloccata
+          davanti a chiunque sia lì. Si può cambiare in seguito da Accesso non presidiato.
+        </p>
+      {/if}
+      {#if uac?.supported && !uac?.active}
         <p class="hint small">Serve anche il controllo finestre di amministratore (UAC) attivo.</p>
       {/if}
       <div class="actions">

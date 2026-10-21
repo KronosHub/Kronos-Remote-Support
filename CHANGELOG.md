@@ -2,6 +2,13 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.9.4 — 2026-10-21
+- Nuova voce **Risoluzione adattata** nel menu della dimensione dell'immagine: il computer controllato porta il suo
+  schermo alla risoluzione più vicina alla tua finestra (più dettaglio vero, testo più leggibile) e la ripristina a
+  fine sessione. Compare solo se sul computer controllato è attivo **Computer usato solo da remoto**; servono
+  entrambi i computer aggiornati.
+- L'opzione **Computer usato solo da remoto (senza monitor)** ora c'è anche sul Mac.
+
 ## 1.9.3 — 2026-10-21
 - **Immagine più nitida** quando il tuo schermo è più grande di quello del computer controllato: l'ingrandimento usa
   un filtro che mantiene netti i bordi del testo invece di sfocarlo.

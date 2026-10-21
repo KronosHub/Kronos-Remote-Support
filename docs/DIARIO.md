@@ -665,3 +665,12 @@
 - Test: shader provato in Chrome headless con un frame 4×2 (blocchi esatti in Intero, transizione morbida in
   Adatta, nessun ingrandimento quando si riduce); svelte-check e build puliti. Da provare nell'app (WKWebView,
   WebView2) con una sessione vera.
+
+## 2026-10-21 — Risoluzione adattata alla finestra (v1.9.4)
+- L'utente ha riammesso la strada 1 dello studio, solo con "Computer usato solo da remoto" e come voce facoltativa
+  del menu; ha chiesto l'opzione anche sul Mac (ADR 0061).
+- Fatto: messaggi `ResolutionAdjustable` / `MatchResolution`, cambio di modalità su Windows e macOS con ripristino
+  a fine sessione, schermo virtuale del Mac con più modalità.
+- Test: scelta della modalità (unitari), messaggi (formato), cambio reale su uno schermo virtuale di questo Mac;
+  Windows solo compilato.
+- Richiesta successiva: versione 2.0 con meno RAM e CPU.

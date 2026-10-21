@@ -1,6 +1,6 @@
 [package]
 name = "desktop-remoto"
-version = "1.9.3"
+version = "1.9.4"
 description = "Desktop Remoto: remote desktop client and host"
 edition.workspace = true
 license.workspace = true

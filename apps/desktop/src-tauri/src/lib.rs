@@ -611,6 +611,17 @@ fn set_block_input(service: State<'_, Service>, session: u64, enabled: bool) {
 }
 
 #[tauri::command]
+fn match_resolution(
+    service: State<'_, Service>,
+    session: u64,
+    width: u32,
+    height: u32,
+    scale: f32,
+) {
+    service.match_resolution(session, width, height, scale);
+}
+
+#[tauri::command]
 fn cancel_transfer(service: State<'_, Service>, session: u64) {
     service.cancel_transfer(session);
 }
@@ -1051,6 +1062,7 @@ pub fn run() {
             set_audio_volume,
             cancel_transfer,
             set_block_input,
+            match_resolution,
             display_name,
             set_display_name,
             remote_only,

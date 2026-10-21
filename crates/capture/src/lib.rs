@@ -9,6 +9,7 @@ pub mod composite;
 #[cfg(target_os = "macos")]
 mod macos;
 mod pattern;
+pub mod resolution;
 pub mod scale;
 pub mod shared;
 #[cfg(target_os = "macos")]

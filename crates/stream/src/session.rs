@@ -122,6 +122,9 @@ async fn send_bye(channel: &Arc<dyn DataChannel>, reason: &str) {
     .await;
 }
 
+/// After a resolution change, wait this long before capturing the screen at its new size.
+const RESIZE_SETTLE: Duration = Duration::from_millis(800);
+
 /// Longest wait for a `Bye` to leave before the connection closes.
 const BYE_FLUSH: Duration = Duration::from_secs(1);
 
@@ -228,6 +231,11 @@ pub async fn serve_host(
             width: handle.width,
             height: handle.height,
         });
+    }
+    // The viewer may set this screen to its window size (computers used remotely, ADR 0061).
+    let mut display_resize = crate::resize::DisplayResize::default();
+    if config.resize_display && capture::resolution::SUPPORTED {
+        send(&channel, &ControlMsg::ResolutionAdjustable).await;
     }
 
     // Starting the injector may block on an OS permission prompt: keep it off the runtime.
@@ -507,7 +515,19 @@ pub async fn serve_host(
                         sink.send(event);
                     }
                 }
+                Some(ControlMsg::MatchResolution { width, height, scale }) if config.resize_display => {
+                    let Some(display) = handle.as_ref().map(|h| h.display_id) else { continue };
+                    let max = if high_resolution { config.max_size } else { (1920, 1080) };
+                    let want = capture::resolution::Request { width, height, scale };
+                    if display_resize.request(display, want, max).await.is_some() && restart_at.is_none() {
+                        // The capture starts again at the new size (macOS applies the mode
+                        // a moment later; Windows' capture would also notice by itself).
+                        restart_at = Some(tokio::time::Instant::now() + RESIZE_SETTLE);
+                    }
+                }
                 Some(ControlMsg::SelectDisplay { id }) if handle.as_ref().is_some_and(|h| h.display_id != id) => {
+                    // The screen left keeps its own resolution again.
+                    display_resize.release().await;
                     let Some(handle) = handle.as_mut() else { continue };
                     match switch_display(&config, &video, handle, id).await {
                         Ok(()) => {
@@ -546,6 +566,7 @@ pub async fn serve_host(
     usage_task.abort();
     // Dropping the sink releases any key or button still held by the viewer.
     stop_in_background(handle, input);
+    display_resize.release().await;
     on_event(HostEvent::Ended(reason));
 }
 
@@ -839,6 +860,8 @@ pub enum ViewerEvent {
         displays: Vec<protocol::DisplayInfo>,
         current: u32,
     },
+    /// The host may set its screen to this window's size (`ViewerCommand::MatchResolution`).
+    ResolutionAdjustable,
     /// The host's sound cannot be played (here or on the host); the button goes off.
     AudioUnavailable(String),
     /// A clipboard file transfer moved on.
@@ -870,6 +893,12 @@ pub enum ViewerCommand {
     CancelTransfer,
     /// Block the host's own mouse and keyboard or not.
     BlockInput(bool),
+    /// Set the host's screen to this many device pixels (0×0: its own resolution again).
+    MatchResolution {
+        width: u32,
+        height: u32,
+        scale: f32,
+    },
     Stop,
 }
 
@@ -983,6 +1012,7 @@ pub async fn run_viewer(
                 Some(ControlMsg::ScreenUnavailable { message }) => {
                     on_event(ViewerEvent::ScreenUnavailable(message));
                 }
+                Some(ControlMsg::ResolutionAdjustable) => on_event(ViewerEvent::ResolutionAdjustable),
                 Some(ControlMsg::Bye { reason }) => break reason,
                 Some(_) => {}
                 None => break "connessione chiusa".to_owned(),
@@ -1007,6 +1037,9 @@ pub async fn run_viewer(
                 }
                 Some(ViewerCommand::BlockInput(enabled)) => {
                     send(&channel, &ControlMsg::BlockInput { enabled }).await;
+                }
+                Some(ViewerCommand::MatchResolution { width, height, scale }) => {
+                    send(&channel, &ControlMsg::MatchResolution { width, height, scale }).await;
                 }
                 Some(ViewerCommand::Volume(volume)) => sound.set_volume(volume),
                 Some(ViewerCommand::CancelTransfer) => {

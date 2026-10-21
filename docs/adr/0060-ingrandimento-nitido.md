@@ -7,7 +7,7 @@ Con uno schermo del viewer più grande di quello del computer controllato (es. 1
 l'immagine riempie la finestra (`object-fit: contain`, ADR 0041) e la ingrandisce il browser con un filtro
 bilineare: il testo diventa grande ma sfocato. Studiate tre strade:
 1. risoluzione del computer controllato adattata alla finestra (unica che aggiunge dettaglio vero; solo dove la
-   risoluzione si può cambiare: VM, monitor virtuale, "solo da remoto") — esclusa dall'utente;
+   risoluzione si può cambiare: VM, monitor virtuale, "solo da remoto") — esclusa dall'utente, poi fatta solo con "solo da remoto" (ADR 0061);
 2. ingrandimento più nitido nel viewer;
 3. modalità di dimensione dell'immagine.
 L'utente ha scelto 2 e 3 ed escluso la 1 (non cambiare la risoluzione del computer controllato).
