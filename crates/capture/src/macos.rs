@@ -295,7 +295,7 @@ fn native_frame(sample: &CMSampleBuffer) -> Option<Frame> {
     Some(Frame {
         width,
         height,
-        data: Vec::new(),
+        data: Default::default(),
         captured_at,
         native: Some(NativeImage(pixel_buffer)),
     })
@@ -324,7 +324,7 @@ fn copy_frame(sample: &CMSampleBuffer) -> Option<Frame> {
     Some(Frame {
         width,
         height,
-        data,
+        data: data.into(),
         captured_at,
         native: None,
     })

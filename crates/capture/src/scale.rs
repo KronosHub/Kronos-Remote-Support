@@ -80,46 +80,75 @@ pub fn shrink_bgra(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<u8> {
     if dw > sw || dh > sh || (dw, dh) == (sw, sh) {
         return scale_bgra(src, sw, sh, dw, dh);
     }
-    let (sw, sh, dw, dh) = (sw as usize, sh as usize, dw as usize, dh as usize);
-    let (cols, rows) = (area_taps(sw, dw), area_taps(sh, dh));
-    let round = |acc: u32| ((acc + ONE / 2) / ONE).min(255) as u16;
+    Shrinker::default().shrink(src, sw, sh, dw, dh).to_vec()
+}
 
-    // Horizontal pass: every source row shrunk to the destination width.
-    let mut narrow = vec![0u16; dw * sh * 4];
-    for y in 0..sh {
-        let row = &src[y * sw * 4..(y + 1) * sw * 4];
-        let out = &mut narrow[y * dw * 4..(y + 1) * dw * 4];
-        for (x, taps) in cols.iter().enumerate() {
-            let mut acc = [0u32; 4];
-            for &(i, w) in taps {
+/// [`shrink_bgra`] for a stream of frames: the weights and buffers are kept between frames
+/// of the same sizes instead of being made again for each one.
+#[derive(Default)]
+pub struct Shrinker {
+    sizes: (u32, u32, u32, u32),
+    cols: Vec<Vec<(usize, u32)>>,
+    rows: Vec<Vec<(usize, u32)>>,
+    narrow: Vec<u16>,
+    dst: Vec<u8>,
+}
+
+impl Shrinker {
+    /// Shrinks `src` (`sw`×`sh`) to `dw`×`dh` (bilinear if that is larger).
+    pub fn shrink(&mut self, src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> &[u8] {
+        if dw > sw || dh > sh {
+            // Not a shrink (never asked by the encoder): plain bilinear.
+            self.sizes = (0, 0, 0, 0);
+            self.dst = scale_bgra(src, sw, sh, dw, dh);
+            return &self.dst;
+        }
+        if self.sizes != (sw, sh, dw, dh) || self.cols.is_empty() {
+            self.sizes = (sw, sh, dw, dh);
+            let (sw, sh, dw, dh) = (sw as usize, sh as usize, dw as usize, dh as usize);
+            self.cols = area_taps(sw, dw);
+            self.rows = area_taps(sh, dh);
+            self.narrow = vec![0u16; dw * sh * 4];
+            self.dst = vec![0u8; dw * dh * 4];
+        }
+        let (sw, sh, dw) = (sw as usize, sh as usize, dw as usize);
+        let round = |acc: u32| ((acc + ONE / 2) / ONE).min(255) as u16;
+
+        // Horizontal pass: every source row shrunk to the destination width.
+        for y in 0..sh {
+            let row = &src[y * sw * 4..(y + 1) * sw * 4];
+            let out = &mut self.narrow[y * dw * 4..(y + 1) * dw * 4];
+            for (x, taps) in self.cols.iter().enumerate() {
+                let mut acc = [0u32; 4];
+                for &(i, w) in taps {
+                    for c in 0..4 {
+                        acc[c] += u32::from(row[i * 4 + c]) * w;
+                    }
+                }
                 for c in 0..4 {
-                    acc[c] += u32::from(row[i * 4 + c]) * w;
+                    out[x * 4 + c] = round(acc[c]);
                 }
             }
-            for c in 0..4 {
-                out[x * 4 + c] = round(acc[c]);
+        }
+
+        // Vertical pass.
+        for (y, taps) in self.rows.iter().enumerate() {
+            let out = &mut self.dst[y * dw * 4..(y + 1) * dw * 4];
+            for (i, value) in out.iter_mut().enumerate() {
+                let acc: u32 = taps
+                    .iter()
+                    .map(|&(row, w)| u32::from(self.narrow[row * dw * 4 + i]) * w)
+                    .sum();
+                *value = round(acc) as u8;
             }
         }
+        &self.dst
     }
-
-    // Vertical pass.
-    let mut dst = vec![0u8; dw * dh * 4];
-    for (y, taps) in rows.iter().enumerate() {
-        let out = &mut dst[y * dw * 4..(y + 1) * dw * 4];
-        for (i, value) in out.iter_mut().enumerate() {
-            let acc: u32 = taps
-                .iter()
-                .map(|&(row, w)| u32::from(narrow[row * dw * 4 + i]) * w)
-                .sum();
-            *value = round(acc) as u8;
-        }
-    }
-    dst
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{scale_bgra, shrink_bgra};
+    use super::{Shrinker, scale_bgra, shrink_bgra};
 
     #[test]
     fn same_size_is_a_copy() {
@@ -167,5 +196,21 @@ mod tests {
         let img = [0u8, 0, 0, 255, 255, 255, 255, 255].repeat(2);
         let out = scale_bgra(&img, 2, 2, 1, 1);
         assert_eq!(out.len(), 4);
+    }
+
+    #[test]
+    fn reused_shrinker_matches_a_fresh_shrink() {
+        let a: Vec<u8> = (0..64 * 48 * 4).map(|i| (i * 7 % 251) as u8).collect();
+        let b: Vec<u8> = (0..64 * 48 * 4).map(|i| (i * 13 % 241) as u8).collect();
+        let mut shrinker = Shrinker::default();
+        for (img, size) in [
+            (&a, (40, 30)),
+            (&b, (40, 30)),
+            (&a, (32, 24)),
+            (&b, (40, 30)),
+        ] {
+            let reused = shrinker.shrink(img, 64, 48, size.0, size.1).to_vec();
+            assert_eq!(reused, shrink_bgra(img, 64, 48, size.0, size.1));
+        }
     }
 }

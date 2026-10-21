@@ -85,7 +85,9 @@ pub struct CompositeCapturer {
     union: Rect,
     size: (u32, u32),
     placements: Vec<Placement>,
-    canvas: Vec<u8>,
+    /// Shared with the last frame handed out: drawing copies it only while that frame is
+    /// still in use (`Arc::make_mut`).
+    canvas: Arc<Vec<u8>>,
     updates: Receiver<Update>,
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
@@ -148,11 +150,11 @@ impl CompositeCapturer {
                     .map_err(|e| CaptureError::Backend(e.to_string()))
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut me = Self {
+        let me = Self {
             union,
             size,
             placements,
-            canvas: [0u8, 0, 0, 255].repeat(size.0 as usize * size.1 as usize),
+            canvas: Arc::new([0u8, 0, 0, 255].repeat(size.0 as usize * size.1 as usize)),
             updates,
             stop,
             threads,
@@ -165,7 +167,6 @@ impl CompositeCapturer {
                 Err(_) => return Err(CaptureError::Stopped),
             }
         }
-        me.canvas.shrink_to_fit();
         Ok(me)
     }
 
@@ -186,9 +187,10 @@ impl CompositeCapturer {
         };
         let canvas_stride = self.size.0 as usize * 4;
         let row = place.width as usize * 4;
+        let canvas = Arc::make_mut(&mut self.canvas);
         for y in 0..place.height as usize {
             let dst = (place.y as usize + y) * canvas_stride + place.x as usize * 4;
-            self.canvas[dst..dst + row].copy_from_slice(&pixels[y * row..(y + 1) * row]);
+            canvas[dst..dst + row].copy_from_slice(&pixels[y * row..(y + 1) * row]);
         }
     }
 }
@@ -337,7 +339,8 @@ mod tests {
                 width: self.size.0,
                 height: self.size.1,
                 data: [self.value, self.value, self.value, 255]
-                    .repeat((self.size.0 * self.size.1) as usize),
+                    .repeat((self.size.0 * self.size.1) as usize)
+                    .into(),
                 captured_at: Instant::now(),
                 native: None,
             }))

@@ -181,6 +181,8 @@ impl Capturer for WinCapturer {
             return Ok(None);
         };
         let timeout_ms = timeout.as_millis().min(u32::MAX as u128) as u32;
+        let output = self.output;
+        let native = (self.display.width, self.display.height);
         let result = match duplication.acquire_next_frame(timeout_ms) {
             Ok(mut frame) => {
                 // Zero present time: only the pointer moved, the image is unchanged.
@@ -190,14 +192,23 @@ impl Capturer for WinCapturer {
                 let captured_at = Instant::now();
                 frame.buffer().map(|buffer| {
                     let (w, h) = (buffer.width(), buffer.height());
-                    let pixels = buffer.as_nopadding_buffer(&mut self.scratch).to_vec();
-                    (pixels, w, h, captured_at)
+                    let pixels = buffer.as_nopadding_buffer(&mut self.scratch);
+                    // One copy out of the duplication's buffer: scaled straight from it, or
+                    // copied as is at native size (another size ends the capture below).
+                    let data = if (w, h) != native {
+                        Vec::new()
+                    } else if (w, h) == output {
+                        pixels.to_vec()
+                    } else {
+                        crate::scale::scale_bgra(pixels, w, h, output.0, output.1)
+                    };
+                    (data, w, h, captured_at)
                 })
             }
             Err(Error::Timeout) => return Ok(None),
             Err(e) => Err(e),
         };
-        let (pixels, w, h, captured_at) = match result {
+        let (data, w, h, captured_at) = match result {
             Ok(frame) => frame,
             Err(Error::AccessLost) => {
                 tracing::info!("desktop duplication access lost, recreating");
@@ -222,11 +233,10 @@ impl Capturer for WinCapturer {
                 "monitor size changed to {w}x{h}"
             )));
         }
-        let data = crate::scale::scale_bgra(&pixels, w, h, self.output.0, self.output.1);
         Ok(Some(Frame {
             width: self.output.0,
             height: self.output.1,
-            data,
+            data: data.into(),
             captured_at,
             native: None,
         }))

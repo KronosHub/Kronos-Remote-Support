@@ -378,6 +378,8 @@ fn encode_loop(
     let mut last_keyframe: Option<Instant> = None;
     // Kept so a keyframe can be produced even while the screen is static.
     let mut last_frame: Option<Frame> = None;
+    // Weights and buffers of the shrink to the reduced resolution, kept between frames.
+    let mut shrinker = capture::scale::Shrinker::default();
     // Newest captured frame not encoded yet (frame rate lowered by adaptive quality).
     let mut pending: Option<Frame> = None;
     let mut last_encoded: Option<Instant> = None;
@@ -500,10 +502,11 @@ fn encode_loop(
             Some(result) => result,
             None => {
                 let pixels = frame.pixels();
-                let scaled = (scale < 100).then(|| {
-                    capture::scale::shrink_bgra(&pixels, frame.width, frame.height, width, height)
-                });
-                let data = scaled.as_deref().unwrap_or(&pixels);
+                let data: &[u8] = if (width, height) == (frame.width, frame.height) {
+                    &pixels
+                } else {
+                    shrinker.shrink(&pixels, frame.width, frame.height, width, height)
+                };
                 encoder.encode_bgra(data, width, height, ts)
             }
         };

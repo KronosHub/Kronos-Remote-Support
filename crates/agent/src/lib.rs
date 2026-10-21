@@ -117,25 +117,63 @@ where
     if len == 0 || len > MAX_MESSAGE {
         return Err(std::io::Error::other(format!("bad message length {len}")));
     }
-    let mut body = vec![0u8; len];
-    r.read_exact(&mut body).await?;
-    match body[0] {
-        b'J' => serde_json::from_slice(&body[1..])
-            .map(|v| Some(Wire::Json(v)))
-            .map_err(std::io::Error::other),
+    // The header first, so a frame's pixels are read straight into their own buffer.
+    match r.read_u8().await? {
+        b'J' => {
+            let mut body = vec![0u8; len - 1];
+            r.read_exact(&mut body).await?;
+            serde_json::from_slice(&body)
+                .map(|v| Some(Wire::Json(v)))
+                .map_err(std::io::Error::other)
+        }
         b'F' if len >= 9 => {
-            let width = u32::from_le_bytes(body[1..5].try_into().expect("4 bytes"));
-            let height = u32::from_le_bytes(body[5..9].try_into().expect("4 bytes"));
+            let width = r.read_u32_le().await?;
+            let height = r.read_u32_le().await?;
             if (width as usize) * (height as usize) * 4 != len - 9 {
                 return Err(std::io::Error::other("frame size mismatch"));
             }
-            body.drain(..9);
+            let mut data = vec![0u8; len - 9];
+            r.read_exact(&mut data).await?;
             Ok(Some(Wire::Frame {
                 width,
                 height,
-                data: body,
+                data,
             }))
         }
         other => Err(std::io::Error::other(format!("bad message kind {other}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn frames_and_json_cross_the_pipe() {
+        let (mut a, mut b) = tokio::io::duplex(1 << 20);
+        let frame: Wire<serde_json::Value> = Wire::Frame {
+            width: 3,
+            height: 2,
+            data: (0..24).collect(),
+        };
+        let json: Wire<serde_json::Value> = Wire::Json(serde_json::json!({ "t": "hello" }));
+        write_message(&mut a, &frame).await.unwrap();
+        write_message(&mut a, &json).await.unwrap();
+        drop(a);
+        assert_eq!(read_message(&mut b).await.unwrap(), Some(frame));
+        assert_eq!(read_message(&mut b).await.unwrap(), Some(json));
+        assert_eq!(read_message::<_, serde_json::Value>(&mut b).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn frame_with_wrong_size_is_refused() {
+        let (mut a, mut b) = tokio::io::duplex(1024);
+        let frame: Wire<serde_json::Value> = Wire::Frame {
+            width: 3,
+            height: 2,
+            data: vec![0; 10],
+        };
+        write_message(&mut a, &frame).await.unwrap();
+        assert!(read_message::<_, serde_json::Value>(&mut b).await.is_err());
     }
 }

@@ -87,7 +87,7 @@ impl Capturer for TestPattern {
         let frame = Frame {
             width: self.width,
             height: self.height,
-            data: self.render(),
+            data: self.render().into(),
             captured_at: Instant::now(),
             native: None,
         };

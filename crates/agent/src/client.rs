@@ -122,7 +122,7 @@ impl AgentCapturer {
                                 let frame = Frame {
                                     width,
                                     height,
-                                    data,
+                                    data: data.into(),
                                     captured_at: Instant::now(),
                                     native: None,
                                 };

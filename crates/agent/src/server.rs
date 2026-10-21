@@ -184,7 +184,9 @@ fn spawn_capture(
                         let message = Wire::Frame {
                             width: frame.width,
                             height: frame.height,
-                            data: frame.data,
+                            // Only this loop holds the frame: no copy.
+                            data: std::sync::Arc::try_unwrap(frame.data)
+                                .unwrap_or_else(|shared| (*shared).clone()),
                         };
                         if out.blocking_send(message).is_err() {
                             break;

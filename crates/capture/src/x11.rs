@@ -152,7 +152,7 @@ impl Capturer for X11Capturer {
         Ok(Some(Frame {
             width: self.output.0,
             height: self.output.1,
-            data,
+            data: data.into(),
             captured_at,
             native: None,
         }))

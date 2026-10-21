@@ -97,12 +97,13 @@ impl Default for CaptureConfig {
 }
 
 /// One captured frame: tightly packed BGRA in `data`, or (native capture) an empty `data`
-/// and the system image in `native`.
+/// and the system image in `native`. The pixels are shared: cloning a frame (for every
+/// session, as the last frame, for a keyframe) does not copy them.
 #[derive(Debug, Clone)]
 pub struct Frame {
     pub width: u32,
     pub height: u32,
-    pub data: Vec<u8>,
+    pub data: std::sync::Arc<Vec<u8>>,
     pub captured_at: Instant,
     pub native: Option<NativeImage>,
 }
