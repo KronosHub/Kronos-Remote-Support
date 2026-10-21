@@ -660,7 +660,7 @@
 ## 2026-10-21 — Leggibilità con uno schermo più grande (v1.9.3)
 - Richiesta: testo più leggibile quando lo schermo del viewer è più grande di quello del computer controllato.
   Studio: il browser ingrandiva con un filtro bilineare (testo sfocato); tre strade (risoluzione dell'host adattata
-  alla finestra, ingrandimento nitido, modalità di dimensione). L'utente ha scelto le ultime due (ADR 0060).
+  alla finestra, ingrandimento nitido, modalità di dimensione). L'utente ha scelto le ultime due ed escluso la prima (ADR 0060).
 - Fatto: renderer WebGL 2 con bicubico Catmull-Rom e pixel più vicino, menu Adatta / Intero ×N / Pixel reali.
 - Test: shader provato in Chrome headless con un frame 4×2 (blocchi esatti in Intero, transizione morbida in
   Adatta, nessun ingrandimento quando si riduce); svelte-check e build puliti. Da provare nell'app (WKWebView,

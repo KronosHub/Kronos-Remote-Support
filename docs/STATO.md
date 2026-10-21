@@ -112,10 +112,6 @@
 - Test reali macOS: 1080p@30 ok (~17 ms/frame); Retina 3340x2160 solo ~11 fps (dettagli in DIARIO.md)
 
 ## Prossimo passo
-- **Risoluzione del computer controllato adattata alla finestra** (studio 2026-10-21, ADR 0060 punto 1): il viewer
-  manda la dimensione della finestra e l'host cambia risoluzione (`ChangeDisplaySettingsEx`,
-  `CGDisplaySetDisplayMode`, monitor virtuali con più risoluzioni), ripristinandola a fine sessione. Automatica solo
-  con "solo da remoto" / monitor virtuale, a scelta altrove. Da descrivere in un ADR prima di svilupparla.
 - **Provare la 1.9.3**: Adatta / Intero / Pixel reali su Mac Retina e su Windows con scala 125–150 %; mouse preciso
   in tutte le modalità, scorrimento in Pixel reali.
 - **Account GitHub**: push, workflow e release con l'account `KronosHub` (`gh auth switch -u KronosHub`);
