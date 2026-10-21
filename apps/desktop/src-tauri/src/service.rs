@@ -1043,6 +1043,7 @@ impl Service {
         upload: bool,
         paths: Vec<String>,
         dest: String,
+        replace: bool,
     ) -> Result<u32, String> {
         if paths.is_empty() {
             return Err("seleziona almeno un file o una cartella".into());
@@ -1075,10 +1076,12 @@ impl Service {
             });
             let result = if upload {
                 let paths = paths.into_iter().map(PathBuf::from).collect();
-                client.upload(req, paths, dest, Some(progress_tx)).await
+                client
+                    .upload(req, paths, dest, replace, Some(progress_tx))
+                    .await
             } else {
                 client
-                    .download(req, paths, PathBuf::from(dest), Some(progress_tx))
+                    .download(req, paths, PathBuf::from(dest), replace, Some(progress_tx))
                     .await
             };
             forward.abort();

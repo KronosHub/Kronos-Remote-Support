@@ -2,6 +2,13 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 1.9.2 — 2026-10-21
+- **Trasferimento file**: se nella cartella di destinazione c'è già un elemento con lo stesso nome, l'app chiede se
+  **sovrascriverlo** o **creare una copia** (per esempio "report (2).pdf"). Per sovrascrivere sul computer
+  controllato serve che anche lì ci sia la 1.9.2.
+- **Trasferimento file**: elenco ordinabile per nome, tipo, dimensione, data di modifica o di creazione, in ordine
+  crescente o decrescente (clic sulle intestazioni delle colonne o menu "Ordina per"); l'ordine scelto viene ricordato.
+
 ## 1.9.1 — 2026-10-21
 - Nella barra delle statistiche, accanto alla risoluzione, compare **GPU** se il video è compresso dal chip video
   del computer controllato o **CPU** se lo comprime il processore (servono entrambi i computer aggiornati).

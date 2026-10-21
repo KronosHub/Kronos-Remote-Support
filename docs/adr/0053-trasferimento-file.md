@@ -41,3 +41,14 @@ controllata con dati finti in Chrome headless.
 
 ## Anche in questa versione
 Il resoconto di fine sessione si chiude da solo dopo 30 secondi (come OK, con il conto alla rovescia sul pulsante).
+
+## Aggiornamento 1.9.2 (2026-10-21)
+- **Nomi già presenti**: prima di copiare, l'interfaccia confronta i nomi scelti con l'elenco della cartella di
+  destinazione (senza distinguere maiuscole, come Windows e macOS) e chiede: Sovrascrivi, Crea una copia, Annulla.
+  `FsMsg::Upload.replace` (facoltativo: gli host precedenti lo ignorano e creano una copia) e lo stesso per i download
+  locali. Sovrascrivere sposta prima da parte l'elemento esistente (`.kronos-old-…`), mette al suo posto il nuovo e
+  solo dopo cancella il vecchio: se lo spostamento fallisce il vecchio torna dov'era. Una cartella viene sostituita
+  per intero, non unita (come Finder ed Esplora file).
+- **Ordinamento**: `FsEntry.created` (facoltativo); ordinamento solo nell'interfaccia per nome (ordine naturale),
+  tipo, dimensione, modifica, creazione, crescente/decrescente, cartelle sempre in cima; scelta ricordata.
+

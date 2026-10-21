@@ -122,6 +122,7 @@ async fn browse_and_copy_both_ways() {
                 req,
                 vec![viewer_dir.join("progetto")],
                 s(&host_dir),
+                false,
                 Some(progress_tx),
             )
             .await
@@ -146,6 +147,7 @@ async fn browse_and_copy_both_ways() {
                     req,
                     vec![s(&host_dir.join("report.txt"))],
                     viewer_dir.clone(),
+                    false,
                     None,
                 )
                 .await
@@ -156,6 +158,41 @@ async fn browse_and_copy_both_ways() {
             std::fs::read_to_string(viewer_dir.join("report (2).txt")).unwrap(),
             "dal computer controllato"
         );
+        // Overwriting: same name, new content, both ways.
+        std::fs::write(viewer_dir.join("report.txt"), "vecchio").unwrap();
+        let req = client.new_request();
+        let names = client
+            .download(
+                req,
+                vec![s(&host_dir.join("report.txt"))],
+                viewer_dir.clone(),
+                true,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(names, ["report.txt"]);
+        assert_eq!(
+            std::fs::read_to_string(viewer_dir.join("report.txt")).unwrap(),
+            "dal computer controllato"
+        );
+        std::fs::write(viewer_dir.join("progetto/dati.bin"), b"altro").unwrap();
+        let req = client.new_request();
+        let names = client
+            .upload(
+                req,
+                vec![viewer_dir.join("progetto")],
+                s(&host_dir),
+                true,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(names, ["progetto"]);
+        assert_eq!(
+            std::fs::read(host_dir.join("progetto/dati.bin")).unwrap(),
+            b"altro"
+        );
         // A missing file: an error, not a hang.
         let req = client.new_request();
         assert!(
@@ -164,6 +201,7 @@ async fn browse_and_copy_both_ways() {
                     req,
                     vec![s(&host_dir.join("manca.txt"))],
                     viewer_dir.clone(),
+                    false,
                     None
                 )
                 .await
@@ -182,7 +220,7 @@ async fn browse_and_copy_both_ways() {
         let client = client.clone();
         let source = s(&host_dir.join("grande.bin"));
         let dest = dest.clone();
-        async move { client.download(req, vec![source], dest, None).await }
+        async move { client.download(req, vec![source], dest, false, None).await }
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
     client.cancel(req).await;

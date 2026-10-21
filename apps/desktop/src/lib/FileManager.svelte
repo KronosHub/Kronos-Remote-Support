@@ -14,8 +14,12 @@
     dir: boolean;
     size: number;
     modified: number | null;
+    /** Missing on file systems without it and from hosts before 1.9.2. */
+    created?: number | null;
     hidden: boolean;
   };
+  type SortKey = "name" | "type" | "size" | "modified" | "created";
+  type Sort = { key: SortKey; desc: boolean };
   type Listing = {
     path: string;
     parent: string | null;
@@ -37,6 +41,7 @@
     address: string;
     /** Name of the folder being created, while its field is open. */
     newFolder: string | null;
+    sort: Sort;
   };
   type Copy = {
     req: number;
@@ -62,7 +67,66 @@
     anchor: null,
     address: "",
     newFolder: null,
+    sort: loadSort(),
   });
+  const SORT_KEY = "fm-sort";
+  function loadSort(): Sort {
+    try {
+      const saved = JSON.parse(localStorage.getItem(SORT_KEY) ?? "null");
+      if (saved && ["name", "type", "size", "modified", "created"].includes(saved.key)) {
+        return { key: saved.key, desc: !!saved.desc };
+      }
+    } catch {
+      // No storage: the default order.
+    }
+    return { key: "name", desc: false };
+  }
+  /** Same column again: reverse; another one: ascending (dates and sizes: newest/largest first). */
+  function setSort(side: Side, key: SortKey, desc?: boolean) {
+    const pane = panes[side];
+    pane.sort = {
+      key,
+      desc: desc ?? (pane.sort.key === key ? !pane.sort.desc : key === "modified" || key === "created" || key === "size"),
+    };
+    try {
+      localStorage.setItem(SORT_KEY, JSON.stringify(pane.sort));
+    } catch {
+      // Not remembered.
+    }
+  }
+  const collator = new Intl.Collator("it", { numeric: true, sensitivity: "base" });
+  const extension = (e: FsEntry) => {
+    const dot = e.name.lastIndexOf(".");
+    return e.dir || dot <= 0 ? "" : e.name.slice(dot + 1).toLowerCase();
+  };
+  /** Folders always first; ties broken by name. */
+  function sorted(entries: FsEntry[], sort: Sort): FsEntry[] {
+    const sign = sort.desc ? -1 : 1;
+    const by = (a: FsEntry, b: FsEntry): number => {
+      switch (sort.key) {
+        case "type":
+          return collator.compare(extension(a), extension(b));
+        case "size":
+          return a.size - b.size;
+        case "modified":
+          return (a.modified ?? 0) - (b.modified ?? 0);
+        case "created":
+          return (a.created ?? 0) - (b.created ?? 0);
+        default:
+          return 0;
+      }
+    };
+    return [...entries].sort(
+      (a, b) => Number(b.dir) - Number(a.dir) || sign * by(a, b) || sign * collator.compare(a.name, b.name),
+    );
+  }
+  const sortLabels: Record<SortKey, string> = {
+    name: "Nome",
+    type: "Tipo",
+    size: "Dimensione",
+    modified: "Data di modifica",
+    created: "Data di creazione",
+  };
   let panes = $state<Record<Side, Pane>>({ local: emptyPane(), remote: emptyPane() });
   let peer = $state("");
   let showHidden = $state(false);
@@ -73,7 +137,7 @@
 
   function visible(side: Side): FsEntry[] {
     const entries = panes[side].listing?.entries ?? [];
-    return showHidden ? entries : entries.filter((e) => !e.hidden);
+    return sorted(showHidden ? entries : entries.filter((e) => !e.hidden), panes[side].sort);
   }
 
   async function load(side: Side, path: string | null = null, retries = 0) {
@@ -167,8 +231,35 @@
     }
   }
 
-  /** Copies the selection of one side into the folder shown on the other. */
-  async function copy(from: Side) {
+  /** A copy waiting for the user's choice: some names already exist in the destination. */
+  let conflict = $state<{ from: Side; existing: string[]; dest: string } | null>(null);
+
+  /** Copies the selection of one side into the folder shown on the other; asks first if
+   * items with the same names are there (names compared ignoring case, as on Windows and
+   * macOS). */
+  function copy(from: Side) {
+    const to: Side = from === "local" ? "remote" : "local";
+    const source = panes[from];
+    const dest = panes[to].listing?.path;
+    if (!dest || source.selected.length === 0) return;
+    const taken = new Set((panes[to].listing?.entries ?? []).map((e) => e.name.toLowerCase()));
+    const existing = (source.listing?.entries ?? [])
+      .filter((e) => source.selected.includes(e.path) && taken.has(e.name.toLowerCase()))
+      .map((e) => e.name);
+    if (existing.length > 0) {
+      conflict = { from, existing, dest };
+      return;
+    }
+    startCopy(from, false);
+  }
+
+  function resolveConflict(replace: boolean | null) {
+    const pending = conflict;
+    conflict = null;
+    if (pending && replace !== null) startCopy(pending.from, replace);
+  }
+
+  async function startCopy(from: Side, replace: boolean) {
     const to: Side = from === "local" ? "remote" : "local";
     const source = panes[from];
     const dest = panes[to].listing?.path;
@@ -183,6 +274,7 @@
         upload: from === "local",
         paths: source.selected,
         dest,
+        replace,
       });
       const started: Copy = {
         req, upload: from === "local", label, dest, done: 0, total: 0, speed: 0, state: "running", message: "",
@@ -312,6 +404,16 @@
           {/if}
           {#if pane.error}<p class="error">{pane.error}</p>{/if}
         </header>
+        <div class="columns" role="toolbar" aria-label="Ordinamento">
+          <span></span>
+          <button class="col" class:active={pane.sort.key === "name"} onclick={() => setSort(side, "name")}
+            title="Ordina per nome">Nome{pane.sort.key === "name" ? (pane.sort.desc ? " ↓" : " ↑") : ""}</button>
+          <button class="col right" class:active={pane.sort.key === "size"} onclick={() => setSort(side, "size")}
+            title="Ordina per dimensione">Dimensione{pane.sort.key === "size" ? (pane.sort.desc ? " ↓" : " ↑") : ""}</button>
+          <button class="col right" class:active={pane.sort.key === "modified" || pane.sort.key === "created"}
+            onclick={() => setSort(side, pane.sort.key === "created" ? "created" : "modified")}
+            title="Ordina per data">{pane.sort.key === "created" ? "Creato" : "Modificato"}{pane.sort.key === "modified" || pane.sort.key === "created" ? (pane.sort.desc ? " ↓" : " ↑") : ""}</button>
+        </div>
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <div class="list" class:loading={pane.loading} tabindex="0" role="listbox" aria-multiselectable="true"
           onkeydown={(e) => keydown(side, e)}>
@@ -332,7 +434,7 @@
                 </span>
                 <span class="name" title={entry.name}>{entry.name}</span>
                 <span class="size muted">{entry.dir ? "" : size(entry.size)}</span>
-                <span class="date muted">{date(entry.modified)}</span>
+                <span class="date muted">{date(pane.sort.key === "created" ? (entry.created ?? null) : entry.modified)}</span>
               </div>
             {:else}
               <p class="hint">Cartella vuota</p>
@@ -345,11 +447,23 @@
           {/if}
         </div>
         <footer class="muted small">
-          {#if pane.selected.length > 0}
-            {pane.selected.length} {pane.selected.length === 1 ? "selezionato" : "selezionati"}
-          {:else if pane.listing}
-            {visible(side).length} elementi
-          {/if}
+          <span>
+            {#if pane.selected.length > 0}
+              {pane.selected.length} {pane.selected.length === 1 ? "selezionato" : "selezionati"}
+            {:else if pane.listing}
+              {visible(side).length} elementi
+            {/if}
+          </span>
+          <span class="sorting">
+            Ordina per
+            <select class="sort" aria-label="Ordina per" value={pane.sort.key}
+              onchange={(e) => setSort(side, e.currentTarget.value as SortKey, pane.sort.desc)}>
+              {#each Object.entries(sortLabels) as [key, label] (key)}<option value={key}>{label}</option>{/each}
+            </select>
+            <button class="col dir" title={pane.sort.desc ? "Decrescente: clic per crescente" : "Crescente: clic per decrescente"}
+              aria-label="Inverti ordine" onclick={() => setSort(side, pane.sort.key, !pane.sort.desc)}>
+              {pane.sort.desc ? "↓ decrescente" : "↑ crescente"}</button>
+          </span>
         </footer>
       </section>
       {#if side === "local"}
@@ -391,6 +505,32 @@
         </li>
       {/each}
     </ul>
+  {/if}
+  {#if conflict}
+    <div class="backdrop">
+      <div class="modal" role="alertdialog" aria-labelledby="conflict-title">
+        <h2 id="conflict-title">
+          {conflict.existing.length === 1 ? "Il file esiste già" : `${conflict.existing.length} elementi esistono già`}
+        </h2>
+        <p>
+          {#if conflict.existing.length === 1}
+            <strong>{conflict.existing[0]}</strong> c'è già in
+          {:else}
+            {conflict.existing.slice(0, 5).join(", ")}{conflict.existing.length > 5 ? "…" : ""}: già presenti in
+          {/if}
+          <span class="mono">{conflict.dest}</span>.
+        </p>
+        <p class="muted small">
+          Sovrascrivi sostituisce gli elementi con lo stesso nome (una cartella viene sostituita per intero).
+          Crea una copia salva i nuovi con un altro nome, per esempio "nome (2)".
+        </p>
+        <div class="modal-actions">
+          <button onclick={() => resolveConflict(null)}>Annulla</button>
+          <button onclick={() => resolveConflict(false)}>Crea una copia</button>
+          <button class="danger" onclick={() => resolveConflict(true)}>Sovrascrivi</button>
+        </div>
+      </div>
+    </div>
   {/if}
 </div>
 
@@ -495,6 +635,71 @@
     color: var(--accent-text);
     font-weight: 600;
   }
+  .columns {
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr) 76px 116px;
+    gap: 8px;
+    align-items: center;
+    padding: 4px 12px 4px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .col {
+    border: none;
+    background: none;
+    padding: 2px 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .col.right {
+    justify-content: flex-end;
+  }
+  .col.active {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .col.dir {
+    padding: 2px 4px;
+  }
+  .sort {
+    font-size: 12px;
+    padding: 2px 4px;
+  }
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgb(0 0 0 / 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    max-width: 460px;
+    width: 100%;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+  .modal h2 {
+    font-size: 15px;
+    margin-bottom: 8px;
+    white-space: normal;
+  }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  button.danger {
+    background: var(--err);
+    border-color: var(--err);
+    color: #fff;
+    font-weight: 600;
+  }
   .list {
     flex: 1;
     overflow: auto;
@@ -540,9 +745,19 @@
     white-space: nowrap;
   }
   footer {
-    padding: 6px 12px;
+    padding: 4px 12px;
     border-top: 1px solid var(--border);
     min-height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .sorting {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
   }
   .actions {
     display: flex;

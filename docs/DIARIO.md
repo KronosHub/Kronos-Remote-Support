@@ -649,3 +649,11 @@
 - Richiesta: indicare GPU o CPU accanto alla risoluzione. L'host lo manda in `StreamStarted` (campo facoltativo).
 - Push e workflow rifiutati (403): l'account GitHub in uso non ha più i permessi sul repository pubblico.
 
+## 2026-10-21 — Trasferimento file: nomi già presenti e ordinamento (v1.9.2)
+- Richiesta: chiedere se sovrascrivere o creare una copia quando il file esiste già; ordinare l'elenco per nome,
+  creazione, modifica ecc. Prima si creava sempre "nome (2)" senza chiedere.
+- Fatto (ADR 0053, aggiornamento): domanda in base all'elenco della destinazione, sostituzione che non perde il
+  vecchio elemento se qualcosa va storto; ordinamento con intestazioni cliccabili e menu "Ordina per".
+- Test: unitario (sovrascrittura di file e cartella) e due peer WebRTC (sovrascrittura nei due sensi); interfaccia
+  provata con dati finti in Chrome headless (dialogo e ordinamento per data di creazione).
+

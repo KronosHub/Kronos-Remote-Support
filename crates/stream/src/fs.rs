@@ -7,7 +7,8 @@
 //! - `D` + request `u32` LE — all files of that request sent.
 //!
 //! Files arrive in a hidden folder inside the destination and are moved into it once
-//! complete, under a new name ("name (2).ext") rather than replacing what is there.
+//! complete, under a new name ("name (2).ext") or, when the user chose to overwrite,
+//! replacing what has the same name.
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -48,6 +49,9 @@ pub struct FsEntry {
     /// Last change, in seconds since 1970.
     #[serde(default)]
     pub modified: Option<u64>,
+    /// Creation, in seconds since 1970 (not on every file system; older hosts omit it).
+    #[serde(default)]
+    pub created: Option<u64>,
     /// Starts with a dot, or has the Windows "hidden" attribute.
     #[serde(default)]
     pub hidden: bool,
@@ -95,11 +99,14 @@ enum FsMsg {
         req: u32,
         entries: Vec<Entry>,
     },
-    /// Viewer: these files follow, put them in `dest`.
+    /// Viewer: these files follow, put them in `dest`; `replace`: items with the same name
+    /// there are overwritten (otherwise the new ones get a free name). Older hosts ignore it.
     Upload {
         req: u32,
         dest: String,
         entries: Vec<Entry>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        replace: bool,
     },
     /// Done; for a copy, the names the items got in the destination.
     Done {
@@ -153,11 +160,8 @@ pub fn list_dir(path: Option<&str>) -> Result<Listing, String> {
             path: path.to_string_lossy().into_owned(),
             dir: meta.is_dir(),
             size: if meta.is_dir() { 0 } else { meta.len() },
-            modified: meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs()),
+            modified: meta.modified().ok().and_then(unix_secs),
+            created: meta.created().ok().and_then(unix_secs),
             name,
         });
     }
@@ -174,6 +178,12 @@ pub fn list_dir(path: Option<&str>) -> Result<Listing, String> {
         entries,
         truncated,
     })
+}
+
+fn unix_secs(time: std::time::SystemTime) -> Option<u64> {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs())
 }
 
 /// Creates a folder (not its parents: they are the folder being shown).
@@ -305,6 +315,8 @@ struct Incoming {
     written: Vec<u64>,
     open: Option<(u32, std::fs::File)>,
     progress: Option<ProgressReporter>,
+    /// Overwrite items with the same name in `dest`.
+    replace: bool,
 }
 
 impl Incoming {
@@ -313,6 +325,7 @@ impl Incoming {
         dest: &Path,
         entries: Vec<Entry>,
         progress: Option<mpsc::UnboundedSender<TransferProgress>>,
+        replace: bool,
     ) -> Result<Self> {
         if entries.is_empty() {
             bail!("nessun file da copiare");
@@ -354,6 +367,7 @@ impl Incoming {
             targets,
             open: None,
             progress: progress.map(|tx| ProgressReporter::new(tx, false, total)),
+            replace,
         })
     }
 
@@ -393,9 +407,17 @@ impl Incoming {
                 continue;
             }
             let name = target.file_name().context("no name")?;
-            let place = free_name(&self.dest, name);
-            std::fs::rename(target, &place)
-                .with_context(|| format!("impossibile salvare {}", place.display()))?;
+            let place = if self.replace {
+                let place = self.dest.join(name);
+                replace_with(target, &place)
+                    .with_context(|| format!("impossibile sovrascrivere {}", place.display()))?;
+                place
+            } else {
+                let place = free_name(&self.dest, name);
+                std::fs::rename(target, &place)
+                    .with_context(|| format!("impossibile salvare {}", place.display()))?;
+                place
+            };
             names.push(
                 place
                     .file_name()
@@ -446,6 +468,30 @@ fn free_name(dest: &Path, name: &OsStr) -> PathBuf {
         name.to_string_lossy(),
         rand_suffix()
     ))
+}
+
+/// Puts `new` at `place`, replacing what is there (file or folder). The old item is first
+/// moved aside, so a failure leaves it where it was.
+fn replace_with(new: &Path, place: &Path) -> std::io::Result<()> {
+    let Ok(old_meta) = std::fs::symlink_metadata(place) else {
+        return std::fs::rename(new, place);
+    };
+    let dir = place.parent().unwrap_or(Path::new("."));
+    let aside = dir.join(format!(".kronos-old-{:08x}", rand_suffix()));
+    std::fs::rename(place, &aside)?;
+    if let Err(e) = std::fs::rename(new, place) {
+        let _ = std::fs::rename(&aside, place);
+        return Err(e);
+    }
+    let removed = if old_meta.is_dir() {
+        std::fs::remove_dir_all(&aside)
+    } else {
+        std::fs::remove_file(&aside)
+    };
+    if let Err(e) = removed {
+        tracing::warn!("cannot delete the replaced {}: {e}", aside.display());
+    }
+    Ok(())
 }
 
 fn rand_suffix() -> u32 {
@@ -523,9 +569,14 @@ pub async fn serve(channel: Arc<dyn DataChannel>, mut on_log: impl FnMut(String)
                     None
                 }
             }
-            Frame::Msg(FsMsg::Upload { req, dest, entries }) => {
+            Frame::Msg(FsMsg::Upload {
+                req,
+                dest,
+                entries,
+                replace,
+            }) => {
                 upload = None;
-                match Incoming::start(req, Path::new(&dest), entries, None) {
+                match Incoming::start(req, Path::new(&dest), entries, None, replace) {
                     Ok(incoming) => {
                         upload = Some(incoming);
                         None
@@ -642,7 +693,15 @@ struct ClientState {
     /// Answers awaited, by request.
     waiting: HashMap<u32, Waiter>,
     /// Downloads under way: their local folder and where their progress goes.
-    downloads: HashMap<u32, (PathBuf, Option<mpsc::UnboundedSender<TransferProgress>>)>,
+    /// Destination, progress and "overwrite" of each download under way.
+    downloads: HashMap<
+        u32,
+        (
+            PathBuf,
+            Option<mpsc::UnboundedSender<TransferProgress>>,
+            bool,
+        ),
+    >,
     /// Uploads being sent, to stop on cancel.
     uploads: HashMap<u32, JoinHandle<()>>,
 }
@@ -730,20 +789,21 @@ impl FsClient {
             .map(|_| ())
     }
 
-    /// Copies files and folders of the host into the local folder `dest`; returns the names
-    /// they got there.
+    /// Copies files and folders of the host into the local folder `dest`, overwriting items
+    /// with the same name if `replace`; returns the names they got there.
     pub async fn download(
         &self,
         req: u32,
         paths: Vec<String>,
         dest: PathBuf,
+        replace: bool,
         progress: Option<mpsc::UnboundedSender<TransferProgress>>,
     ) -> Result<Vec<String>, String> {
         self.state
             .lock()
             .unwrap()
             .downloads
-            .insert(req, (dest, progress));
+            .insert(req, (dest, progress, replace));
         let result = self.ask(req, FsMsg::Download { req, paths }, None).await;
         self.state.lock().unwrap().downloads.remove(&req);
         match result? {
@@ -752,13 +812,15 @@ impl FsClient {
         }
     }
 
-    /// Copies local files and folders into the host's folder `dest`; returns the names
-    /// they got there.
+    /// Copies local files and folders into the host's folder `dest`, overwriting items with
+    /// the same name if `replace` (hosts before 1.9.2 make copies); returns the names they
+    /// got there.
     pub async fn upload(
         &self,
         req: u32,
         paths: Vec<PathBuf>,
         dest: String,
+        replace: bool,
         progress: Option<mpsc::UnboundedSender<TransferProgress>>,
     ) -> Result<Vec<String>, String> {
         let outgoing = tokio::task::spawn_blocking(move || {
@@ -774,7 +836,13 @@ impl FsClient {
             let total = outgoing.manifest.total_bytes();
             let sent = async {
                 let entries = outgoing.manifest.entries.clone();
-                send_msg(&channel, &lock, &FsMsg::Upload { req, dest, entries }).await?;
+                let upload = FsMsg::Upload {
+                    req,
+                    dest,
+                    entries,
+                    replace,
+                };
+                send_msg(&channel, &lock, &upload).await?;
                 let mut progress = progress.map(|tx| ProgressReporter::new(tx, true, total));
                 files::send_chunks(&channel, &outgoing, progress.as_mut()).await
             }
@@ -874,8 +942,8 @@ async fn read_answers(
             Frame::Msg(FsMsg::Sending { req, entries }) => {
                 incoming = None;
                 let target = state.lock().unwrap().downloads.get(&req).cloned();
-                if let Some((dest, progress)) = target {
-                    match Incoming::start(req, &dest, entries, progress) {
+                if let Some((dest, progress, replace)) = target {
+                    match Incoming::start(req, &dest, entries, progress, replace) {
                         Ok(started) => incoming = Some(started),
                         Err(e) => {
                             answer(&state, req, Err(format!("{e:#}")));
@@ -1011,7 +1079,7 @@ mod tests {
                 dir: false,
             },
         ];
-        let mut incoming = Incoming::start(1, &dest, entries, None).unwrap();
+        let mut incoming = Incoming::start(1, &dest, entries, None, false).unwrap();
         incoming.chunk(0, b"nuova").unwrap();
         incoming.chunk(2, b"jpg").unwrap();
         assert!(incoming.chunk(2, b"x").is_err(), "more than announced");
@@ -1026,6 +1094,44 @@ mod tests {
     }
 
     #[test]
+    fn overwriting_replaces_files_and_folders() {
+        let dest = temp_dir("replace");
+        std::fs::write(dest.join("nota.txt"), "vecchia").unwrap();
+        std::fs::create_dir(dest.join("foto")).unwrap();
+        std::fs::write(dest.join("foto/vecchia.jpg"), "x").unwrap();
+        let entries = vec![
+            Entry {
+                path: "nota.txt".into(),
+                size: 5,
+                dir: false,
+            },
+            Entry {
+                path: "foto".into(),
+                size: 0,
+                dir: true,
+            },
+            Entry {
+                path: "foto/a.jpg".into(),
+                size: 3,
+                dir: false,
+            },
+        ];
+        let mut incoming = Incoming::start(1, &dest, entries, None, true).unwrap();
+        incoming.chunk(0, b"nuova").unwrap();
+        incoming.chunk(2, b"jpg").unwrap();
+        assert_eq!(incoming.finish().unwrap(), ["nota.txt", "foto"]);
+        assert_eq!(std::fs::read(dest.join("nota.txt")).unwrap(), b"nuova");
+        assert_eq!(std::fs::read(dest.join("foto/a.jpg")).unwrap(), b"jpg");
+        assert!(
+            !dest.join("foto/vecchia.jpg").exists(),
+            "folder replaced, not merged"
+        );
+        let left: Vec<_> = std::fs::read_dir(&dest).unwrap().flatten().collect();
+        assert_eq!(left.len(), 2, "nothing set aside or staged is left");
+        std::fs::remove_dir_all(dest).unwrap();
+    }
+
+    #[test]
     fn unsafe_paths_and_unfinished_copies_leave_nothing() {
         let dest = temp_dir("unsafe");
         let entry = |path: &str| Entry {
@@ -1033,15 +1139,15 @@ mod tests {
             size: 1,
             dir: false,
         };
-        assert!(Incoming::start(1, &dest, vec![entry("../fuori")], None).is_err());
-        assert!(Incoming::start(1, &dest, vec![entry("/etc/passwd")], None).is_err());
-        let incoming = Incoming::start(1, &dest, vec![entry("a")], None).unwrap();
+        assert!(Incoming::start(1, &dest, vec![entry("../fuori")], None, false).is_err());
+        assert!(Incoming::start(1, &dest, vec![entry("/etc/passwd")], None, false).is_err());
+        let incoming = Incoming::start(1, &dest, vec![entry("a")], None, false).unwrap();
         // Incomplete: refused, and the partial file goes with the staging folder.
         assert!(incoming.finish().is_err());
-        let partial = Incoming::start(2, &dest, vec![entry("b")], None).unwrap();
+        let partial = Incoming::start(2, &dest, vec![entry("b")], None, false).unwrap();
         drop(partial);
         assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0);
-        assert!(Incoming::start(1, &dest.join("manca"), vec![entry("a")], None).is_err());
+        assert!(Incoming::start(1, &dest.join("manca"), vec![entry("a")], None, false).is_err());
         std::fs::remove_dir_all(dest).unwrap();
     }
 }

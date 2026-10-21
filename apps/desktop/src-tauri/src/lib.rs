@@ -557,8 +557,9 @@ fn fs_copy(
     upload: bool,
     paths: Vec<String>,
     dest: String,
+    replace: Option<bool>,
 ) -> Result<u32, String> {
-    service.copy_files(session, upload, paths, dest)
+    service.copy_files(session, upload, paths, dest, replace.unwrap_or(false))
 }
 
 #[tauri::command]
