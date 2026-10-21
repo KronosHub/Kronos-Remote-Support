@@ -2,6 +2,12 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 2.0.1 — 2026-10-21
+- Windows installato con il pacchetto MSI: l'aggiornamento dall'app chiede il permesso di amministratore mentre
+  l'app è ancora aperta, così si può approvare anche da remoto (con il controllo finestre di amministratore
+  attivo); a installazione finita Kronos riparte da solo. Vale dai prossimi aggiornamenti: questo va ancora
+  approvato dal PC.
+
 ## 2.0.0 — 2026-10-21
 Versione **ottimizzata**: stesse funzioni, meno lavoro per il computer.
 - Il computer controllato non copia più più volte ogni immagine dello schermo: meno processore e memoria durante

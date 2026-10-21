@@ -681,3 +681,8 @@
   `texImage2D` è il disegno più leggero, la texture fissa suggerita dall'analisi è peggio (scartata).
 - Fatto: gruppi A e B dello studio più NASM (ADR 0062). Test unitari e d'integrazione verdi; nuovi test per la pipe
   dell'agente e per lo `Shrinker`.
+
+## 2026-10-21 — Aggiornamento MSI da remoto (v2.0.1)
+- Segnalazione: aggiornando da remoto un PC Windows la sessione cadeva e l'installazione restava ferma. Dalla foto
+  dell'utente: richiesta UAC per `…-installer.msi`, cioè PC installato con l'MSI; il permesso veniva chiesto dopo
+  la chiusura dell'app. Ora viene chiesto prima (ADR 0023, aggiornamento 2.0.1).

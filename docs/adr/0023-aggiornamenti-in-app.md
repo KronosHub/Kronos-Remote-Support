@@ -26,3 +26,14 @@ Aggiornare l'app con un pulsante, senza scaricare a mano gli installer.
 - Linux: si aggiorna solo l'AppImage; `.deb`/`.rpm` vanno reinstallati a mano.
 - macOS con firma ad-hoc: dopo ogni aggiornamento possono servire di nuovo i permessi (vedi proposta certificato).
 - Le versioni ≤ 0.5.x non hanno l'updater: la 0.6.0 va installata a mano una volta.
+
+## Aggiornamento 2.0.1 (2026-10-21): MSI aggiornabile da remoto
+- Problema: su un PC installato con l'MSI (per tutti gli utenti) l'aggiornamento chiudeva l'app e solo dopo Windows
+  chiedeva il permesso di amministratore (UAC) per `msiexec`: la sessione remota era già caduta e la richiesta
+  restava in attesa di qualcuno davanti al PC. Con l'installer NSIS (per utente) l'UAC non serve.
+- Ora, se il pacchetto scaricato è un MSI, l'app lo scarica (firma verificata dall'updater), lo scrive nella cartella
+  temporanea e avvia `msiexec /i … /passive /promptrestart AUTOLAUNCHAPP=True LAUNCHAPPARGS=…` con il verbo
+  `runas` (`agent::windows::spawn_elevated`) **prima** di chiudersi: chi controlla il PC vede la richiesta UAC
+  (con il controllo finestre di amministratore attivo, ADR 0033) e la approva; poi l'app si chiude e l'MSI la
+  riavvia a installazione finita. Se l'UAC viene rifiutato l'app resta aperta e mostra l'errore.
+- La prima volta serve ancora qualcuno al PC: la versione installata è quella vecchia, con il flusso vecchio.

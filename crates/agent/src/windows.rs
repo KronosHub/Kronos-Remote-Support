@@ -146,10 +146,6 @@ pub fn spawn_self_elevated(args: &[&str]) -> Result<bool> {
 }
 
 fn shell_execute_self_elevated(args: &[&str], wait: bool) -> Result<bool> {
-    use windows_sys::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0};
-    use windows_sys::Win32::UI::Shell::{
-        SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW,
-    };
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
     let exe = std::env::current_exe()?;
     let params = args
@@ -157,8 +153,24 @@ fn shell_execute_self_elevated(args: &[&str], wait: bool) -> Result<bool> {
         .map(|a| format!("\"{a}\""))
         .collect::<Vec<_>>()
         .join(" ");
+    shell_execute_elevated(&exe, &params, SW_HIDE, wait)
+}
+
+/// Starts `file` elevated with `params` (already quoted), shown: returns once the UAC
+/// prompt was answered and the process started, without waiting for it. `Ok(false)` if the
+/// user declined.
+pub fn spawn_elevated(file: &Path, params: &str) -> Result<bool> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    shell_execute_elevated(file, params, SW_SHOWNORMAL, false)
+}
+
+fn shell_execute_elevated(file: &Path, params: &str, show: i32, wait: bool) -> Result<bool> {
+    use windows_sys::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0};
+    use windows_sys::Win32::UI::Shell::{
+        SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW,
+    };
     let verb = wide("runas");
-    let file = wide(&exe);
+    let file = wide(file);
     let params_w = wide(params);
     unsafe {
         let mut info: SHELLEXECUTEINFOW = std::mem::zeroed();
@@ -167,7 +179,7 @@ fn shell_execute_self_elevated(args: &[&str], wait: bool) -> Result<bool> {
         info.lpVerb = verb.as_ptr();
         info.lpFile = file.as_ptr();
         info.lpParameters = params_w.as_ptr();
-        info.nShow = SW_HIDE;
+        info.nShow = show;
         if ShellExecuteExW(&mut info) == 0 {
             // 1223 = ERROR_CANCELLED (user said no to UAC).
             let err = std::io::Error::last_os_error();
