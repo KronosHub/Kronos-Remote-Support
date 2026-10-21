@@ -147,6 +147,19 @@ pub trait Capturer: Send {
     fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>>;
 }
 
+/// Where a display sits in input coordinates; `None` if it is gone (or is not one display,
+/// like [`ALL_DISPLAYS`]). Cheap enough to poll.
+pub fn display_bounds(id: u32) -> Option<Rect> {
+    #[cfg(target_os = "macos")]
+    return macos::display_bounds(id);
+    #[allow(unreachable_code)]
+    displays()
+        .ok()?
+        .into_iter()
+        .find(|d| d.id == id)
+        .map(|d| d.bounds)
+}
+
 pub fn displays() -> Result<Vec<Display>> {
     #[cfg(target_os = "macos")]
     return macos::displays();

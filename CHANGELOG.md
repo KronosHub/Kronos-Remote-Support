@@ -2,6 +2,15 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 2.0.0 — 2026-10-21
+Versione **ottimizzata**: stesse funzioni, meno lavoro per il computer.
+- Il computer controllato non copia più più volte ogni immagine dello schermo: meno processore e memoria durante
+  le sessioni, soprattutto su Windows.
+- Visione più leggera: le modalità Intero e Pixel reali e gli schermi molto grandi usano molta meno memoria video.
+- App aperta senza sessioni più tranquilla: niente controlli continui con la finestra nascosta, meno thread, file
+  delle impostazioni riletti solo se cambiano, log più piccoli.
+- Codifica video senza scheda grafica più veloce sui PC Windows, Mac Intel e Linux.
+
 ## 1.9.4 — 2026-10-21
 - Nuova voce **Risoluzione adattata** nel menu della dimensione dell'immagine: il computer controllato porta il suo
   schermo alla risoluzione più vicina alla tua finestra (più dettaglio vero, testo più leggibile) e la ripristina a

@@ -4,8 +4,11 @@
 //! Only secrets derived with `auth::derive_personal_secret` are stored, never passwords.
 //! Files are written atomically and readable by the current user only.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -79,11 +82,17 @@ struct Prefs {
 pub struct Store {
     /// `None`: nothing is read or written (Quick access leaves no files behind).
     dir: Option<PathBuf>,
+    /// Contents of the files last read, with their modification time: polled lists (devices
+    /// every few seconds, preferences) are read again only when the file changed.
+    cache: Mutex<HashMap<String, (SystemTime, Vec<u8>)>>,
 }
 
 impl Store {
     pub fn new(dir: Option<PathBuf>) -> Self {
-        Self { dir }
+        Self {
+            dir,
+            cache: Mutex::default(),
+        }
     }
 
     fn dir(&self) -> std::io::Result<&Path> {
@@ -96,8 +105,21 @@ impl Store {
     }
 
     fn read<T: for<'de> Deserialize<'de>>(&self, name: &str) -> Option<T> {
-        let bytes = std::fs::read(self.dir().ok()?.join(name)).ok()?;
-        serde_json::from_slice(&bytes).ok()
+        let path = self.dir().ok()?.join(name);
+        let Some(modified) = std::fs::metadata(&path).and_then(|m| m.modified()).ok() else {
+            self.cache.lock().unwrap().remove(name);
+            return None;
+        };
+        let mut cache = self.cache.lock().unwrap();
+        if let Some((at, bytes)) = cache.get(name)
+            && *at == modified
+        {
+            return serde_json::from_slice(bytes).ok();
+        }
+        let bytes = std::fs::read(&path).ok()?;
+        let value = serde_json::from_slice(&bytes).ok();
+        cache.insert(name.to_owned(), (modified, bytes));
+        value
     }
 
     fn write<T: Serialize>(&self, name: &str, value: &T) -> std::io::Result<()> {
@@ -106,6 +128,8 @@ impl Store {
         let mut file = private_file(&tmp)?;
         file.write_all(&serde_json::to_vec_pretty(value).expect("serializable"))?;
         file.sync_all()?;
+        // Read again next time, whatever the clock's resolution.
+        self.cache.lock().unwrap().remove(name);
         std::fs::rename(&tmp, &path)
     }
 

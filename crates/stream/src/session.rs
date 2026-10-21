@@ -395,13 +395,7 @@ pub async fn serve_host(
             _ = bounds_check.tick(), if input.is_some() && restart_at.is_none() => {
                 let Some(current) = handle.as_mut() else { continue };
                 let id = current.display_id;
-                let now = tokio::task::spawn_blocking(move || {
-                    capture::displays()
-                        .ok()?
-                        .into_iter()
-                        .find(|d| d.id == id)
-                        .map(|d| d.bounds)
-                })
+                let now = tokio::task::spawn_blocking(move || capture::display_bounds(id))
                 .await
                 .ok()
                 .flatten();

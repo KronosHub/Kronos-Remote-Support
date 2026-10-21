@@ -722,6 +722,15 @@
   const secondsLeft = $derived(
     approval ? Math.max(0, Math.ceil((approval.deadline - now) / 1000)) : 0,
   );
+  // Clock for the approval countdown (smooth bar) and the viewer's resyncs of the last
+  // minute; nothing ticks when neither is shown.
+  const clockStep = $derived(approval ? 250 : view && !view.ended ? 1000 : 0);
+  $effect(() => {
+    if (!clockStep) return;
+    now = Date.now();
+    const timer = setInterval(() => (now = Date.now()), clockStep);
+    return () => clearInterval(timer);
+  });
 
   function addLog(level: string, message: string) {
     const time = new Date().toLocaleTimeString("it-IT");
@@ -923,14 +932,11 @@
         unlisten.then((f) => f());
       };
     }
-    // Clock for countdowns and the resyncs of the last minute (session windows too).
-    const timer = setInterval(() => (now = Date.now()), 250);
     if (viewSession !== null) {
       invoke<boolean>("audio_supported").then((s) => (audioSupported = s));
       openView(viewSession);
       return () => {
         unlisten.then((f) => f());
-        clearInterval(timer);
       };
     }
     invoke<"quick" | "full">("app_mode").then((m) => (mode = m));
@@ -951,8 +957,11 @@
       invoke<LanPeer[]>("lan_peers").then((p) => (lanPeers = p));
     };
     refreshPermissions();
-    // Picks up changes made in System Settings while the app is open.
-    const permissionTimer = setInterval(refreshPermissions, 3000);
+    // Picks up changes made in System Settings while the app is open; not while the window
+    // is hidden (in the tray), and at once when it shows again.
+    const permissionTimer = setInterval(() => document.hidden || refreshPermissions(), 3000);
+    const onVisibility = () => document.hidden || refreshPermissions();
+    document.addEventListener("visibilitychange", onVisibility);
     const unlistenProgress = listen<{ downloaded: number; total: number | null }>(
       "update_progress",
       (e) => {
@@ -974,7 +983,7 @@
       clearTimeout(firstCheck);
       clearInterval(updateTimer);
       clearInterval(permissionTimer);
-      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   });
 

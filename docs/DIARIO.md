@@ -674,3 +674,10 @@
 - Test: scelta della modalità (unitari), messaggi (formato), cambio reale su uno schermo virtuale di questo Mac;
   Windows solo compilato.
 - Richiesta successiva: versione 2.0 con meno RAM e CPU.
+
+## 2026-10-21 — Versione 2.0 ottimizzata
+- Misure: a riposo già leggera di CPU; in sessione il costo è nelle copie dei fotogrammi sull'host. La 1.9.3 usava
+  ~500 MB di memoria grafica nel viewer (canvas WebGL grande quanto lo schermo). Prova in WebKit: WebGL con
+  `texImage2D` è il disegno più leggero, la texture fissa suggerita dall'analisi è peggio (scartata).
+- Fatto: gruppi A e B dello studio più NASM (ADR 0062). Test unitari e d'integrazione verdi; nuovi test per la pipe
+  dell'agente e per lo `Shrinker`.

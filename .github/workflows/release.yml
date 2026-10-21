@@ -92,7 +92,7 @@ jobs:
         if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf nasm
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: lts/*
@@ -102,7 +102,21 @@ jobs:
         with:
           toolchain: stable
           targets: ${{ matrix.rust_targets }}
+      # NASM: OpenH264 (the encoder without a media engine) is built with its x86 assembly
+      # only if `nasm` is found; without it the x64 builds encode several times slower.
+      - name: NASM (Windows)
+        if: startsWith(matrix.platform, 'windows')
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress -y
+          "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: NASM (macOS Intel)
+        if: matrix.rust_targets == 'x86_64-apple-darwin'
+        run: brew install nasm
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Builds cached before NASM was installed have OpenH264 without assembly.
+          prefix-key: v1-nasm
       # macOS: the minimal FFmpeg for hardware encoding (ADR 0058), cached per target and
       # build script/patch; the app falls back to OpenH264 without it.
       - name: FFmpeg cache (macOS)

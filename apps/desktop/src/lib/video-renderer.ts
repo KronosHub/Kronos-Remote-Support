@@ -1,16 +1,23 @@
 /**
  * Paints decoded frames on the viewer canvas.
  *
- * With WebGL 2 the canvas is sized to the device pixels it covers and the picture is
- * scaled by a shader: Catmull-Rom bicubic when enlarging (sharper text than the browser's
- * bilinear stretch), nearest neighbour for whole multiples and 1:1, where every remote pixel
- * becomes an exact block of screen pixels. Smaller than the frame, the canvas keeps the
- * frame's size and the browser shrinks it, as before. Without WebGL 2 the frame is drawn
- * with the 2D context at its own size and CSS scales it.
+ * With WebGL 2, when enlarging for "fit", the canvas gets more pixels than the frame and a
+ * Catmull-Rom bicubic shader fills them (sharper text than the browser's bilinear stretch),
+ * up to [`MAX_ENLARGE`]× the frame and [`MAX_OUTPUT_PIXELS`]: every canvas pixel costs
+ * memory two or three times over in WebKit's buffers, and beyond that the browser stretches
+ * the rest. Whole multiples and 1:1 keep the frame's own size and the browser enlarges it
+ * with `image-rendering: pixelated`, which gives the same exact squares at no extra memory.
+ * Smaller than the frame, the canvas keeps the frame's size and the browser shrinks it.
+ * Without WebGL 2 the frame is drawn with the 2D context at its own size and CSS scales it.
  */
 
 /** How the picture is enlarged on screen. */
 export type Filter = "bicubic" | "nearest";
+
+/** The bicubic canvas is at most this many times the frame along each side... */
+const MAX_ENLARGE = 2;
+/** ...and at most this many pixels (4K). */
+const MAX_OUTPUT_PIXELS = 3840 * 2160;
 
 const VERTEX = `#version 300 es
 out vec2 uv;
@@ -161,11 +168,8 @@ export class VideoRenderer {
   /** Size in device pixels the picture covers on screen, and how to enlarge it. */
   setOutput(width: number, height: number, filter: Filter) {
     this.output = { width: Math.round(width), height: Math.round(height), filter };
-    if (this.ctx) {
-      this.canvas.style.imageRendering = filter === "nearest" ? "pixelated" : "";
-    } else if (this.hasFrame) {
-      this.draw();
-    }
+    this.canvas.style.imageRendering = filter === "nearest" ? "pixelated" : "";
+    if (!this.ctx && this.hasFrame) this.draw();
   }
 
   /** Paints a frame; returns true when its size differs from the previous one. */
@@ -210,16 +214,27 @@ export class VideoRenderer {
     const { gl, bicubic } = this.webgl!;
     if (gl.isContextLost()) return;
     const out = this.output;
-    // Not larger than the frame (or no layout yet): the frame's own pixels, shrunk by CSS.
-    const enlarge = !!out && out.width > this.width && out.height > this.height;
-    const width = enlarge ? out.width : this.width;
-    const height = enlarge ? out.height : this.height;
+    // Only "fit" enlarges here; otherwise (or no layout yet) the frame's own pixels, scaled
+    // by the browser.
+    let width = this.width;
+    let height = this.height;
+    const enlarge =
+      !!out && out.filter === "bicubic" && out.width > this.width && out.height > this.height;
+    if (enlarge) {
+      const scale = Math.min(
+        out.width / this.width,
+        MAX_ENLARGE,
+        Math.sqrt(MAX_OUTPUT_PIXELS / (this.width * this.height)),
+      );
+      width = Math.round(this.width * scale);
+      height = Math.round(this.height * scale);
+    }
     if (this.canvas.width !== width || this.canvas.height !== height) {
       this.canvas.width = width;
       this.canvas.height = height;
     }
     gl.viewport(0, 0, width, height);
-    gl.uniform1i(bicubic, enlarge && out.filter === "bicubic" ? 1 : 0);
+    gl.uniform1i(bicubic, width > this.width ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 }

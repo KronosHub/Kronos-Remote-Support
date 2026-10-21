@@ -693,7 +693,7 @@ fn init_logging_as(dir: Option<std::path::PathBuf>, prefix: &str) {
 
     let filter = || {
         tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "info,rtc_ice=error,rtc_dtls=error".into())
+            .unwrap_or_else(|_| "info,rtc_ice=error,rtc_dtls=error,rtc_mdns=error".into())
     };
     let file = dir.and_then(|dir| {
         tracing_appender::rolling::RollingFileAppender::builder()
@@ -790,6 +790,9 @@ fn test_connect(app: &AppHandle) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Async worker threads of the app (sessions, signaling, WebRTC networking).
+const ASYNC_WORKERS: usize = 4;
+
 pub fn run() {
     // Windows helper modes, before any Tauri/window setup.
     #[cfg(windows)]
@@ -889,6 +892,16 @@ pub fn run() {
 
     // Two instances would share the device key and fight over the same id. The pre-login
     // host has its own copy of the key and hands over to the user's app (ADR 0056).
+    // A few async workers instead of one per core: capture, encoding, decoding, file work and
+    // other heavy jobs run on their own threads or `spawn_blocking`.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(ASYNC_WORKERS)
+        .enable_all()
+        .build()
+        .expect("async runtime");
+    tauri::async_runtime::set(runtime.handle().clone());
+    // The runtime lives as long as the app (`run` only returns at exit).
+    std::mem::forget(runtime);
     let mut builder = tauri::Builder::default();
     if !logon_host() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {

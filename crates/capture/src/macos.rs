@@ -201,8 +201,44 @@ impl Capturer for MacCapturer {
 
 /// Unknown (e.g. the query failed) counts as present: keep waiting rather than restart.
 fn display_present(id: u32) -> bool {
-    shareable_displays().map_or(true, |displays| {
-        displays.iter().any(|d| d.display_id() == id)
+    active_displays().is_none_or(|ids| ids.contains(&id))
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CGRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
+    fn CGDisplayBounds(display: u32) -> CGRect;
+}
+
+/// Displays in use, from CoreGraphics: far cheaper than `SCShareableContent`, which lists
+/// every window too (these checks run every 2 s during a session).
+fn active_displays() -> Option<Vec<u32>> {
+    let mut ids = [0u32; 32];
+    let mut count = 0u32;
+    let status = unsafe { CGGetActiveDisplayList(ids.len() as u32, ids.as_mut_ptr(), &mut count) };
+    (status == 0).then(|| ids[..count as usize].to_vec())
+}
+
+/// Where the display sits in global points (as `SCDisplay::frame`), if it is in use.
+pub fn display_bounds(id: u32) -> Option<crate::Rect> {
+    if !active_displays()?.contains(&id) {
+        return None;
+    }
+    let r = unsafe { CGDisplayBounds(id) };
+    Some(crate::Rect {
+        x: r.x,
+        y: r.y,
+        width: r.width,
+        height: r.height,
     })
 }
 

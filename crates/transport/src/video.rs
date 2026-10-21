@@ -287,7 +287,10 @@ impl FrameAssembler {
         if !packet.marker {
             return;
         }
-        let data = std::mem::take(&mut self.buffer);
+        // The next frame is likely about as large: start it with that room instead of growing
+        // the buffer again by doubling.
+        let room = self.buffer.len();
+        let data = std::mem::replace(&mut self.buffer, Vec::with_capacity(room));
         self.timestamp = None;
         if data.is_empty() {
             return;

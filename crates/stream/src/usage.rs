@@ -18,7 +18,15 @@ pub struct UsageSampler {
     system: System,
     pid: Option<Pid>,
     cores: f32,
+    /// This process and its descendants, found by the last full scan.
+    ours: Vec<Pid>,
+    /// Samples until the next full scan of the machine's processes (to find new children);
+    /// in between only ours are refreshed.
+    until_scan: u32,
 }
+
+/// Samples between two full scans (one every ~30 s at the usual 2 s pace).
+const SCAN_EVERY: u32 = 15;
 
 impl Default for UsageSampler {
     fn default() -> Self {
@@ -32,6 +40,8 @@ impl UsageSampler {
             system: System::new(),
             pid: sysinfo::get_current_pid().ok(),
             cores: std::thread::available_parallelism().map_or(1, |n| n.get()) as f32,
+            ours: Vec::new(),
+            until_scan: 0,
         };
         // CPU usage is a difference between two refreshes: prime the first one.
         sampler.refresh();
@@ -39,17 +49,27 @@ impl UsageSampler {
     }
 
     fn refresh(&mut self) {
-        self.system.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::nothing().with_cpu().with_memory(),
-        );
+        let kind = ProcessRefreshKind::nothing().with_cpu().with_memory();
+        if self.until_scan == 0 || self.ours.is_empty() {
+            self.until_scan = SCAN_EVERY;
+            self.system
+                .refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
+            self.ours = self.descendants();
+        } else {
+            self.until_scan -= 1;
+            self.system.refresh_processes_specifics(
+                ProcessesToUpdate::Some(&self.ours),
+                true,
+                kind,
+            );
+        }
     }
 
-    /// Usage since the previous call (call every second or two; blocking, a few ms).
-    pub fn sample(&mut self) -> Option<Usage> {
-        let root = self.pid?;
-        self.refresh();
+    /// This process and its descendants, in the processes last scanned.
+    fn descendants(&self) -> Vec<Pid> {
+        let Some(root) = self.pid else {
+            return Vec::new();
+        };
         let processes = self.system.processes();
         let mut ours = HashSet::from([root]);
         // Children may be listed before their parents: repeat until no new descendant.
@@ -64,7 +84,16 @@ impl UsageSampler {
                 break;
             }
         }
-        let (cpu, memory) = ours
+        ours.into_iter().collect()
+    }
+
+    /// Usage since the previous call (call every second or two; blocking, a few ms).
+    pub fn sample(&mut self) -> Option<Usage> {
+        let root = self.pid?;
+        self.refresh();
+        let processes = self.system.processes();
+        let (cpu, memory) = self
+            .ours
             .iter()
             .filter_map(|pid| processes.get(pid))
             .fold((0.0, 0), |(cpu, mem), p| {

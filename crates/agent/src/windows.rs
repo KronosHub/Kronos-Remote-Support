@@ -343,7 +343,9 @@ pub fn run_agent(product: &str, app: Option<&Path>) -> Result<()> {
     let name = pipe_name(product, session);
     tracing::info!(session, %name, "agent starting");
     let backend: Arc<dyn Backend> = Arc::new(System);
+    // Two workers: capture and input have their own threads, the runtime only moves messages.
     let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .enable_all()
         .build()?;
     rt.block_on(async move {

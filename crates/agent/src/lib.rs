@@ -162,7 +162,10 @@ mod tests {
         drop(a);
         assert_eq!(read_message(&mut b).await.unwrap(), Some(frame));
         assert_eq!(read_message(&mut b).await.unwrap(), Some(json));
-        assert_eq!(read_message::<_, serde_json::Value>(&mut b).await.unwrap(), None);
+        assert_eq!(
+            read_message::<_, serde_json::Value>(&mut b).await.unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
