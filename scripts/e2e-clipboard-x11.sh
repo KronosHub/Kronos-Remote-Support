@@ -34,9 +34,8 @@ for _ in $(seq 100); do
 done
 id=$(sed -n 's/^Registered as //p' "$tmp/host.log")
 
-# Viewer copied ~100 KB of text before connecting (larger than one 16 KB data channel chunk).
-head -c 75000 /dev/urandom | base64 -w 0 >"$tmp/long.txt"
-DISPLAY=:98 xclip -selection clipboard -i "$tmp/long.txt"
+# What the viewer copied before connecting stays there (ADR 0063).
+echo -n "copiato prima" | DISPLAY=:98 xclip -selection clipboard -i
 
 RUST_LOG=info,stream=debug DISPLAY=:98 $bin/peer-poc --server ws://127.0.0.1:18081/ws \
     connect "$id" -p "$password" --clipboard --seconds 60 >"$tmp/viewer.log" 2>&1 &
@@ -47,7 +46,15 @@ done
 grep -q "^Host streaming" "$tmp/viewer.log" || { echo "FAIL: session not up"; exit 1; }
 sleep 2
 
-echo "== viewer → host: text copied before connecting"
+echo "== viewer → host: text copied before connecting is not shared"
+if DISPLAY=:97 xclip -o -selection clipboard 2>/dev/null | grep -q "copiato prima"; then
+    echo "FAIL: the host got what was copied before the session"; exit 1
+fi
+
+echo "== viewer → host: text copied during the session (~100 KB, more than one data channel chunk)"
+head -c 75000 /dev/urandom | base64 -w 0 >"$tmp/long.txt"
+DISPLAY=:98 xclip -selection clipboard -i "$tmp/long.txt"
+sleep 3
 DISPLAY=:97 xclip -o -selection clipboard >"$tmp/got.txt"
 cmp "$tmp/long.txt" "$tmp/got.txt"
 
