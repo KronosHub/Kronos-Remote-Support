@@ -46,8 +46,8 @@ pulizia), dopo quella della 1.2.0 (ADR 0039). Ogni problema è stato ricontrolla
   senza "Avvia all'accesso" non parte, il PC restava offline e il viewer riprovava a vuoto (visto sulla VM): l'host
   allora la avvia lui, come l'utente e nascosta (`start_owner_app`, percorso scritto dal servizio nel file `app`).
   Se non parte comunque la sessione continua sul processo SYSTEM come nella 2.0.
-  Al logout (o allo spegnimento/riavvio) l'app dell'utente riceve `WM_ENDSESSION` da una finestra nascosta
-  (`on_session_end`) e manda subito `Bye { reconnect: true }`: il viewer non aspetta i 20 s di silenzio. Dopo 4 s
+  Al logout (o allo spegnimento/riavvio) Tauri chiude il processo a `WM_ENDSESSION`; prima arriva `RunEvent::Exit`
+  e con `SM_SHUTTINGDOWN` (`session_ending`) l'app manda subito `Bye { reconnect: true }`: il viewer non aspetta i 20 s di silenzio. Dopo 4 s
   di silenzio la finestra del viewer dice comunque che sta aspettando (`ViewerEvent::Silent`). Il ricollegamento
   vale solo per le sessioni aperte con la password personale (la temporanea non sopravvive al riavvio dell'host). La finestra del viewer resta aperta con "ricollegamento
   in corso" e si chiude quando si apre la sessione nuova (`ReconnectFailed` se i tentativi finiscono).

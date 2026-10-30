@@ -1211,12 +1211,8 @@ impl Service {
     /// told to connect again (the pre-login host takes over, or the app once the computer
     /// is back), at once rather than after the silence timeout. Waits a moment at most.
     #[cfg(windows)]
-    pub async fn end_hosting_for_session_end(&self, logoff: bool) {
-        let reason = if logoff {
-            "logout di Windows"
-        } else {
-            "Windows si sta riavviando o spegnendo"
-        };
+    pub async fn end_hosting_for_session_end(&self) {
+        let reason = "logout o riavvio di Windows";
         let sessions: Vec<SessionId> = {
             let hosting = self.shared.hosting.lock().unwrap();
             for host in hosting.values() {
