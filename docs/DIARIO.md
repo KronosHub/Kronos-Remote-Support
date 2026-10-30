@@ -712,4 +712,6 @@
   se accede lo stesso utente di ID e password, si chiude solo se accede un altro (ADR 0063).
 - Spostare il tag `v2.1.0` (push forzato) è stato bloccato dai permessi: serve l'utente.- Poi: dopo l'accesso mancavano appunti e Trasferimento file (sessione ancora sul processo SYSTEM), e dopo un logout
   la sessione cadeva senza mostrare la schermata di accesso. L'utente ha scelto il ricollegamento automatico
-  (stile TeamViewer) invece di far fare i file al processo SYSTEM con l'identità dell'utente.
+  (stile TeamViewer) invece di far fare i file al processo SYSTEM con l'identità dell'utente.- Prova: dal logout alla schermata di accesso ok. Dall'accesso al desktop no: sulla VM "Avvia all'accesso" era
+  spento, l'app dell'utente non partiva e il PC restava offline. Ora l'host aspetta l'app (30 s) o tiene la sessione;
+  messaggio "ricollegamento in corso" nella finestra; consiglio di attivare l'avvio all'accesso.

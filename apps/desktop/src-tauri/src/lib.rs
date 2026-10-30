@@ -39,6 +39,11 @@ pub(crate) fn logon_host() -> bool {
     LOGON_HOST.get().is_some()
 }
 
+/// File name of the installed app on Windows (Cargo binary name), as it runs in the user's
+/// session; the pre-login host runs as the service's protected copy instead.
+#[cfg(windows)]
+pub(crate) const APP_EXE: &str = "desktop-remoto.exe";
+
 /// The pre-login host's data folder (ADR 0056).
 #[cfg(windows)]
 pub(crate) fn logon_host_dir() -> Option<&'static std::path::Path> {

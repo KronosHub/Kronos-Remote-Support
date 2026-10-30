@@ -196,6 +196,10 @@ pub enum UiEvent {
         /// How long the session lasted, for the end-of-session popup.
         duration_secs: u64,
     },
+    /// We stopped trying to connect again to this device (see [`Reconnect`]).
+    ReconnectFailed {
+        peer: String,
+    },
     /// Our screen is being shared with a partner.
     HostingStarted {
         session: SessionId,
@@ -276,8 +280,8 @@ const RECONNECT_FOR: Duration = Duration::from_secs(150);
 const RECONNECT_EVERY: Duration = Duration::from_secs(3);
 
 /// Asks the service loop to connect to the device again in a moment.
-fn reconnect_later(shared: &Arc<Shared>) {
-    let shared = shared.clone();
+fn reconnect_later(app: &AppHandle, shared: &Arc<Shared>) {
+    let (app, shared) = (app.clone(), shared.clone());
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(RECONNECT_EVERY).await;
         let again = shared
@@ -293,9 +297,22 @@ fn reconnect_later(shared: &Arc<Shared>) {
                     .commands
                     .send(Command::Connect { target, credential });
             }
-            None => *shared.reconnect.lock().unwrap() = None,
+            None => give_up_reconnect(&app, &shared),
         }
     });
+}
+
+/// No more attempts: the viewer window still waiting says so.
+fn give_up_reconnect(app: &AppHandle, shared: &Shared) {
+    if let Some(r) = shared.reconnect.lock().unwrap().take() {
+        log(app, "warn", format!("{} non è tornato online", r.target));
+        emit(
+            app,
+            UiEvent::ReconnectFailed {
+                peer: r.target.to_string(),
+            },
+        );
+    }
 }
 
 enum Command {
@@ -1465,6 +1482,24 @@ async fn run(ctx: Ctx, mut commands: UnboundedReceiver<Command>) {
     }
 }
 
+/// Host before login, once its user logged on: waits (at most 30 s) for the user's app to
+/// start in their session.
+async fn user_app_started() -> bool {
+    #[cfg(windows)]
+    for _ in 0..30 {
+        let running = tauri::async_runtime::spawn_blocking(|| {
+            agent::windows::running_for_a_user(crate::APP_EXE)
+        })
+        .await
+        .unwrap_or(false);
+        if running {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    false
+}
+
 /// Host before login: tells the service loop once someone has logged on (ADR 0056).
 fn watch_logon(commands: UnboundedSender<Command>) {
     #[cfg(windows)]
@@ -1503,21 +1538,35 @@ async fn retire(
     let owner = crate::logon_host_dir().is_some_and(agent::windows::only_owner_logged_on);
     #[cfg(not(windows))]
     let owner = false;
-    for host in ctx.shared.hosting.lock().unwrap().values() {
-        let _ = host.commands.send(if owner {
-            // The partner connects again by itself to the user's app, which has the clipboard
-            // and the file manager this SYSTEM process may not offer.
-            HostCommand::End {
-                reason: "accesso a Windows effettuato: ricollegamento".into(),
-                reconnect: true,
-            }
-        } else {
-            HostCommand::End {
-                reason: "un altro utente ha effettuato l'accesso a Windows: collegati di nuovo"
-                    .into(),
-                reconnect: false,
-            }
-        });
+    // The partner connects again by itself to the user's app, which has the clipboard and
+    // the file manager this SYSTEM process may not offer; but only once that app runs.
+    // Without it (not started at logon) the partner would find the computer offline: the
+    // session then goes on here, as before 2.1.
+    let handover = owner && open > 0 && user_app_started().await;
+    if owner && !handover && open > 0 {
+        log(
+            &ctx.app,
+            "warn",
+            "accesso a Windows effettuato, ma l'app dell'utente non è partita: la sessione \
+             continua senza appunti e trasferimento file (attiva \"Avvia all'accesso\")",
+        );
+    }
+    if !owner || handover {
+        for host in ctx.shared.hosting.lock().unwrap().values() {
+            let _ = host.commands.send(if owner {
+                HostCommand::End {
+                    reason: "accesso a Windows effettuato".into(),
+                    reconnect: true,
+                }
+            } else {
+                HostCommand::End {
+                    reason: "un altro utente ha effettuato l'accesso a Windows: collegati di \
+                             nuovo"
+                        .into(),
+                    reconnect: false,
+                }
+            });
+        }
     }
     let mut check = tokio::time::interval(Duration::from_secs(1));
     loop {
@@ -1547,7 +1596,7 @@ async fn retire(
 
 /// Cancels all connections still being set up (the "Annulla" button / failure cleanup).
 fn cancel_connecting(ctx: &Ctx) {
-    *ctx.shared.reconnect.lock().unwrap() = None;
+    give_up_reconnect(&ctx.app, &ctx.shared);
     let cancelled: Vec<_> = ctx.shared.connecting.lock().unwrap().drain().collect();
     for (_, cancel) in cancelled {
         let _ = cancel.send("connessione annullata".into());
@@ -1894,8 +1943,9 @@ async fn handle_server_message(
             let waiting =
                 code == ErrorCode::PeerOffline && ctx.shared.reconnect.lock().unwrap().is_some();
             if waiting {
-                reconnect_later(&ctx.shared);
+                reconnect_later(&ctx.app, &ctx.shared);
             } else {
+                give_up_reconnect(&ctx.app, &ctx.shared);
                 ctx.log("error", message);
             }
         }
@@ -2856,7 +2906,7 @@ async fn view_partner(
             until: Instant::now() + RECONNECT_FOR,
         });
         log(app, "info", format!("ricollegamento a {partner}..."));
-        reconnect_later(shared);
+        reconnect_later(app, shared);
     }
 
     file_manager.abort();

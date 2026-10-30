@@ -934,6 +934,36 @@ pub fn logged_on_users() -> Vec<String> {
     users
 }
 
+/// Whether a program named `exe` (e.g. "desktop-remoto.exe") runs in a session where a
+/// user is logged on: the user's app, started at logon.
+pub fn running_for_a_user(exe: &str) -> bool {
+    use windows_sys::Win32::System::RemoteDesktop::{
+        WTS_CURRENT_SERVER_HANDLE, WTS_PROCESS_INFOW, WTSEnumerateProcessesW, WTSFreeMemory,
+    };
+    let mut list: *mut WTS_PROCESS_INFOW = std::ptr::null_mut();
+    let mut count = 0u32;
+    if unsafe { WTSEnumerateProcessesW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &mut list, &mut count) }
+        == 0
+    {
+        return false;
+    }
+    let processes = unsafe { std::slice::from_raw_parts(list, count as usize) };
+    let found = processes.iter().any(|p| {
+        if p.SessionId == 0 || p.pProcessName.is_null() {
+            return false;
+        }
+        let mut len = 0;
+        while unsafe { *p.pProcessName.add(len) } != 0 {
+            len += 1;
+        }
+        let name =
+            String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(p.pProcessName, len) });
+        name.eq_ignore_ascii_case(exe) && session_user(p.SessionId).is_some()
+    });
+    unsafe { WTSFreeMemory(list.cast()) };
+    found
+}
+
 /// In the pre-login host's folder: the user whose id and password it has.
 const LOGON_OWNER_FILE: &str = "owner";
 

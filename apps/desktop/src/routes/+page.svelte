@@ -67,6 +67,7 @@
         reconnect: boolean;
         duration_secs: number;
       }
+    | { kind: "reconnect_failed"; peer: string }
     | { kind: "hosting_started"; session: number; peer: string }
     | { kind: "hosting_ended"; session: number; peer: string; duration_secs: number }
     | { kind: "connection_path"; session: number; path: Path | null };
@@ -122,6 +123,9 @@
     unread: number;
     /** Why the session ended; the window stays open to show it. */
     ended: string | null;
+    /** Connecting again by itself (see `Reconnect` in service.rs): the window closes when
+     * the new session to the same device opens. */
+    reconnecting: boolean;
   };
   type InputEvent =
     | { k: "mouse_move"; x: number; y: number }
@@ -764,6 +768,12 @@
         break;
       case "view_opened":
         busy = false;
+        // This window waited to connect again: the new session has its own window.
+        if (view?.reconnecting && view.peer === event.peer && view.session !== event.session) {
+          view.reconnecting = false;
+          getCurrentWindow().close();
+          break;
+        }
         viewedPeers.set(event.session, event.peer);
         if (view?.session === event.session) {
           view.peer = event.peer;
@@ -828,8 +838,10 @@
         if (view?.session === event.session) {
           endVideo(event.reason);
           // The partner quit to install an update: nothing more to see here (the summary in
-          // the main window says why). Connecting again by ourselves: a new window opens.
-          if (event.updating || event.reconnect) getCurrentWindow().close();
+          // the main window says why).
+          if (event.updating) getCurrentWindow().close();
+          // Connecting again by ourselves: say so until the new window opens.
+          if (event.reconnect && view) view.reconnecting = true;
         }
         if (viewSession === null && event.reconnect) {
           viewedPeers.delete(event.session);
@@ -843,6 +855,12 @@
             reason: event.reason,
           };
           viewedPeers.delete(event.session);
+        }
+        break;
+      case "reconnect_failed":
+        if (view?.reconnecting && view.peer === event.peer) {
+          view.reconnecting = false;
+          view.ended = `${view.ended}; il computer remoto non è tornato online`;
         }
         break;
       case "view_clipboard":
@@ -1301,6 +1319,10 @@
   }
 
   function openView(session: number) {
+    // Closed while waiting to connect again: no more attempts.
+    getCurrentWindow().onCloseRequested(() => {
+      if (view?.reconnecting) invoke("cancel_connect");
+    });
     view = {
       session,
       peer: "",
@@ -1332,6 +1354,7 @@
       clipboard: null,
       notice: null,
       ended: null,
+      reconnecting: false,
       chat: [],
       showChat: false,
       unread: 0,
@@ -1671,6 +1694,7 @@
   /** Ends the session (if still running) and closes this window. */
   async function disconnect() {
     if (view && !view.ended) await invoke("close_view", { session: view.session });
+    if (view?.reconnecting) await invoke("cancel_connect");
     try {
       await getCurrentWindow().close();
     } catch (e) {
@@ -1743,7 +1767,9 @@
             Appunti {view.clipboard ? "condivisi" : "spenti"}
           </button>
         {/if}
-        {#if view.ended}
+        {#if view.ended && view.reconnecting}
+          <span class="badge warn">Ricollegamento…</span>
+        {:else if view.ended}
           <span class="badge warn">Sessione terminata</span>
         {:else if view.controlError}
           <span class="badge warn" title={view.controlError}>Solo visione</span>
@@ -1896,7 +1922,9 @@
         onkeyup={(e) => onKey(e, false)}
         onblur={releaseKeys}
       ></canvas>
-      {#if view.ended}
+      {#if view.ended && view.reconnecting}
+        <p class="overlay">{view.ended}: ricollegamento in corso…</p>
+      {:else if view.ended}
         <p class="overlay">Sessione terminata: {view.ended}</p>
       {:else if view.error}
         <p class="overlay error-text">{view.error}</p>
@@ -2159,6 +2187,12 @@
         <input type="checkbox" checked={autostart} onchange={toggleAutostart} />
         Avvia all'accesso (nascosto nella barra)
       </label>
+      {#if status.unattended && !autostart}
+        <p class="hint small">
+          Con l'accesso non presidiato conviene attivarlo: dopo l'accesso a Windows (o un riavvio) il computer
+          resta raggiungibile e chi ti assiste si ricollega da solo.
+        </p>
+      {/if}
       {/if}
     </section>
 
