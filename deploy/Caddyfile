@@ -1,5 +1,0 @@
-# TLS certificate is obtained automatically from Let's Encrypt (HTTP-01 on port 80).
-# No domain: <ip-with-dashes>.sslip.io resolves to that IP. Replaced by deploy.sh.
-{$SIGNALING_HOST} {
-	reverse_proxy 127.0.0.1:8080
-}

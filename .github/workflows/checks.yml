@@ -134,7 +134,7 @@ jobs:
             if ($LASTEXITCODE) { exit 1 }
           }
           "FFMPEG_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - run: cargo build --release -p agent -p agent-poc -p windesk
+      - run: cargo build --release -p agent -p windesk
       # Sound (Opus + WASAPI): the Windows code paths only build here and in the release.
       - run: cargo clippy -p audio -p stream --all-targets -- -D warnings
       - run: cargo test --release -p audio

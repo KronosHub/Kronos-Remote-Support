@@ -5,7 +5,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-cargo build -q --release -p signaling -p peer-poc
+source scripts/worker-dev.sh
+cargo build -q --release -p peer-poc
 tmp=$(mktemp -d)
 cleanup() {
     status=$?
@@ -23,8 +24,7 @@ Xvfb :98 -screen 0 640x480x24 -noreset &
 Xvfb :97 -screen 0 640x480x24 -noreset &
 sleep 2
 
-$bin/signaling --listen 127.0.0.1:18081 >"$tmp/server.log" 2>&1 &
-sleep 1
+start_worker 18081 "$tmp/server.log"
 RUST_LOG=info,stream=debug DISPLAY=:97 $bin/peer-poc --server ws://127.0.0.1:18081/ws --key-file "$tmp/host.key" \
     host --source pattern >"$tmp/host.log" 2>&1 &
 for _ in $(seq 100); do

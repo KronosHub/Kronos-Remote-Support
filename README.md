@@ -118,7 +118,6 @@ cargo run --release -p capture-poc -- --seconds 10         # cattura schermo →
 | Percorso | Contenuto |
 |---|---|
 | `apps/desktop` | App Tauri 2 + SvelteKit: interfaccia, servizio in background, icona di sistema |
-| `apps/signaling` | Server di signaling (axum + WebSocket) |
 | `crates/auth` | Password di sessione, SPAKE2 e conferma della chiave |
 | `crates/transport` | Client di signaling, sessioni WebRTC, traccia video, handshake password |
 | `crates/stream` | Streaming dello schermo (cattura → H.264 → WebRTC) e logica di sessione |
@@ -127,14 +126,15 @@ cargo run --release -p capture-poc -- --seconds 10         # cattura schermo →
 | `crates/capture` | Cattura dello schermo (macOS: ScreenCaptureKit) |
 | `crates/codec` | Codifica video H.264: chip video (VideoToolbox, Media Foundation via FFmpeg minimo, `tools/ffmpeg`) o OpenH264 |
 | `tools/` | Prototipi a riga di comando (`capture-poc`, `peer-poc`) |
-| `deploy/` | Signaling su Cloudflare Workers (`deploy/cloudflare`) e installazione del server su VM Linux (systemd + Caddy, HTTPS automatico) |
+| `deploy/cloudflare` | Server di signaling su Cloudflare Workers (anche in locale per i test end-to-end, `scripts/worker-dev.sh`) |
 | `docs/` | Architettura, roadmap, stato, diario e decisioni (ADR) |
 
 ## Server
 
 L'app usa un unico server di signaling: `wss://kronos-signaling.kronos-signaling.workers.dev/ws` (Cloudflare Worker,
 [ADR 0035](docs/adr/0035-signaling-cloudflare.md), sorgente in `deploy/cloudflare`).
-Per installare il server Rust (`apps/signaling`) su una propria VM vedi [`deploy/README.md`](deploy/README.md).
+Per ospitarne uno proprio basta pubblicare `deploy/cloudflare` su un altro account Cloudflare (`npm run deploy`) e
+cambiare `SERVER` in `apps/desktop/src-tauri/src/service.rs`.
 
 ## Roadmap
 

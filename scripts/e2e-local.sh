@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# End-to-end smoke test on one machine: signaling server + host + viewer (ping over WebRTC).
+# End-to-end smoke test on one machine: signaling Worker (wrangler dev) + host + viewer.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-cargo build -q -p signaling -p peer-poc
+source scripts/worker-dev.sh
+cargo build -q -p peer-poc
 tmp=$(mktemp -d)
 trap 'kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; rm -rf "$tmp"' EXIT
 export NO_COLOR=1
 
-${CARGO_TARGET_DIR:-./target}/debug/signaling --listen 127.0.0.1:18080 >"$tmp/server.log" 2>&1 &
-sleep 1
+start_worker 18080 "$tmp/server.log"
 ${CARGO_TARGET_DIR:-./target}/debug/peer-poc --server ws://127.0.0.1:18080/ws --key-file "$tmp/host.key" host --source pattern --personal-password "Personale-123" >"$tmp/host.log" 2>&1 &
 
 # The host prints its password once ready (after deriving the personal secret).

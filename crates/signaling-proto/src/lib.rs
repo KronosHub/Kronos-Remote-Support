@@ -19,13 +19,6 @@ impl PeerId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    /// Builds an id from a number in `100_000_000..=999_999_999`.
-    pub fn from_number(n: u32) -> Option<Self> {
-        (100_000_000..=999_999_999)
-            .contains(&n)
-            .then(|| Self(n.to_string()))
-    }
 }
 
 impl TryFrom<String> for PeerId {

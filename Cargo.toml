@@ -2,7 +2,6 @@
 resolver = "3"
 members = [
     "apps/desktop/src-tauri",
-    "apps/signaling",
     "crates/agent",
     "crates/audio",
     "crates/auth",
@@ -13,7 +12,6 @@ members = [
     "crates/stream",
     "crates/transport",
     "crates/windesk",
-    "tools/agent-poc",
     "tools/capture-poc",
     "tools/peer-poc",
     "tools/virtual-monitor",
@@ -31,7 +29,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "signal", "fs"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 futures-util = "0.3"
 rand = "0.10"
 audio = { path = "crates/audio" }

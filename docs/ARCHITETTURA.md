@@ -42,7 +42,7 @@ Un'unica app contiene entrambi i ruoli (come TeamViewer): mostra il proprio ID/p
 - Fornisce credenziali TURN temporanee (TURN REST API, HMAC).
 - Non vede mai media né input.
 - Hosting: in origine VM Oracle Cloud (ADR 0008), dietro Caddy con TLS su `<ip>.sslip.io` (ADR 0010); dalla v0.12.0
-  Cloudflare Workers + Durable Object (`deploy/cloudflare`, ADR 0035). `apps/signaling` resta per i test locali e per chi ospita un proprio server.
+  Cloudflare Workers + Durable Object (`deploy/cloudflare`, ADR 0035). Il server Rust `apps/signaling` è stato tolto nella 2.0.2: i test end-to-end usano il Worker in locale (`wrangler dev`).
 - Protocollo: vedi ADR 0010.
 
 ### 3. TURN/STUN (coturn)

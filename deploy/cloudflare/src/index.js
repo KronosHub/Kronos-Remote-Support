@@ -1,5 +1,5 @@
 // Signaling for Kronos Remote Support on Cloudflare (ADR 0035): the same JSON protocol as
-// apps/signaling (crates/signaling-proto), served by one Durable Object that holds every
+// crates/signaling-proto, served by one Durable Object that holds every
 // WebSocket. It only introduces peers and relays the WebRTC handshake; screen, input and
 // passwords never pass through it (end-to-end encrypted between the two PCs).
 //
@@ -19,7 +19,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 
-/** Largest accepted client message (SDP offers are a few KiB), like apps/signaling. */
+/** Largest accepted client message (SDP offers are a few KiB). */
 const MAX_MESSAGE = 64 * 1024;
 /** Open sockets per IP: generous for an office of PCs behind one NAT. */
 const MAX_SOCKETS_PER_IP = 100;
@@ -32,7 +32,7 @@ const MESSAGE_BURST = 100;
 const MESSAGE_RATE = 5;
 /** New device ids per IP per hour (each one is a row kept forever). */
 const NEW_IDS_PER_IP_PER_HOUR = 30;
-/** `connect` requests per minute: per socket (as apps/signaling), per IP, per IP+target, per target. */
+/** `connect` requests per minute: per socket, per IP, per IP+target, per target. */
 const CONNECTS_PER_SOCKET = 10;
 const CONNECTS_PER_IP = 30;
 const CONNECTS_PER_IP_TARGET = 10;
@@ -92,7 +92,7 @@ export class Hub extends DurableObject {
     const ip = ipKey(request.headers.get("CF-Connecting-IP"));
     const tag = `ip:${ip}`;
     const now = Date.now();
-    // Sockets of this IP that never registered are dropped first (apps/signaling: 10 s).
+    // Sockets of this IP that never registered are dropped first.
     let open = this.ctx.getWebSockets(tag);
     for (const s of open) {
       const a = s.deserializeAttachment();
