@@ -710,4 +710,6 @@
   (`remove_file` su una giunzione): corretto con `remove_dir`.
 - L'utente ha provato la schermata di accesso: dover ricollegarsi dopo l'accesso è scomodo. Ora la sessione continua
   se accede lo stesso utente di ID e password, si chiude solo se accede un altro (ADR 0063).
-- Spostare il tag `v2.1.0` (push forzato) è stato bloccato dai permessi: serve l'utente.
+- Spostare il tag `v2.1.0` (push forzato) è stato bloccato dai permessi: serve l'utente.- Poi: dopo l'accesso mancavano appunti e Trasferimento file (sessione ancora sul processo SYSTEM), e dopo un logout
+  la sessione cadeva senza mostrare la schermata di accesso. L'utente ha scelto il ricollegamento automatico
+  (stile TeamViewer) invece di far fare i file al processo SYSTEM con l'identità dell'utente.

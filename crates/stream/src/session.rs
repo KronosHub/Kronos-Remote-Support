@@ -107,15 +107,21 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(3);
 /// Tells the other side the session ends and waits (at most `BYE_FLUSH`) until the
 /// message has left: the connection is closed right after, which would otherwise drop it.
 async fn send_bye(channel: &Arc<dyn DataChannel>, reason: &str) {
-    send_goodbye(channel, reason, false).await;
+    send_goodbye(channel, reason, false, false).await;
 }
 
-async fn send_goodbye(channel: &Arc<dyn DataChannel>, reason: &str, updating: bool) {
+async fn send_goodbye(
+    channel: &Arc<dyn DataChannel>,
+    reason: &str,
+    updating: bool,
+    reconnect: bool,
+) {
     send(
         channel,
         &ControlMsg::Bye {
             reason: reason.to_owned(),
             updating,
+            reconnect,
         },
     )
     .await;
@@ -188,8 +194,12 @@ pub enum HostCommand {
     CancelTransfer,
     /// This app is about to quit to install an update: tell the viewer, then end.
     Updating,
-    /// End, telling the viewer why (shown in its summary).
-    End(String),
+    /// End, telling the viewer why (shown in its summary); with `reconnect` the viewer
+    /// connects again by itself.
+    End {
+        reason: String,
+        reconnect: bool,
+    },
 }
 
 /// Host: streams until the viewer leaves, the channel closes or `Stop` arrives.
@@ -552,7 +562,8 @@ pub async fn serve_host(
             },
             cmd = commands.recv() => match cmd {
                 Some(HostCommand::Updating) => {
-                    send_goodbye(&channel, "il computer remoto si sta aggiornando", true).await;
+                    send_goodbye(&channel, "il computer remoto si sta aggiornando", true, false)
+                        .await;
                     break "chiusa per aggiornare l'app".to_owned();
                 }
                 Some(HostCommand::CancelTransfer) => {
@@ -563,8 +574,8 @@ pub async fn serve_host(
                     send(&channel, &ControlMsg::Chat { text }).await;
                 }
                 Some(HostCommand::PartnerLeft) => break "il partner si è disconnesso".to_owned(),
-                Some(HostCommand::End(reason)) => {
-                    send_bye(&channel, &reason).await;
+                Some(HostCommand::End { reason, reconnect }) => {
+                    send_goodbye(&channel, &reason, false, reconnect).await;
                     break reason;
                 }
                 Some(HostCommand::Stop) | None => {
@@ -875,6 +886,11 @@ pub enum ViewerEvent {
     ResolutionAdjustable,
     /// The host is quitting to install an update (the session ends next).
     PartnerUpdating,
+    /// The host asked to be connected to again (its user logged on): see `Bye`.
+    PartnerReconnect,
+    /// The session ended without anyone ending it: the host stopped answering, or the
+    /// connection broke (e.g. its user logged off, the computer restarted).
+    ConnectionLost,
     /// The host's sound cannot be played (here or on the host); the button goes off.
     AudioUnavailable(String),
     /// A clipboard file transfer moved on.
@@ -890,6 +906,8 @@ pub enum ViewerEvent {
 pub enum ViewerCommand {
     /// The decoder lost sync (e.g. decode error in the UI).
     RequestKeyframe,
+    /// The connection failed or closed under us (nobody ended the session).
+    Lost,
     /// A chat message typed on the viewer, to show on the host.
     Chat(String),
     /// Share clipboards with the host (on by default).
@@ -975,6 +993,7 @@ pub async fn run_viewer(
             _ = liveness.tick() => {
                 if last_heard.elapsed() > PEER_TIMEOUT {
                     tracing::warn!("no message from the host for {:?}, ending", last_heard.elapsed());
+                    on_event(ViewerEvent::ConnectionLost);
                     break "il partner non risponde".to_owned();
                 }
             }
@@ -1032,14 +1051,24 @@ pub async fn run_viewer(
                     on_event(ViewerEvent::ScreenUnavailable(message));
                 }
                 Some(ControlMsg::ResolutionAdjustable) => on_event(ViewerEvent::ResolutionAdjustable),
-                Some(ControlMsg::Bye { reason, updating }) => {
+                Some(ControlMsg::Bye {
+                    reason,
+                    updating,
+                    reconnect,
+                }) => {
                     if updating {
                         on_event(ViewerEvent::PartnerUpdating);
+                    }
+                    if reconnect {
+                        on_event(ViewerEvent::PartnerReconnect);
                     }
                     break reason;
                 }
                 Some(_) => {}
-                None => break "connessione chiusa".to_owned(),
+                None => {
+                    on_event(ViewerEvent::ConnectionLost);
+                    break "connessione chiusa".to_owned();
+                }
             },
             Some(event) = frames.recv() => match event {
                 Assembled::Frame(frame) => on_event(ViewerEvent::Frame(frame)),
@@ -1076,6 +1105,10 @@ pub async fn run_viewer(
                         Ok(()) => send(&channel, &ControlMsg::Audio { enabled }).await,
                         Err(message) => on_event(ViewerEvent::AudioUnavailable(message)),
                     }
+                }
+                Some(ViewerCommand::Lost) => {
+                    on_event(ViewerEvent::ConnectionLost);
+                    break "connessione con il partner persa".to_owned();
                 }
                 Some(ViewerCommand::Stop) | None => {
                     send_bye(&channel, "il partner si è disconnesso").await;

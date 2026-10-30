@@ -59,7 +59,14 @@
     | { kind: "view_control_unavailable"; session: number; message: string }
     | { kind: "view_no_screen"; session: number; message: string }
     | { kind: "view_displays"; session: number; displays: DisplayInfo[]; current: number }
-    | { kind: "view_closed"; session: number; reason: string; updating: boolean; duration_secs: number }
+    | {
+        kind: "view_closed";
+        session: number;
+        reason: string;
+        updating: boolean;
+        reconnect: boolean;
+        duration_secs: number;
+      }
     | { kind: "hosting_started"; session: number; peer: string }
     | { kind: "hosting_ended"; session: number; peer: string; duration_secs: number }
     | { kind: "connection_path"; session: number; path: Path | null };
@@ -821,11 +828,13 @@
         if (view?.session === event.session) {
           endVideo(event.reason);
           // The partner quit to install an update: nothing more to see here (the summary in
-          // the main window says why).
-          if (event.updating) getCurrentWindow().close();
+          // the main window says why). Connecting again by ourselves: a new window opens.
+          if (event.updating || event.reconnect) getCurrentWindow().close();
         }
-        // Main window: summary popup for the session we controlled.
-        if (viewSession === null) {
+        if (viewSession === null && event.reconnect) {
+          viewedPeers.delete(event.session);
+        } else if (viewSession === null) {
+          // Main window: summary popup for the session we controlled.
           sessionEnded = {
             session: event.session,
             controlled: false,

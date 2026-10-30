@@ -35,6 +35,13 @@ pulizia), dopo quella della 1.2.0 (ADR 0039). Ogni problema è stato ricontrolla
   altrimenti chi era collegato vedrebbe il suo desktop. Nella prima versione si chiudevano sempre: provato sulla VM,
   l'utente ha trovato scomodo doversi ricollegare (era il motivo della ADR 0056). ID e password continuano a venire
   da qualunque utente (scelta dell'utente).
+- **Ricollegamento automatico.** Continuare la sessione sul processo SYSTEM lasciava l'utente senza appunti e
+  Trasferimento file. Ora all'accesso dello stesso utente l'host chiude con `Bye { reconnect: true }` e il viewer si
+  ricollega da solo all'app dell'utente (stessa password personale, nessuna conferma). Lo stesso quando una sessione
+  aperta con la password personale cade senza che nessuno la chiuda (`ViewerEvent::ConnectionLost`: canale chiuso,
+  host muto, connessione fallita; per esempio un logout, dove l'app dell'utente si chiude e parte l'host prima
+  dell'accesso): tentativi ogni 3 s finché il dispositivo è offline, per 150 s (`Reconnect`). Nessun nuovo accesso:
+  serve la stessa password che aveva già aperto la sessione.
 - **Solo da remoto** (ADR 0059): impostazione del computer, file `remote-only` nella cartella del servizio (solo
   amministratori), con il nome dell'utente che l'ha attivata; si cambia con `--set-remote-only` elevato. Il servizio
   sposta sulla console solo la sessione di quell'utente. Prima era una preferenza di qualunque utente e spostava

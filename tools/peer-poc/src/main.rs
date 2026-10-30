@@ -573,6 +573,8 @@ async fn view(
             ViewerEvent::AudioUnavailable(e) => println!("Sound unavailable: {e}"),
             ViewerEvent::ResolutionAdjustable => println!("Host can match its resolution"),
             ViewerEvent::PartnerUpdating => println!("Host is quitting to update"),
+            ViewerEvent::PartnerReconnect => println!("Host asks to connect again"),
+            ViewerEvent::ConnectionLost => println!("Connection lost"),
             ViewerEvent::Transfer(p) => println!("Transfer: {}/{} bytes", p.done, p.total),
             ViewerEvent::InputBlocked { blocked, message } => {
                 println!(

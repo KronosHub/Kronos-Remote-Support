@@ -191,6 +191,8 @@ pub enum UiEvent {
         reason: String,
         /// The partner quit to install an update: the viewer window closes by itself.
         updating: bool,
+        /// We connect again by ourselves (see [`Reconnect`]): no summary, the window closes.
+        reconnect: bool,
         /// How long the session lasted, for the end-of-session popup.
         duration_secs: u64,
     },
@@ -257,6 +259,43 @@ pub struct Credential {
     /// Temporary password as typed, or the derived personal secret.
     secret: String,
     personal: bool,
+}
+
+/// Connecting again by ourselves to a device whose session ended without anyone ending
+/// it: a Windows computer whose user logged on or off (the app and the host before login
+/// hand over), restarted, or lost the network. Only with the personal password (nobody has
+/// to accept); retried while the device is offline, until `until`.
+struct Reconnect {
+    target: PeerId,
+    credential: Credential,
+    until: Instant,
+}
+
+/// How long we keep trying to connect again (a restart takes a minute or two).
+const RECONNECT_FOR: Duration = Duration::from_secs(150);
+const RECONNECT_EVERY: Duration = Duration::from_secs(3);
+
+/// Asks the service loop to connect to the device again in a moment.
+fn reconnect_later(shared: &Arc<Shared>) {
+    let shared = shared.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(RECONNECT_EVERY).await;
+        let again = shared
+            .reconnect
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|r| Instant::now() < r.until)
+            .map(|r| (r.target.clone(), r.credential.clone()));
+        match again {
+            Some((target, credential)) => {
+                let _ = shared
+                    .commands
+                    .send(Command::Connect { target, credential });
+            }
+            None => *shared.reconnect.lock().unwrap() = None,
+        }
+    });
 }
 
 enum Command {
@@ -416,6 +455,10 @@ struct Shared {
     lan: Mutex<Option<Arc<transport::lan::LanDiscovery>>>,
     /// Host before login only: the user's app took over; finish the open sessions and exit.
     retired: AtomicBool,
+    /// A device we connect to again by ourselves, if any.
+    reconnect: Mutex<Option<Reconnect>>,
+    /// The service loop's commands (for connecting again from a session's task).
+    commands: UnboundedSender<Command>,
     store: Store,
 }
 
@@ -594,6 +637,7 @@ impl Service {
         let device_key = load_or_create_key(&data_dir.join("device.key"))?;
         let store = Store::new(Some(data_dir));
         let personal = store.personal_secret();
+        let (commands, rx) = mpsc::unbounded_channel();
         let shared = Arc::new(Shared {
             presence: Mutex::new(None),
             status: Mutex::new(Status {
@@ -614,9 +658,10 @@ impl Service {
             connecting: Mutex::new(HashMap::new()),
             lan: Mutex::new(None),
             retired: AtomicBool::new(false),
+            reconnect: Mutex::new(None),
+            commands: commands.clone(),
             store,
         });
-        let (commands, rx) = mpsc::unbounded_channel();
         let ctx = Ctx {
             app: app.clone(),
             device_key,
@@ -1077,6 +1122,14 @@ impl Service {
         self.drop_stale_views();
     }
 
+    /// The connection of a session we view broke: it ends as lost (we may connect again).
+    fn lose_view(&self, session: SessionId) {
+        if let Some(viewer) = self.shared.viewers.lock().unwrap().get(&session) {
+            let _ = viewer.commands.send(ViewerCommand::Lost);
+        }
+        self.drop_stale_views();
+    }
+
     /// Forgets viewed sessions whose task is gone without cleaning up (it can no longer
     /// receive commands), and closes their windows: otherwise the device looked still
     /// connected and a new connection to it only showed the dead window.
@@ -1101,6 +1154,7 @@ impl Service {
                     session,
                     reason: "connessione persa".into(),
                     updating: false,
+                    reconnect: false,
                     duration_secs: 0,
                 },
             );
@@ -1449,14 +1503,21 @@ async fn retire(
     let owner = crate::logon_host_dir().is_some_and(agent::windows::only_owner_logged_on);
     #[cfg(not(windows))]
     let owner = false;
-    if owner {
-        tracing::info!("the same user logged on: the sessions go on");
-    } else {
-        for host in ctx.shared.hosting.lock().unwrap().values() {
-            let _ = host.commands.send(HostCommand::End(
-                "un altro utente ha effettuato l'accesso a Windows: collegati di nuovo".into(),
-            ));
-        }
+    for host in ctx.shared.hosting.lock().unwrap().values() {
+        let _ = host.commands.send(if owner {
+            // The partner connects again by itself to the user's app, which has the clipboard
+            // and the file manager this SYSTEM process may not offer.
+            HostCommand::End {
+                reason: "accesso a Windows effettuato: ricollegamento".into(),
+                reconnect: true,
+            }
+        } else {
+            HostCommand::End {
+                reason: "un altro utente ha effettuato l'accesso a Windows: collegati di nuovo"
+                    .into(),
+                reconnect: false,
+            }
+        });
     }
     let mut check = tokio::time::interval(Duration::from_secs(1));
     loop {
@@ -1486,6 +1547,7 @@ async fn retire(
 
 /// Cancels all connections still being set up (the "Annulla" button / failure cleanup).
 fn cancel_connecting(ctx: &Ctx) {
+    *ctx.shared.reconnect.lock().unwrap() = None;
     let cancelled: Vec<_> = ctx.shared.connecting.lock().unwrap().drain().collect();
     for (_, cancel) in cancelled {
         let _ = cancel.send("connessione annullata".into());
@@ -1824,10 +1886,18 @@ async fn handle_server_message(
                 let _ = host.commands.send(HostCommand::PartnerLeft);
             }
         }
-        ServerMessage::Error { message, .. } => {
+        ServerMessage::Error { code, message } => {
             // A failed Connect never yields SessionCreated; forget its password.
             sessions.pending_connects.clear();
-            ctx.log("error", message);
+            // Connecting again: the device is still on its way back (or the app of the user
+            // who just logged on is starting).
+            let waiting =
+                code == ErrorCode::PeerOffline && ctx.shared.reconnect.lock().unwrap().is_some();
+            if waiting {
+                reconnect_later(&ctx.shared);
+            } else {
+                ctx.log("error", message);
+            }
         }
         ServerMessage::Registered { .. } => {}
         // Answered in `online`, which knows what was asked.
@@ -2103,14 +2173,14 @@ fn watch_state(app: &AppHandle, peer: &PeerSession, session: SessionId) {
                     log(&app, "error", "connessione con il partner persa");
                     // Do not leave a frozen picture or a stale "shared" banner behind.
                     let service = app.state::<Service>();
-                    service.close_view(session);
+                    service.lose_view(session);
                     service.stop_hosting(session);
                     break;
                 }
                 ConnectionState::Closed => {
                     // The peer link is gone: close the viewer / sharing banner if still open.
                     let service = app.state::<Service>();
-                    service.close_view(session);
+                    service.lose_view(session);
                     service.stop_hosting(session);
                     break;
                 }
@@ -2619,6 +2689,12 @@ async fn view_partner(
         }
     });
     let viewing_since = Instant::now();
+    // Back in: no more attempts.
+    shared
+        .reconnect
+        .lock()
+        .unwrap()
+        .take_if(|r| r.target == partner);
     let opened = UiEvent::ViewOpened {
         session,
         peer: partner.to_string(),
@@ -2635,6 +2711,10 @@ async fn view_partner(
     let mut last_rtt_emit: Option<Instant> = None;
     let mut ended = String::from("sessione terminata");
     let mut partner_updating = false;
+    // Connect again afterwards: asked by the host, or the connection broke under a session
+    // opened with the personal password.
+    let mut partner_reconnect = false;
+    let mut lost = false;
     let mut chat = ChatLimiter::default();
     session::run_viewer(
         channel,
@@ -2763,9 +2843,21 @@ async fn view_partner(
                 }
             }
             ViewerEvent::PartnerUpdating => partner_updating = true,
+            ViewerEvent::PartnerReconnect => partner_reconnect = true,
+            ViewerEvent::ConnectionLost => lost = true,
         },
     )
     .await;
+    let reconnect = partner_reconnect || (lost && credential.personal);
+    if reconnect {
+        *shared.reconnect.lock().unwrap() = Some(Reconnect {
+            target: partner.clone(),
+            credential: credential.clone(),
+            until: Instant::now() + RECONNECT_FOR,
+        });
+        log(app, "info", format!("ricollegamento a {partner}..."));
+        reconnect_later(shared);
+    }
 
     file_manager.abort();
     shared.viewers.lock().unwrap().remove(&session);
@@ -2780,10 +2872,13 @@ async fn view_partner(
             session,
             reason: ended,
             updating: partner_updating,
+            reconnect,
             duration_secs: viewing_since.elapsed().as_secs(),
         },
     );
-    crate::show_main_window(app);
+    if !reconnect {
+        crate::show_main_window(app);
+    }
 }
 
 #[cfg(test)]
