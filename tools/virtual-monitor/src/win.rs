@@ -354,10 +354,12 @@ fn settings_dir() -> std::io::Result<()> {
     };
     let dir = Path::new(SETTINGS_DIR);
     match std::fs::symlink_metadata(dir) {
-        Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {
-            std::fs::remove_dir_all(dir)?
+        // A junction or a link to a folder goes with remove_dir, one to a file with
+        // remove_file; neither touches what it points to.
+        Ok(meta) if meta.file_type().is_symlink() => {
+            std::fs::remove_dir(dir).or_else(|_| std::fs::remove_file(dir))?
         }
-        Ok(meta) if meta.file_type().is_symlink() && meta.is_dir() => std::fs::remove_dir(dir)?,
+        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(dir)?,
         Ok(_) => std::fs::remove_file(dir)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
