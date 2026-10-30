@@ -652,7 +652,7 @@ fn service_loop() -> Result<()> {
             }
         }
         if let Some(identifier) = &config.app_identifier {
-            logon.supervise(&name, &exe, identifier, session);
+            logon.supervise(&name, &exe, &app, identifier, session);
         }
         if stop_rx.recv_timeout(Duration::from_secs(2)).is_ok() {
             break;
@@ -967,6 +967,79 @@ pub fn running_for_a_user(exe: &str) -> bool {
 /// In the pre-login host's folder: the user whose id and password it has.
 const LOGON_OWNER_FILE: &str = "owner";
 
+/// In the pre-login host's folder: the user's app, started for them at logon if it is not
+/// running (no "start at logon"), so that a session can move to it.
+const LOGON_APP_FILE: &str = "app";
+
+/// Pre-login host: starts the user's app (in the background) as the owner, in the owner's
+/// session, unless it already runs. Run as the user, not SYSTEM: the app lives in the
+/// user's folders.
+pub fn start_owner_app(dir: &Path, hidden_arg: &str) -> Result<()> {
+    use windows_sys::Win32::System::Environment::{
+        CreateEnvironmentBlock, DestroyEnvironmentBlock,
+    };
+    use windows_sys::Win32::System::RemoteDesktop::WTSQueryUserToken;
+
+    let owner = std::fs::read_to_string(dir.join(LOGON_OWNER_FILE))?;
+    let app = PathBuf::from(std::fs::read_to_string(dir.join(LOGON_APP_FILE))?.trim());
+    let exe_name = app
+        .file_name()
+        .context("no app name")?
+        .to_string_lossy()
+        .into_owned();
+    if running_for_a_user(&exe_name) {
+        return Ok(());
+    }
+    let session = user_sessions()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|(_, user)| user.eq_ignore_ascii_case(owner.trim()))
+        .map(|(id, _)| id)
+        .context("the owner is not logged on")?;
+    unsafe {
+        let mut token: HANDLE = std::ptr::null_mut();
+        if WTSQueryUserToken(session, &mut token) == 0 {
+            bail!("WTSQueryUserToken: {}", std::io::Error::last_os_error());
+        }
+        let mut environment = std::ptr::null_mut();
+        if CreateEnvironmentBlock(&mut environment, token, 0) == 0 {
+            environment = std::ptr::null_mut();
+        }
+        let application = wide(&app);
+        let mut command = wide(format!("\"{}\" {hidden_arg}", app.display()));
+        let mut desktop = wide(r"winsta0\default");
+        let mut startup: STARTUPINFOW = std::mem::zeroed();
+        startup.cb = size_of::<STARTUPINFOW>() as u32;
+        startup.lpDesktop = desktop.as_mut_ptr();
+        let mut info: PROCESS_INFORMATION = std::mem::zeroed();
+        let ok = CreateProcessAsUserW(
+            token,
+            application.as_ptr(),
+            command.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            CREATE_UNICODE_ENVIRONMENT,
+            environment,
+            std::ptr::null(),
+            &startup,
+            &mut info,
+        );
+        let error = std::io::Error::last_os_error();
+        if !environment.is_null() {
+            DestroyEnvironmentBlock(environment);
+        }
+        CloseHandle(token);
+        if ok == 0 {
+            bail!("CreateProcessAsUserW {}: {error}", app.display());
+        }
+        CloseHandle(info.hThread);
+        CloseHandle(info.hProcess);
+    }
+    tracing::info!(session, "pre-login host: started the user's app");
+    Ok(())
+}
+
 /// Pre-login host: whether everyone who logged on is the user whose id and password it
 /// has. Their sessions then go on into that user's desktop, which the partner reached
 /// with that user's password anyway; anyone else logging on ends them.
@@ -1090,7 +1163,13 @@ fn user_has_app(session: u32, identifier: &str) -> bool {
 /// Copies the logged-on user's id and personal password into the pre-login host's folder.
 /// Without a device key (the app never ran for this user) nothing changes; without a
 /// personal password the host is not started (nobody could get in).
-fn sync_logon_files(session: u32, identifier: &str, user: &str, dir: &Path) -> Result<()> {
+fn sync_logon_files(
+    session: u32,
+    identifier: &str,
+    user: &str,
+    app: &Path,
+    dir: &Path,
+) -> Result<()> {
     // Read as the user, written as SYSTEM (only SYSTEM and administrators may enter `dir`).
     let contents = with_user_app_data(session, |app_data| {
         let source = app_data.join(identifier);
@@ -1106,6 +1185,12 @@ fn sync_logon_files(session: u32, identifier: &str, user: &str, dir: &Path) -> R
     let owner = dir.join(LOGON_OWNER_FILE);
     if std::fs::read_to_string(&owner).ok().as_deref() != Some(user) {
         std::fs::write(&owner, user).with_context(|| format!("writing {}", owner.display()))?;
+    }
+    let app_file = dir.join(LOGON_APP_FILE);
+    let app = app.to_string_lossy();
+    if std::fs::read_to_string(&app_file).ok().as_deref() != Some(&*app) {
+        std::fs::write(&app_file, &*app)
+            .with_context(|| format!("writing {}", app_file.display()))?;
     }
     for (file, read) in LOGON_FILES.into_iter().zip(contents) {
         let target = dir.join(file);
@@ -1144,7 +1229,7 @@ struct LogonHost {
 }
 
 impl LogonHost {
-    fn supervise(&mut self, name: &str, exe: &Path, identifier: &str, session: u32) {
+    fn supervise(&mut self, name: &str, exe: &Path, app: &Path, identifier: &str, session: u32) {
         if let Some(h) = self.process
             && unsafe { WaitForSingleObject(h, 0) } == WAIT_OBJECT_0
         {
@@ -1178,7 +1263,7 @@ impl LogonHost {
                         .is_none_or(|t| t.elapsed() > LOGON_SYNC_EVERY);
                 if due {
                     self.last_sync = Some(std::time::Instant::now());
-                    match sync_logon_files(source, identifier, &user, &dir) {
+                    match sync_logon_files(source, identifier, &user, app, &dir) {
                         Ok(()) => self.synced_user = Some(user),
                         Err(e) => tracing::debug!("pre-login host: cannot copy the files: {e:#}"),
                     }

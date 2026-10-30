@@ -18,8 +18,7 @@ Versione dedicata alla **sicurezza**, dopo una nuova revisione del codice.
   nessuno chiuda la sessione (logout, riavvio, rete persa) l'app si ricollega da sola per un paio di minuti.
   Su Windows dopo il logout ritrovi la schermata di accesso, e dopo l'accesso il tuo desktop con appunti e
   Trasferimento file, senza ricollegarti a mano: la finestra dice "ricollegamento in corso" finché non si apre
-  quella nuova. Serve la 2.1.0 su entrambi i computer, e su Windows **Avvia all'accesso** attivo (altrimenti dopo
-  l'accesso la sessione continua com'era, senza appunti e Trasferimento file; l'app ora lo consiglia).
+  quella nuova. Serve la 2.1.0 su entrambi i computer; se l'app non si avvia all'accesso, la avvia il servizio.
 - Windows: sulla schermata di accesso, prima che qualcuno entri, il Trasferimento file non è disponibile; se accede
   un utente diverso da quello del PC, chi era collegato viene scollegato.
 - Windows: **Computer usato solo da remoto** vale per tutto il computer e si cambia con il permesso di

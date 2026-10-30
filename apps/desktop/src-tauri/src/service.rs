@@ -1482,9 +1482,20 @@ async fn run(ctx: Ctx, mut commands: UnboundedReceiver<Command>) {
     }
 }
 
-/// Host before login, once its user logged on: waits (at most 30 s) for the user's app to
-/// start in their session.
+/// Host before login, once its user logged on: starts the user's app in their session if
+/// it did not start at logon, and waits (at most 30 s) for it.
 async fn user_app_started() -> bool {
+    #[cfg(windows)]
+    if let Some(dir) = crate::logon_host_dir() {
+        // Not started at logon: start it now, in the background, for the partner to reach.
+        let started = tauri::async_runtime::spawn_blocking(move || {
+            agent::windows::start_owner_app(dir, crate::HIDDEN_ARG)
+        })
+        .await;
+        if let Ok(Err(e)) = started {
+            tracing::warn!("cannot start the user's app: {e:#}");
+        }
+    }
     #[cfg(windows)]
     for _ in 0..30 {
         let running = tauri::async_runtime::spawn_blocking(|| {
@@ -1539,16 +1550,16 @@ async fn retire(
     #[cfg(not(windows))]
     let owner = false;
     // The partner connects again by itself to the user's app, which has the clipboard and
-    // the file manager this SYSTEM process may not offer; but only once that app runs.
-    // Without it (not started at logon) the partner would find the computer offline: the
-    // session then goes on here, as before 2.1.
+    // the file manager this SYSTEM process may not offer; but only once that app runs
+    // (started here if not at logon). Without it the partner would find the computer
+    // offline: the session then goes on here, as before 2.1.
     let handover = owner && open > 0 && user_app_started().await;
     if owner && !handover && open > 0 {
         log(
             &ctx.app,
             "warn",
             "accesso a Windows effettuato, ma l'app dell'utente non è partita: la sessione \
-             continua senza appunti e trasferimento file (attiva \"Avvia all'accesso\")",
+             continua senza appunti e trasferimento file",
         );
     }
     if !owner || handover {

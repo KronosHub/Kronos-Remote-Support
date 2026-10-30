@@ -43,8 +43,9 @@ pulizia), dopo quella della 1.2.0 (ADR 0039). Ogni problema è stato ricontrolla
   dell'accesso): tentativi ogni 3 s finché il dispositivo è offline, per 150 s (`Reconnect`). Nessun nuovo accesso:
   serve la stessa password che aveva già aperto la sessione.
   All'accesso l'host aspetta fino a 30 s che l'app dell'utente giri nella sua sessione (`running_for_a_user`):
-  senza "Avvia all'accesso" non parte, il PC restava offline e il viewer riprovava a vuoto (visto sulla VM); allora
-  la sessione continua sul processo SYSTEM come nella 2.0. La finestra del viewer resta aperta con "ricollegamento
+  senza "Avvia all'accesso" non parte, il PC restava offline e il viewer riprovava a vuoto (visto sulla VM): l'host
+  allora la avvia lui, come l'utente e nascosta (`start_owner_app`, percorso scritto dal servizio nel file `app`).
+  Se non parte comunque la sessione continua sul processo SYSTEM come nella 2.0. La finestra del viewer resta aperta con "ricollegamento
   in corso" e si chiude quando si apre la sessione nuova (`ReconnectFailed` se i tentativi finiscono).
 - **Solo da remoto** (ADR 0059): impostazione del computer, file `remote-only` nella cartella del servizio (solo
   amministratori), con il nome dell'utente che l'ha attivata; si cambia con `--set-remote-only` elevato. Il servizio
