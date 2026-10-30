@@ -701,3 +701,13 @@
   compilati per Windows da qui, l'app Windows solo in CI. Un test del Trasferimento file è fallito cinque volte e poi
   è tornato verde senza modifiche al codice: da tenere d'occhio.
 - `cmake` installato con Homebrew (serve a ricompilare Opus).
+
+## 2026-10-30 — Prove della 2.1.0 sulla VM
+- Release in bozza (`draft_only`, nuovo ingresso di `release.yml`) e prove sulla VM Parallels: installazione sopra la
+  1.8.1 e avvio (flag DLL ok), servizio alla revisione 4 con copia dei file come utente, "solo da remoto" (scrive
+  il file solo elevato; senza permessi rifiutato), MSI tenuto aperto (scrittura e cancellazione rifiutate, msiexec
+  legge). Monitor virtuale con collegamento piantato: niente scritto altrove, ma l'installazione falliva
+  (`remove_file` su una giunzione): corretto con `remove_dir`.
+- L'utente ha provato la schermata di accesso: dover ricollegarsi dopo l'accesso è scomodo. Ora la sessione continua
+  se accede lo stesso utente di ID e password, si chiude solo se accede un altro (ADR 0063).
+- Spostare il tag `v2.1.0` (push forzato) è stato bloccato dai permessi: serve l'utente.

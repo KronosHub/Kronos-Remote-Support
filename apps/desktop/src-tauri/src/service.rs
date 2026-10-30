@@ -1432,9 +1432,10 @@ fn watch_logon(commands: UnboundedSender<Command>) {
 }
 
 /// Host before login, after a user logged on: off the server and the local network (the
-/// user's app has the id now). The sessions open on the login screen end too: going on
-/// would show the partner the desktop of whoever logged on (connecting again goes through
-/// that user's app and its passwords). Then the process exits.
+/// user's app has the id now). The sessions open on the login screen go on if the user
+/// who logged on is the one whose id and password this host has (typically the partner
+/// typed that user's Windows password); anyone else logging on ends them, or the partner
+/// would watch someone else's desktop. Then the process exits once they are over.
 async fn retire(
     ctx: &Ctx,
     sessions: &mut Sessions,
@@ -1444,10 +1445,18 @@ async fn retire(
     ctx.shared.lan.lock().unwrap().take();
     let open = ctx.shared.hosting.lock().unwrap().len();
     tracing::info!(open, "host before login: retired");
-    for host in ctx.shared.hosting.lock().unwrap().values() {
-        let _ = host.commands.send(HostCommand::End(
-            "un utente ha effettuato l'accesso a Windows: collegati di nuovo".into(),
-        ));
+    #[cfg(windows)]
+    let owner = crate::logon_host_dir().is_some_and(agent::windows::only_owner_logged_on);
+    #[cfg(not(windows))]
+    let owner = false;
+    if owner {
+        tracing::info!("the same user logged on: the sessions go on");
+    } else {
+        for host in ctx.shared.hosting.lock().unwrap().values() {
+            let _ = host.commands.send(HostCommand::End(
+                "un altro utente ha effettuato l'accesso a Windows: collegati di nuovo".into(),
+            ));
+        }
     }
     let mut check = tokio::time::interval(Duration::from_secs(1));
     loop {

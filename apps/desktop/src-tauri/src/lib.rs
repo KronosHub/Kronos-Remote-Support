@@ -39,6 +39,12 @@ pub(crate) fn logon_host() -> bool {
     LOGON_HOST.get().is_some()
 }
 
+/// The pre-login host's data folder (ADR 0056).
+#[cfg(windows)]
+pub(crate) fn logon_host_dir() -> Option<&'static std::path::Path> {
+    LOGON_HOST.get().map(|dir| dir.as_path())
+}
+
 /// Product tag for the Windows agent and service (separate pipe/service per flavour).
 pub(crate) fn agent_product() -> &'static str {
     if QUICK { "quick" } else { "remote" }

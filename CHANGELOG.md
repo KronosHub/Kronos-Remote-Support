@@ -14,8 +14,9 @@ Versione dedicata alla **sicurezza**, dopo una nuova revisione del codice.
   Trasferimento file** (entrambe attive; toglile per vietarle).
 - Trasferimento file: si ricevono solo i file chiesti, e quelli ricevuti sono segnati come scaricati da Internet
   (Windows e macOS li controllano prima di aprirli).
-- Windows: sulla schermata di accesso, prima che qualcuno entri, il Trasferimento file non è disponibile; quando un
-  utente accede, chi era collegato viene scollegato e si ricollega.
+- Windows: sulla schermata di accesso, prima che qualcuno entri, il Trasferimento file non è disponibile. Se accede
+  l'utente del PC la sessione continua sul suo desktop come prima; se accede un altro utente, chi era collegato
+  viene scollegato.
 - Windows: **Computer usato solo da remoto** vale per tutto il computer e si cambia con il permesso di
   amministratore; all'aggiornamento l'app chiede di aggiornare il servizio (pulsante **Aggiorna**).
 - Altre protezioni per Windows (programmi caricati solo dalle cartelle di sistema, cartella del monitor virtuale,

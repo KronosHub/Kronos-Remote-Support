@@ -918,8 +918,34 @@ pub fn set_remote_only(name: &str, enabled: bool) -> Result<()> {
 /// True once someone has logged on, at this computer or through Remote Desktop (the
 /// pre-login host then leaves the server to the user's app, which starts in that session).
 pub fn user_logged_on() -> bool {
-    current_session().and_then(session_user).is_some()
-        || user_sessions().is_some_and(|sessions| !sessions.is_empty())
+    !logged_on_users().is_empty()
+}
+
+/// Users logged on, at this computer or through Remote Desktop.
+pub fn logged_on_users() -> Vec<String> {
+    let mut users: Vec<String> = user_sessions()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, user)| user)
+        .chain(current_session().and_then(session_user))
+        .collect();
+    users.sort_unstable_by_key(|u| u.to_lowercase());
+    users.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    users
+}
+
+/// In the pre-login host's folder: the user whose id and password it has.
+const LOGON_OWNER_FILE: &str = "owner";
+
+/// Pre-login host: whether everyone who logged on is the user whose id and password it
+/// has. Their sessions then go on into that user's desktop, which the partner reached
+/// with that user's password anyway; anyone else logging on ends them.
+pub fn only_owner_logged_on(dir: &Path) -> bool {
+    let Ok(owner) = std::fs::read_to_string(dir.join(LOGON_OWNER_FILE)) else {
+        return false;
+    };
+    let users = logged_on_users();
+    !users.is_empty() && users.iter().all(|u| u.eq_ignore_ascii_case(owner.trim()))
 }
 
 /// Roaming app data folder of the user logged on in `session` (SYSTEM only).
@@ -1034,7 +1060,7 @@ fn user_has_app(session: u32, identifier: &str) -> bool {
 /// Copies the logged-on user's id and personal password into the pre-login host's folder.
 /// Without a device key (the app never ran for this user) nothing changes; without a
 /// personal password the host is not started (nobody could get in).
-fn sync_logon_files(session: u32, identifier: &str, dir: &Path) -> Result<()> {
+fn sync_logon_files(session: u32, identifier: &str, user: &str, dir: &Path) -> Result<()> {
     // Read as the user, written as SYSTEM (only SYSTEM and administrators may enter `dir`).
     let contents = with_user_app_data(session, |app_data| {
         let source = app_data.join(identifier);
@@ -1047,6 +1073,10 @@ fn sync_logon_files(session: u32, identifier: &str, dir: &Path) -> Result<()> {
         return Ok(());
     };
     private_dir(dir)?;
+    let owner = dir.join(LOGON_OWNER_FILE);
+    if std::fs::read_to_string(&owner).ok().as_deref() != Some(user) {
+        std::fs::write(&owner, user).with_context(|| format!("writing {}", owner.display()))?;
+    }
     for (file, read) in LOGON_FILES.into_iter().zip(contents) {
         let target = dir.join(file);
         match read {
@@ -1118,7 +1148,7 @@ impl LogonHost {
                         .is_none_or(|t| t.elapsed() > LOGON_SYNC_EVERY);
                 if due {
                     self.last_sync = Some(std::time::Instant::now());
-                    match sync_logon_files(source, identifier, &dir) {
+                    match sync_logon_files(source, identifier, &user, &dir) {
                         Ok(()) => self.synced_user = Some(user),
                         Err(e) => tracing::debug!("pre-login host: cannot copy the files: {e:#}"),
                     }

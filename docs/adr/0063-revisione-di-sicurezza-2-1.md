@@ -29,8 +29,12 @@ pulizia), dopo quella della 1.2.0 (ADR 0039). Ogni problema è stato ricontrolla
 **Windows**
 - **Prima dell'accesso** (host SYSTEM, ADR 0056): niente Trasferimento file né file negli appunti (`fs::refuse`,
   `allow_clipboard` spento): con la password personale chiunque, anche un utente standard, poteva scrivere in
-  System32. Quando un utente accede le sessioni si chiudono (`HostCommand::End`) invece di continuare sul suo
-  desktop. ID e password continuano a venire da qualunque utente (scelta dell'utente).
+  System32. Quando un utente accede, le sessioni continuano solo se è lo stesso utente da cui vengono ID e password
+  (file `owner` scritto dal servizio a ogni copia, `only_owner_logged_on`): è il caso normale, in cui chi assiste
+  inserisce la password di Windows di quell'utente. Se accede un altro utente si chiudono (`HostCommand::End`),
+  altrimenti chi era collegato vedrebbe il suo desktop. Nella prima versione si chiudevano sempre: provato sulla VM,
+  l'utente ha trovato scomodo doversi ricollegare (era il motivo della ADR 0056). ID e password continuano a venire
+  da qualunque utente (scelta dell'utente).
 - **Solo da remoto** (ADR 0059): impostazione del computer, file `remote-only` nella cartella del servizio (solo
   amministratori), con il nome dell'utente che l'ha attivata; si cambia con `--set-remote-only` elevato. Il servizio
   sposta sulla console solo la sessione di quell'utente. Prima era una preferenza di qualunque utente e spostava
