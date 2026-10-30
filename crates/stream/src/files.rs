@@ -376,6 +376,9 @@ pub(crate) fn safe_relative(path: &str) -> Option<PathBuf> {
         if part.is_empty() || part == "." || part == ".." || part.contains(['\\', ':', '\0']) {
             return None;
         }
+        if cfg!(windows) && !windows_name_ok(part) {
+            return None;
+        }
         let mut components = Path::new(part).components();
         match (components.next(), components.next()) {
             (Some(Component::Normal(_)), None) => out.push(part),
@@ -383,6 +386,31 @@ pub(crate) fn safe_relative(path: &str) -> Option<PathBuf> {
         }
     }
     (!out.as_os_str().is_empty()).then_some(out)
+}
+
+/// Whether Windows can store a file under this name: not a device (`CON`, `NUL`, `COM1`,
+/// also with an extension, which opens the device instead of a file), no characters it
+/// forbids, no trailing dot or space (dropped, so two names would become one).
+fn windows_name_ok(name: &str) -> bool {
+    const DEVICES: [&str; 6] = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end()
+        .to_ascii_uppercase();
+    let numbered = ["COM", "LPT"].iter().any(|p| {
+        stem.strip_prefix(p).is_some_and(|n| {
+            matches!(
+                n,
+                "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
+        })
+    });
+    !DEVICES.contains(&stem.as_str())
+        && !numbered
+        && !name.ends_with(['.', ' '])
+        && !name.contains(|c: char| c < ' ' || "<>\"|?*".contains(c))
 }
 
 /// A folder for one session's received files that only this user can enter: created anew
@@ -483,10 +511,48 @@ pub(crate) fn create_targets(
                 std::fs::create_dir_all(parent)?;
             }
             std::fs::File::create(&target)?;
+            mark_downloaded(&target);
         }
         targets.push(target);
     }
     Ok(targets)
+}
+
+/// Marks a received file as coming from elsewhere, like a browser download: opening it
+/// then goes through Gatekeeper (macOS) or SmartScreen (Windows). Best effort.
+fn mark_downloaded(file: &Path) {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let value = format!("0081;{now:08x};Kronos Remote Support;");
+        let (Ok(path), Ok(name)) = (
+            std::ffi::CString::new(file.as_os_str().as_bytes()),
+            std::ffi::CString::new("com.apple.quarantine"),
+        ) else {
+            return;
+        };
+        unsafe {
+            libc::setxattr(
+                path.as_ptr(),
+                name.as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+                0,
+            )
+        };
+    }
+    #[cfg(windows)]
+    {
+        let mut stream = file.as_os_str().to_owned();
+        stream.push(":Zone.Identifier");
+        let _ = std::fs::write(stream, "[ZoneTransfer]\r\nZoneId=3\r\n");
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let _ = file;
 }
 
 impl FileReceiver {
@@ -857,6 +923,18 @@ mod tests {
             got = receiver.on_message(&frame(kind, 9, None, chunk)).unwrap();
         }
         assert_eq!(got, Some(Incoming::Text(text)));
+    }
+
+    #[test]
+    fn windows_names() {
+        for bad in [
+            "CON", "con.txt", "Nul", "COM1", "lpt9.log", "COM¹", "a.", "a ", "a?b", "x\u{1}",
+        ] {
+            assert!(!windows_name_ok(bad), "{bad:?}");
+        }
+        for good in ["CONSOLE.txt", "com10", "report.pdf", ".zshrc", "a b.txt"] {
+            assert!(windows_name_ok(good), "{good:?}");
+        }
     }
 
     #[test]

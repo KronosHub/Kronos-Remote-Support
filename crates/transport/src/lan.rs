@@ -198,6 +198,56 @@ const MAX_LINE: u64 = 64 * 1024;
 const MAX_LAN_CONNECTIONS: usize = 8;
 /// A new LAN connection must introduce itself within this time.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+/// New LAN connections accepted from one address per [`LAN_RATE_WINDOW`] (every one of
+/// them may carry a password guess; through the server the same limits apply per caller).
+const LAN_CONNECTS_PER_ADDRESS: usize = 10;
+const LAN_RATE_WINDOW: Duration = Duration::from_secs(60);
+
+/// Whether a direct connection comes from the local network: private, link-local or
+/// shared (carrier-grade NAT, used by some VPNs) IPv4 addresses. The listener is reachable
+/// on every interface, public ones included, but LAN connections bypass the server's limits.
+fn is_local_source(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    let v4 = match ip {
+        IpAddr::V4(v4) => v4,
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => v4,
+            None => return false,
+        },
+    };
+    let [a, b, ..] = v4.octets();
+    v4.is_private()
+        || v4.is_link_local()
+        || v4.is_loopback()
+        || (a == 100 && (64..128).contains(&b))
+}
+
+/// Counts recent connections per address, forgetting those older than [`LAN_RATE_WINDOW`].
+#[derive(Default)]
+struct ConnectRate(
+    std::collections::HashMap<std::net::IpAddr, std::collections::VecDeque<std::time::Instant>>,
+);
+
+impl ConnectRate {
+    fn allow(&mut self, ip: std::net::IpAddr) -> bool {
+        let now = std::time::Instant::now();
+        self.0.retain(|_, times| {
+            while times
+                .front()
+                .is_some_and(|t| now.duration_since(*t) > LAN_RATE_WINDOW)
+            {
+                times.pop_front();
+            }
+            !times.is_empty()
+        });
+        let times = self.0.entry(ip).or_default();
+        if times.len() >= LAN_CONNECTS_PER_ADDRESS {
+            return false;
+        }
+        times.push_back(now);
+        true
+    }
+}
 
 /// Reads one line of at most [`MAX_LINE`] bytes; `Ok(0)` at the end of the stream.
 async fn read_line_limited<R>(reader: &mut R, line: &mut String) -> std::io::Result<usize>
@@ -221,10 +271,19 @@ pub async fn listen() -> Result<(u16, mpsc::UnboundedReceiver<LanSession>)> {
     let (tx, rx) = mpsc::unbounded_channel();
     let slots = Arc::new(Semaphore::new(MAX_LAN_CONNECTIONS));
     tokio::spawn(async move {
+        let mut rate = ConnectRate::default();
         loop {
             let Ok((stream, addr)) = listener.accept().await else {
                 break;
             };
+            if !is_local_source(addr.ip()) {
+                tracing::warn!(%addr, "LAN connection from outside the local network: refused");
+                continue;
+            }
+            if !rate.allow(addr.ip()) {
+                tracing::warn!(%addr, "too many LAN connections from this address: refused");
+                continue;
+            }
             let Ok(slot) = slots.clone().try_acquire_owned() else {
                 tracing::warn!(%addr, "too many LAN connections: refused");
                 continue;
@@ -380,6 +439,39 @@ fn placeholder_id() -> PeerId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_sources_only() {
+        let local = [
+            "192.168.1.5",
+            "10.0.0.2",
+            "172.20.1.1",
+            "169.254.3.4",
+            "127.0.0.1",
+            "100.100.1.1",
+            "::ffff:192.168.0.9",
+        ];
+        for ip in local {
+            assert!(is_local_source(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["8.8.8.8", "100.128.0.1", "2001:db8::1", "172.32.0.1"] {
+            assert!(!is_local_source(ip.parse().unwrap()), "{ip}");
+        }
+    }
+
+    #[test]
+    fn connect_rate_per_address() {
+        let mut rate = ConnectRate::default();
+        let (a, b) = (
+            "192.168.1.2".parse().unwrap(),
+            "192.168.1.3".parse().unwrap(),
+        );
+        for _ in 0..LAN_CONNECTS_PER_ADDRESS {
+            assert!(rate.allow(a));
+        }
+        assert!(!rate.allow(a));
+        assert!(rate.allow(b));
+    }
 
     #[tokio::test]
     async fn direct_signaling_roundtrip() {

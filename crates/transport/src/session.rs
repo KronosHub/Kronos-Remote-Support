@@ -405,6 +405,7 @@ impl PeerSession {
     pub async fn handle_signal(&mut self, payload: SignalPayload) -> Result<()> {
         match payload {
             SignalPayload::Offer { sdp } => {
+                anyhow::ensure!(self.role == Role::Answerer, "offer sent to the offerer");
                 self.set_remote(RTCSessionDescription::offer(sdp)?).await?;
                 let answer = self.pc.create_answer(None).await?;
                 let sdp = answer.sdp.clone();
@@ -415,6 +416,7 @@ impl PeerSession {
                 });
             }
             SignalPayload::Answer { sdp } => {
+                anyhow::ensure!(self.role == Role::Offerer, "answer sent to the answerer");
                 self.set_remote(RTCSessionDescription::answer(sdp)?).await?;
             }
             SignalPayload::Candidate {
@@ -439,6 +441,14 @@ impl PeerSession {
     }
 
     async fn set_remote(&mut self, desc: RTCSessionDescription) -> Result<()> {
+        // One negotiation per session, never renegotiated: DTLS keeps the first fingerprint,
+        // while `transcript` reads the current SDP, so a later description could make the
+        // password handshake bind to certificates the connection does not use.
+        anyhow::ensure!(
+            !self.has_remote_description,
+            "renegotiation refused (session {})",
+            self.id
+        );
         self.pc.set_remote_description(desc).await?;
         self.has_remote_description = true;
         for candidate in self.pending_candidates.drain(..) {

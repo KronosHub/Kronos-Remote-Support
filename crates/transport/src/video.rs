@@ -125,6 +125,8 @@ pub enum Assembled {
 /// How long a gap in sequence numbers may stay open before the missing packets are
 /// declared lost. NACK retransmissions arrive out of order within about one RTT.
 const MAX_REORDER_WAIT: Duration = Duration::from_millis(200);
+/// Largest encoded frame accepted (a 2560×1600 keyframe is a few hundred KB).
+const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
 /// Upper bound on packets held while waiting for a gap to fill.
 const MAX_PENDING_PACKETS: usize = 1024;
 
@@ -278,7 +280,15 @@ impl FrameAssembler {
         }
         self.timestamp = Some(packet.timestamp);
         match self.depacketizer.depacketize(&packet.payload) {
-            Ok(nals) => self.buffer.extend_from_slice(&nals),
+            Ok(nals) if self.buffer.len() + nals.len() <= MAX_FRAME_BYTES => {
+                self.buffer.extend_from_slice(&nals)
+            }
+            // A frame that never ends (no marker) must not grow without limit.
+            Ok(_) => {
+                self.lost(out);
+                self.buffer = Vec::new();
+                return;
+            }
             Err(_) => {
                 self.lost(out);
                 return;

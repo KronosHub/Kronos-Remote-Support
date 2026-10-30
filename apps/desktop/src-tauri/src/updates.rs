@@ -1,5 +1,5 @@
-//! In-app updates (Tauri updater): signed packages published on the public
-//! `Remote-Desktop-releases` repository (ADR 0023).
+//! In-app updates (Tauri updater): signed packages published with the releases of the
+//! public `KronosHub/Kronos-Remote-Support` repository (ADR 0023, 0040).
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -102,10 +102,27 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
 /// the same arguments). `Ok(false)` if the UAC prompt was declined.
 #[cfg(windows)]
 fn install_msi(version: &str, bytes: &[u8]) -> anyhow::Result<bool> {
+    use std::io::Write;
+    use std::os::windows::fs::OpenOptionsExt;
+    // FILE_SHARE_READ: the verified package sits in the user's temp folder while the UAC
+    // prompt waits; the file stays open, so nothing can change or replace it before msiexec
+    // (which only reads it) has started.
+    const SHARE_READ: u32 = 1;
     let dir = std::env::temp_dir().join(format!("kronos-update-{}", std::process::id()));
-    std::fs::create_dir_all(&dir)?;
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir(&dir)?;
     let msi = dir.join(format!("Kronos Remote Support-{version}.msi"));
-    std::fs::write(&msi, bytes)?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .share_mode(0)
+        .open(&msi)?;
+    file.write_all(bytes)?;
+    drop(file);
+    let _held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(SHARE_READ)
+        .open(&msi)?;
     let args = std::env::args_os()
         .skip(1)
         .map(|a| msi_property_arg(&a.to_string_lossy()))
@@ -115,13 +132,7 @@ fn install_msi(version: &str, bytes: &[u8]) -> anyhow::Result<bool> {
         "/i \"{}\" /passive /promptrestart AUTOLAUNCHAPP=True LAUNCHAPPARGS=\"{args}\"",
         msi.display()
     );
-    let msiexec = std::env::var_os("SYSTEMROOT")
-        .map(|root| {
-            std::path::Path::new(&root)
-                .join("System32")
-                .join("msiexec.exe")
-        })
-        .unwrap_or_else(|| "msiexec.exe".into());
+    let msiexec = agent::windows::system_dir()?.join("msiexec.exe");
     agent::windows::spawn_elevated(&msiexec, &params)
 }
 

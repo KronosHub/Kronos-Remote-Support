@@ -686,3 +686,18 @@
 - Segnalazione: aggiornando da remoto un PC Windows la sessione cadeva e l'installazione restava ferma. Dalla foto
   dell'utente: richiesta UAC per `…-installer.msi`, cioè PC installato con l'MSI; il permesso veniva chiesto dopo
   la chiusura dell'app. Ora viene chiesto prima (ADR 0023, aggiornamento 2.0.1).
+
+## 2026-10-29 — Seconda revisione di sicurezza e pulizia (v2.1.0)
+- Richiesta: analizzare il codice, pulirlo, alleggerirlo e cercare falle. Quattro analisi in parallelo (rete e
+  password, privilegi Windows, canali dati e app, pulizia), ogni risultato ricontrollato nel codice.
+- Trovati e corretti (ADR 0063): MITM possibile per il server di segnalazione con una seconda negoziazione; limite
+  della password personale aggirabile con tentativi in parallelo; escalation a SYSTEM dal Trasferimento file prima
+  dell'accesso a Windows; "solo da remoto" che portava sulla console la sessione di un altro utente; download che
+  accettava file non chiesti; più problemi medi e minori.
+- Scelte dell'utente: niente file prima dell'accesso e sessione chiusa all'accesso (ma ID/password anche da utenti
+  non amministratori), "solo da remoto" impostazione del computer, appunti spenti di default senza contenuto
+  precedente, opzioni appunti/file sull'host, via `apps/signaling`, file grandi da dividere più avanti.
+- Test: fmt, clippy, 31 gruppi di test e l'e2e sul Worker in locale verdi sul Mac; agente e monitor virtuale
+  compilati per Windows da qui, l'app Windows solo in CI. Un test del Trasferimento file è fallito cinque volte e poi
+  è tornato verde senza modifiche al codice: da tenere d'occhio.
+- `cmake` installato con Homebrew (serve a ricompilare Opus).

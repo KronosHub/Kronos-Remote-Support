@@ -332,9 +332,62 @@ fn settings_xml() -> Result<String, String> {
 
 fn write_settings() -> Result<(), String> {
     let xml = settings_xml()?;
-    std::fs::create_dir_all(SETTINGS_DIR)
+    settings_dir()
         .and_then(|()| std::fs::write(Path::new(SETTINGS_DIR).join("vdd_settings.xml"), xml))
         .map_err(|e| format!("impossibile scrivere le impostazioni in {SETTINGS_DIR}: {e}"))
+}
+
+/// Administrators and SYSTEM may change the folder, everyone may read it (the driver).
+const SETTINGS_DIR_SDDL: &str = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;WD)";
+
+/// Creates the driver's folder anew. It is at the root of C:, where any user may create
+/// folders: one made beforehand (or a link to elsewhere) would let a user change what the
+/// driver reads, or have this elevated tool write wherever the link points. Removing a
+/// link removes only the link.
+fn settings_dir() -> std::io::Result<()> {
+    use windows::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows::Win32::Security::{
+        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        SetFileSecurityW,
+    };
+    let dir = Path::new(SETTINGS_DIR);
+    match std::fs::symlink_metadata(dir) {
+        Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {
+            std::fs::remove_dir_all(dir)?
+        }
+        Ok(meta) if meta.file_type().is_symlink() && meta.is_dir() => std::fs::remove_dir(dir)?,
+        Ok(_) => std::fs::remove_file(dir)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    // Fails if someone made it again meanwhile.
+    std::fs::create_dir(dir)?;
+    let sddl = HSTRING::from(SETTINGS_DIR_SDDL);
+    let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            &sddl,
+            SDDL_REVISION_1,
+            &mut descriptor,
+            None,
+        )
+    }
+    .map_err(std::io::Error::other)?;
+    let path = HSTRING::from(SETTINGS_DIR);
+    // The descriptor is left to the end of this short-lived process.
+    let ok = unsafe {
+        SetFileSecurityW(
+            &path,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            descriptor,
+        )
+    };
+    if !ok.as_bool() {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn extract_driver() -> Result<PathBuf, String> {

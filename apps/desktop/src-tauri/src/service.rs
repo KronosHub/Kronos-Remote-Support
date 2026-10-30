@@ -18,7 +18,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 
-use crate::store::{DeviceGroup, SavedDevice, Store};
+use crate::store::{DeviceGroup, HostPermissions, SavedDevice, Store};
 use transport::handshake::{self, Access, HandshakeError, Refusal};
 use transport::video::VideoSender;
 use transport::{
@@ -26,7 +26,6 @@ use transport::{
     TrackRemote, diag,
 };
 
-/// The only signaling server for now (see deploy/README.md).
 /// Signaling on Cloudflare Workers (ADR 0035); the server address is never shown in the UI.
 pub const SERVER: &str = "wss://kronos-signaling.kronos-signaling.workers.dev/ws";
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -41,8 +40,11 @@ const AUTH_TIMEOUT: Duration = Duration::from_secs(45);
 const PERSONAL_AUTH_TIMEOUT: Duration = Duration::from_secs(15);
 /// After refusing, the host keeps the channel open briefly so the reason reaches the viewer.
 const REFUSAL_LINGER: Duration = Duration::from_secs(2);
-/// Wrong guesses of the temporary password before it is replaced (ADR 0039).
-const MAX_TEMPORARY_FAILURES: u32 = 3;
+/// Wrong guesses of the temporary password before it is replaced (ADR 0039), from everyone.
+const MAX_TEMPORARY_FAILURES: u32 = 10;
+/// Wrong guesses from one partner (device id) that make it wait: someone guessing cannot
+/// alone get the password replaced over and over while the real partner types it.
+const MAX_SOURCE_FAILURES: usize = 3;
 /// Wrong guesses of the personal password that block unattended access for a while.
 const MAX_PERSONAL_FAILURES: usize = 5;
 const FAILED_ATTEMPTS_WINDOW: Duration = Duration::from_secs(10 * 60);
@@ -381,7 +383,11 @@ impl ChatLimiter {
 struct Attempts {
     /// Wrong guesses of the current temporary password.
     temporary: u32,
-    /// Wrong guesses of the personal password within [`FAILED_ATTEMPTS_WINDOW`].
+    /// Recent wrong guesses of the temporary password, by partner.
+    by_source: HashMap<String, VecDeque<Instant>>,
+    /// Guesses of the personal password within [`FAILED_ATTEMPTS_WINDOW`]: each one counts
+    /// as wrong from the moment it starts until it checks out, so guesses made in parallel
+    /// cannot get past the limit.
     personal: VecDeque<Instant>,
 }
 
@@ -430,19 +436,16 @@ impl Shared {
         self.status.lock().unwrap().password.clone()
     }
 
-    /// Records a wrong guess. A guessed-at temporary password is replaced after a few
-    /// failures, so trying passwords is pointless and nobody else gets locked out.
-    fn record_failure(&self, app: &AppHandle, personal: bool) {
-        if personal {
-            self.attempts
-                .lock()
-                .unwrap()
-                .personal
-                .push_back(Instant::now());
-            return;
-        }
+    /// Records a wrong guess of the temporary password: it is replaced after a few failures,
+    /// so trying passwords is pointless and nobody else gets locked out.
+    fn record_failure(&self, app: &AppHandle, source: &str) {
         let replace = {
             let mut attempts = self.attempts.lock().unwrap();
+            attempts
+                .by_source
+                .entry(source.to_owned())
+                .or_default()
+                .push_back(Instant::now());
             attempts.temporary += 1;
             attempts.temporary >= MAX_TEMPORARY_FAILURES
         };
@@ -456,8 +459,27 @@ impl Shared {
         }
     }
 
-    /// Too many wrong personal passwords lately: unattended access is paused.
-    fn personal_locked_out(&self) -> bool {
+    /// Too many wrong guesses of the temporary password from this partner lately.
+    fn source_locked_out(&self, source: &str) -> bool {
+        let mut attempts = self.attempts.lock().unwrap();
+        attempts.by_source.retain(|_, times| {
+            while times
+                .front()
+                .is_some_and(|t| t.elapsed() > FAILED_ATTEMPTS_WINDOW)
+            {
+                times.pop_front();
+            }
+            !times.is_empty()
+        });
+        attempts
+            .by_source
+            .get(source)
+            .is_some_and(|times| times.len() >= MAX_SOURCE_FAILURES)
+    }
+
+    /// Starts a guess of the personal password, counted as wrong until [`Self::personal_ok`];
+    /// `None` when there were too many lately (unattended access is paused).
+    fn personal_attempt(&self) -> Option<Instant> {
         let mut attempts = self.attempts.lock().unwrap();
         while attempts
             .personal
@@ -466,7 +488,22 @@ impl Shared {
         {
             attempts.personal.pop_front();
         }
-        attempts.personal.len() >= MAX_PERSONAL_FAILURES
+        if attempts.personal.len() >= MAX_PERSONAL_FAILURES {
+            return None;
+        }
+        let now = Instant::now();
+        attempts.personal.push_back(now);
+        Some(now)
+    }
+
+    /// The guess started at `started` was right: it no longer counts, and it is accepted only
+    /// if the others did not reach the limit meanwhile.
+    fn personal_ok(&self, started: Instant) -> bool {
+        let mut attempts = self.attempts.lock().unwrap();
+        if let Some(i) = attempts.personal.iter().position(|t| *t == started) {
+            attempts.personal.remove(i);
+        }
+        attempts.personal.len() < MAX_PERSONAL_FAILURES
     }
 
     /// Emits an event for a viewer window, or keeps it until the window attaches.
@@ -921,16 +958,51 @@ impl Service {
     }
 
     pub fn remote_only(&self) -> bool {
-        self.shared.store.remote_only()
+        remote_only(&self.shared.store)
     }
 
-    pub fn set_remote_only(&self, enabled: bool) -> Result<bool, String> {
+    /// On Windows with the service installed it is a setting of the computer, changed with
+    /// the administrator's permission (UAC).
+    pub async fn set_remote_only(&self, enabled: bool) -> Result<bool, String> {
+        #[cfg(windows)]
+        if agent::windows::is_service_installed(crate::service_name()) {
+            let arg = if enabled { "on" } else { "off" };
+            let accepted = tauri::async_runtime::spawn_blocking(move || {
+                agent::windows::run_self_elevated(&["--set-remote-only", arg])
+            })
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| format!("{e:#}"))?;
+            if !accepted {
+                return Err("permesso di amministratore negato".into());
+            }
+            if agent::windows::remote_only_owner(crate::service_name()).is_some() != enabled {
+                return Err("impossibile cambiare l'impostazione del computer".into());
+            }
+        }
         self.shared
             .store
             .set_remote_only(enabled)
             .map_err(|e| format!("impossibile salvare l'impostazione: {e}"))?;
         tracing::info!(enabled, "remote-only computer");
         Ok(enabled)
+    }
+
+    pub fn host_permissions(&self) -> HostPermissions {
+        self.shared.store.host_permissions()
+    }
+
+    /// Applies to the sessions that start from now on.
+    pub fn set_host_permissions(
+        &self,
+        allowed: HostPermissions,
+    ) -> Result<HostPermissions, String> {
+        self.shared
+            .store
+            .set_host_permissions(allowed)
+            .map_err(|e| format!("impossibile salvare l'impostazione: {e}"))?;
+        tracing::info!(?allowed, "host permissions");
+        Ok(allowed)
     }
 
     pub fn match_resolution(&self, session: SessionId, width: u32, height: u32, scale: f32) {
@@ -1360,8 +1432,9 @@ fn watch_logon(commands: UnboundedSender<Command>) {
 }
 
 /// Host before login, after a user logged on: off the server and the local network (the
-/// user's app has the id now), the sessions already open go on until they end, then the
-/// process exits.
+/// user's app has the id now). The sessions open on the login screen end too: going on
+/// would show the partner the desktop of whoever logged on (connecting again goes through
+/// that user's app and its passwords). Then the process exits.
 async fn retire(
     ctx: &Ctx,
     sessions: &mut Sessions,
@@ -1371,6 +1444,11 @@ async fn retire(
     ctx.shared.lan.lock().unwrap().take();
     let open = ctx.shared.hosting.lock().unwrap().len();
     tracing::info!(open, "host before login: retired");
+    for host in ctx.shared.hosting.lock().unwrap().values() {
+        let _ = host.commands.send(HostCommand::End(
+            "un utente ha effettuato l'accesso a Windows: collegati di nuovo".into(),
+        ));
+    }
     let mut check = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
@@ -1640,7 +1718,7 @@ async fn handle_server_message(
                     let (app, shared, info) = (ctx.app.clone(), ctx.shared.clone(), peer.info());
                     let internal = sessions.internal.clone();
                     tauri::async_runtime::spawn(async move {
-                        if let Some(channels) = transport::sort_channels(channels).await {
+                        if let Some(channels) = host_channels(channels).await {
                             serve_partner(&app, &shared, session, from, info, channels, video)
                                 .await;
                         }
@@ -1887,7 +1965,7 @@ fn lan_serve(ctx: &Ctx, lan: transport::lan::LanSession) {
                 let body = {
                     let (app, shared) = (app.clone(), shared.clone());
                     tauri::async_runtime::spawn(async move {
-                        if let Some(channels) = transport::sort_channels(channels).await {
+                        if let Some(channels) = host_channels(channels).await {
                             serve_partner(&app, &shared, session, from, info, channels, video)
                                 .await;
                         }
@@ -2033,6 +2111,27 @@ fn watch_state(app: &AppHandle, peer: &PeerSession, session: SessionId) {
     });
 }
 
+/// Remote-only computer (ADR 0059). On Windows with the service installed, the setting of
+/// the computer (the pre-login host, SYSTEM, has the user's copied preference instead).
+fn remote_only(store: &Store) -> bool {
+    #[cfg(windows)]
+    if !crate::logon_host() && agent::windows::is_service_installed(crate::service_name()) {
+        return agent::windows::remote_only_owner(crate::service_name()).is_some();
+    }
+    store.remote_only()
+}
+
+/// Host: the channels opened by a partner that is not authenticated yet, which may also
+/// never open them; the session is then closed instead of kept waiting.
+async fn host_channels(
+    channels: UnboundedReceiver<Arc<dyn DataChannel>>,
+) -> Option<SessionChannels> {
+    tokio::time::timeout(OPEN_TIMEOUT, transport::sort_channels(channels))
+        .await
+        .ok()
+        .flatten()
+}
+
 async fn wait_open(channel: &Arc<dyn DataChannel>) -> bool {
     matches!(
         tokio::time::timeout(OPEN_TIMEOUT, diag::wait_open(channel)).await,
@@ -2074,40 +2173,64 @@ async fn serve_partner(
     };
 
     let temporary = shared.password();
+    let personal = shared.personal.lock().unwrap().clone();
     // Which password the viewer tries, for counting wrong guesses.
     let personal_attempt = AtomicBool::new(false);
+    let personal_started = Mutex::new(None);
     let refuse_early = |personal: bool| {
         personal_attempt.store(personal, Ordering::Relaxed);
-        let locked = personal && shared.personal_locked_out();
-        locked.then_some(Refusal::TooManyAttempts)
+        if !personal {
+            return shared
+                .source_locked_out(from.as_str())
+                .then_some(Refusal::TooManyAttempts);
+        }
+        let started = shared.personal_attempt();
+        *personal_started.lock().unwrap() = started;
+        started.is_none().then_some(Refusal::TooManyAttempts)
     };
     // Guesses made in parallel all check the same password: one that is right but was
     // replaced meanwhile (after wrong guesses) no longer counts.
-    let approve = |name: Option<String>| {
+    let approve = |unattended: bool, name: Option<String>| {
         let who = peer_label(&from, name.as_deref());
-        let temporary = &temporary;
+        let (temporary, personal) = (&temporary, &personal);
+        let started = *personal_started.lock().unwrap();
         async move {
-            if shared.password() != *temporary {
-                return false;
+            if unattended {
+                let still_valid = shared.personal.lock().unwrap().as_ref() == personal.as_ref();
+                return match started {
+                    Some(started) if shared.personal_ok(started) && still_valid => Ok(()),
+                    _ => Err(Refusal::TooManyAttempts),
+                };
             }
-            ask_user(app, shared, session, &who).await
+            if shared.password() != *temporary {
+                return Err(Refusal::Rejected);
+            }
+            if ask_user(app, shared, session, &who).await {
+                Ok(())
+            } else {
+                Err(Refusal::Rejected)
+            }
         }
     };
     let my_name = shared.display_name.lock().unwrap().clone();
-    let personal = shared.personal.lock().unwrap().clone();
     let secrets = handshake::HostSecrets {
         temporary: &temporary,
         personal: personal.as_deref(),
     };
-    let result = handshake::authenticate_host(
-        &channel,
-        secrets,
-        transcript,
-        refuse_early,
-        approve,
-        my_name.as_deref(),
+    // Nobody may keep a half-open session waiting forever (the user's answer included).
+    let result = tokio::time::timeout(
+        AUTH_TIMEOUT,
+        handshake::authenticate_host(
+            &channel,
+            secrets,
+            transcript,
+            refuse_early,
+            approve,
+            my_name.as_deref(),
+        ),
     )
-    .await;
+    .await
+    .unwrap_or(Err(HandshakeError::Timeout));
     let unattended = matches!(result, Ok((Access::Unattended, _)));
     // From here on the partner is shown with its name, if it set one.
     let peer_name = result.as_ref().ok().and_then(|(_, name)| name.clone());
@@ -2115,11 +2238,6 @@ async fn serve_partner(
     let result = result.map(|(access, _)| access);
     match result {
         Ok(Access::Approved) => {}
-        // Same for parallel guesses of the personal password.
-        Ok(Access::Unattended) if shared.personal_locked_out() => {
-            log(app, "warn", format!("{who}: troppi tentativi falliti"));
-            return;
-        }
         Ok(Access::Unattended) => {
             crate::show_main_window(app);
             log(
@@ -2129,8 +2247,10 @@ async fn serve_partner(
             );
         }
         Err(HandshakeError::BadPassword) => {
-            let personal = personal_attempt.load(Ordering::Relaxed);
-            shared.record_failure(app, personal);
+            // A wrong personal password already counts (from its start).
+            if !personal_attempt.load(Ordering::Relaxed) {
+                shared.record_failure(app, from.as_str());
+            }
             log(app, "warn", format!("{who}: password errata"));
             linger(&channel).await;
             return;
@@ -2144,15 +2264,6 @@ async fn serve_partner(
 
     let (stop_tx, stop_rx) = mpsc::unbounded_channel();
     if unattended {
-        // The personal password may have been removed while the handshake ran.
-        if shared.personal.lock().unwrap().as_ref() != personal.as_ref() {
-            log(
-                app,
-                "warn",
-                format!("{who}: password personale non più valida"),
-            );
-            return;
-        }
         shared.unattended.lock().unwrap().insert(session);
     }
     {
@@ -2177,11 +2288,28 @@ async fn serve_partner(
         );
     }
     watch_path(app, info.clone(), session, false);
+    // Before Windows login the host is SYSTEM: its files are the whole computer's, so the
+    // partner gets neither the file manager nor clipboard files there.
+    let allowed = shared.store.host_permissions();
+    let logon = crate::logon_host();
     // The partner's file manager (ADR 0053): what it copies is written to the activity list.
     let file_manager = tokio::spawn({
         let (app, who) = (app.clone(), who.clone());
         async move {
-            if let Ok(channel) = fs.await {
+            let Ok(channel) = fs.await else { return };
+            if logon {
+                stream::fs::refuse(
+                    channel,
+                    "trasferimento file non disponibile prima dell'accesso a Windows",
+                )
+                .await;
+            } else if !allowed.files {
+                stream::fs::refuse(
+                    channel,
+                    "trasferimento file non consentito su questo computer",
+                )
+                .await;
+            } else {
                 stream::fs::serve(channel, |message| {
                     log(&app, "info", format!("{who} {message}"))
                 })
@@ -2203,7 +2331,8 @@ async fn serve_partner(
         // login is SYSTEM itself and captures directly.
         agent_product: (!crate::logon_host()).then(|| crate::agent_product().to_owned()),
         // Computers used only remotely: the viewer may set the screen to its window size.
-        resize_display: shared.store.remote_only(),
+        resize_display: remote_only(&shared.store),
+        allow_clipboard: allowed.clipboard && !logon,
         ..StreamConfig::default()
     };
     let mut chat = ChatLimiter::default();
@@ -2504,7 +2633,8 @@ async fn view_partner(
         audio,
         tracks,
         commands,
-        true,
+        // Off until the user turns it on in the toolbar.
+        false,
         |event| match event {
             ViewerEvent::Started {
                 width,

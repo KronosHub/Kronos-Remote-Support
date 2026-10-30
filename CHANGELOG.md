@@ -2,6 +2,25 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 2.1.0 — 2026-10-29
+Versione dedicata alla **sicurezza**, dopo una nuova revisione del codice.
+- Collegamento più protetto: nessuno, nemmeno chi gestisce il server, può inserirsi in una sessione, e i tentativi
+  di indovinare la password personale non superano più il limite. Una connessione lasciata a metà si chiude da sola.
+- Chi sbaglia la password temporanea viene fermato da solo, senza che la password cambi per tutti: un estraneo con
+  il tuo ID non può più impedire a chi ti assiste di collegarsi.
+- **Appunti condivisi spenti all'inizio di ogni sessione**: si accendono dal pulsante **Appunti** e da quel momento
+  passa solo ciò che copi dopo (non quello che avevi già copiato, per esempio una password).
+- Nuove opzioni in **Supporto remoto**: chi si collega a questo computer può **condividere gli appunti** e **usare il
+  Trasferimento file** (entrambe attive; toglile per vietarle).
+- Trasferimento file: si ricevono solo i file chiesti, e quelli ricevuti sono segnati come scaricati da Internet
+  (Windows e macOS li controllano prima di aprirli).
+- Windows: sulla schermata di accesso, prima che qualcuno entri, il Trasferimento file non è disponibile; quando un
+  utente accede, chi era collegato viene scollegato e si ricollega.
+- Windows: **Computer usato solo da remoto** vale per tutto il computer e si cambia con il permesso di
+  amministratore; all'aggiornamento l'app chiede di aggiornare il servizio (pulsante **Aggiorna**).
+- Altre protezioni per Windows (programmi caricati solo dalle cartelle di sistema, cartella del monitor virtuale,
+  file di aggiornamento).
+
 ## 2.0.1 — 2026-10-21
 - Windows installato con il pacchetto MSI: l'aggiornamento dall'app chiede il permesso di amministratore mentre
   l'app è ancora aperta, così si può approvare anche da remoto (con il controllo finestre di amministratore

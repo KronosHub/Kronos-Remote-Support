@@ -156,6 +156,16 @@ fn shell_execute_self_elevated(args: &[&str], wait: bool) -> Result<bool> {
     shell_execute_elevated(&exe, &params, SW_HIDE, wait)
 }
 
+/// The System32 folder, from Windows itself (not `%SystemRoot%`, which the user sets).
+pub fn system_dir() -> Result<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+    let mut buffer = [0u16; 260];
+    let len = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+    anyhow::ensure!(len > 0 && len < buffer.len(), "GetSystemDirectoryW failed");
+    Ok(PathBuf::from(OsString::from_wide(&buffer[..len])))
+}
+
 /// Starts `file` elevated with `params` (already quoted), shown: returns once the UAC
 /// prompt was answered and the process started, without waiting for it. `Ok(false)` if the
 /// user declined.
@@ -733,7 +743,7 @@ pub fn uninstall_service(name: &str) -> Result<()> {
 
 /// Bumped whenever the service or the pre-login host change: an app finding an older
 /// revision installed offers to reinstall the service, which refreshes its protected copy.
-pub const SERVICE_REVISION: u32 = 3;
+pub const SERVICE_REVISION: u32 = 4;
 const REVISION_FILE: &str = "revision";
 
 /// Files of the user's app data the pre-login host needs: the device key (same id), the
@@ -873,14 +883,36 @@ pub fn move_session_to_console(session: u32) -> Result<()> {
     Ok(())
 }
 
-/// The user marked this computer as reached remotely only, with no one at a monitor
-/// (`remote_only` in the preferences copied for the pre-login host).
-fn remote_only(dir: &Path) -> bool {
-    std::fs::read(dir.join(LOGON_FILES[2]))
-        .ok()
-        .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
-        .and_then(|prefs| prefs.get("remote_only")?.as_bool())
-        .unwrap_or(false)
+/// Remote-only computer, nobody at a monitor (ADR 0059): a setting of the computer, in the
+/// service's folder that only administrators can change, naming the user whose Remote
+/// Desktop session left disconnected is moved to the console. As a preference of any user
+/// it let anyone bring someone else's session, unlocked, to the screen.
+const REMOTE_ONLY_FILE: &str = "remote-only";
+
+/// The user this computer is marked remote-only for, if it is.
+pub fn remote_only_owner(name: &str) -> Option<String> {
+    let text = std::fs::read_to_string(service_home(name).ok()?.join(REMOTE_ONLY_FILE)).ok()?;
+    let user = text.trim();
+    (!user.is_empty()).then(|| user.to_owned())
+}
+
+/// Elevated: marks this computer as remote-only for the user logged on in this session, or
+/// clears the mark. The service must be installed (its folder holds the setting).
+pub fn set_remote_only(name: &str, enabled: bool) -> Result<()> {
+    let home = service_home(name)?;
+    let path = home.join(REMOTE_ONLY_FILE);
+    if !enabled {
+        return match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        };
+    }
+    anyhow::ensure!(home.is_dir(), "service not installed");
+    let user = current_session()
+        .and_then(session_user)
+        .context("no user logged on in this session")?;
+    std::fs::write(&path, user)?;
+    Ok(())
 }
 
 /// True once someone has logged on, at this computer or through Remote Desktop (the
@@ -891,18 +923,41 @@ pub fn user_logged_on() -> bool {
 }
 
 /// Roaming app data folder of the user logged on in `session` (SYSTEM only).
-fn user_app_data(session: u32) -> Result<PathBuf> {
+/// Runs `read` on the roaming app data folder of the user logged on in `session`, as that
+/// user. The folder comes from the user's registry: read as SYSTEM, a user could point it
+/// (or a link inside it) at another user's files, or at a network share where SYSTEM would
+/// sign in with the computer's account. Network paths are refused outright.
+fn with_user_app_data<T>(session: u32, read: impl FnOnce(&Path) -> T) -> Result<T> {
     use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::Security::{ImpersonateLoggedOnUser, RevertToSelf};
     use windows_sys::Win32::System::Com::CoTaskMemFree;
     use windows_sys::Win32::System::RemoteDesktop::WTSQueryUserToken;
     use windows_sys::Win32::UI::Shell::{FOLDERID_RoamingAppData, SHGetKnownFolderPath};
-    let mut token: HANDLE = std::ptr::null_mut();
-    if unsafe { WTSQueryUserToken(session, &mut token) } == 0 {
+
+    struct Token(HANDLE);
+    impl Drop for Token {
+        fn drop(&mut self) {
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+    /// Back to SYSTEM whatever happens.
+    struct Impersonating;
+    impl Drop for Impersonating {
+        fn drop(&mut self) {
+            if unsafe { RevertToSelf() } == 0 {
+                // Going on as the user would be worse than stopping.
+                std::process::abort();
+            }
+        }
+    }
+
+    let mut raw_token: HANDLE = std::ptr::null_mut();
+    if unsafe { WTSQueryUserToken(session, &mut raw_token) } == 0 {
         bail!("WTSQueryUserToken: {}", std::io::Error::last_os_error());
     }
+    let token = Token(raw_token);
     let mut raw: *mut u16 = std::ptr::null_mut();
-    let hr = unsafe { SHGetKnownFolderPath(&FOLDERID_RoamingAppData, 0, token, &mut raw) };
-    unsafe { CloseHandle(token) };
+    let hr = unsafe { SHGetKnownFolderPath(&FOLDERID_RoamingAppData, 0, token.0, &mut raw) };
     if hr != 0 || raw.is_null() {
         bail!("SHGetKnownFolderPath (user) failed: {hr:#x}");
     }
@@ -910,9 +965,28 @@ fn user_app_data(session: u32) -> Result<PathBuf> {
     while unsafe { *raw.add(len) } != 0 {
         len += 1;
     }
-    let path = OsString::from_wide(unsafe { std::slice::from_raw_parts(raw, len) });
+    let path = PathBuf::from(OsString::from_wide(unsafe {
+        std::slice::from_raw_parts(raw, len)
+    }));
     unsafe { CoTaskMemFree(raw.cast()) };
-    Ok(PathBuf::from(path))
+    let local = matches!(
+        path.components().next(),
+        Some(std::path::Component::Prefix(p))
+            if matches!(p.kind(), std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_))
+    );
+    anyhow::ensure!(
+        local,
+        "the user's app data is not on a local disk: {}",
+        path.display()
+    );
+    if unsafe { ImpersonateLoggedOnUser(token.0) } == 0 {
+        bail!(
+            "ImpersonateLoggedOnUser: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    let _back = Impersonating;
+    Ok(read(&path))
 }
 
 /// Creates `dir` readable by SYSTEM and Administrators only.
@@ -951,21 +1025,31 @@ fn private_dir(dir: &Path) -> Result<()> {
 
 /// True if the user logged on in `session` has run the app (it has a device key).
 fn user_has_app(session: u32, identifier: &str) -> bool {
-    user_app_data(session).is_ok_and(|dir| dir.join(identifier).join(LOGON_FILES[0]).is_file())
+    with_user_app_data(session, |dir| {
+        dir.join(identifier).join(LOGON_FILES[0]).is_file()
+    })
+    .unwrap_or(false)
 }
 
 /// Copies the logged-on user's id and personal password into the pre-login host's folder.
 /// Without a device key (the app never ran for this user) nothing changes; without a
 /// personal password the host is not started (nobody could get in).
 fn sync_logon_files(session: u32, identifier: &str, dir: &Path) -> Result<()> {
-    let source = user_app_data(session)?.join(identifier);
-    if !source.join(LOGON_FILES[0]).is_file() {
+    // Read as the user, written as SYSTEM (only SYSTEM and administrators may enter `dir`).
+    let contents = with_user_app_data(session, |app_data| {
+        let source = app_data.join(identifier);
+        source
+            .join(LOGON_FILES[0])
+            .is_file()
+            .then(|| LOGON_FILES.map(|file| std::fs::read(source.join(file))))
+    })?;
+    let Some(contents) = contents else {
         return Ok(());
-    }
+    };
     private_dir(dir)?;
-    for file in LOGON_FILES {
+    for (file, read) in LOGON_FILES.into_iter().zip(contents) {
         let target = dir.join(file);
-        match std::fs::read(source.join(file)) {
+        match read {
             Ok(content) => {
                 if std::fs::read(&target).ok().as_deref() != Some(content.as_slice()) {
                     std::fs::write(&target, &content)
@@ -986,8 +1070,8 @@ fn sync_logon_files(session: u32, identifier: &str, dir: &Path) -> Result<()> {
 
 /// The host that keeps the device reachable while nobody is logged on: the app itself,
 /// as SYSTEM in the console session, with no windows (`--logon-host <dir>`). Once a user
-/// logs on it leaves the server to the user's app and exits when its sessions are over, so
-/// a session started on the login screen goes on uninterrupted.
+/// logs on it leaves the server to the user's app, ends its sessions (the partner connects
+/// again through the user's app) and exits.
 #[derive(Default)]
 struct LogonHost {
     process: Option<HANDLE>,
@@ -1021,8 +1105,10 @@ impl LogonHost {
                     .into_iter()
                     .find(|(id, _)| user_has_app(*id, identifier))
             });
-        if source.as_ref().is_some_and(|(id, _)| *id != session) && remote_only(&dir) {
-            self.move_to_console(exe, identifier, session);
+        if source.as_ref().is_some_and(|(id, _)| *id != session)
+            && let Some(owner) = remote_only_owner(name)
+        {
+            self.move_to_console(exe, identifier, session, &owner);
         }
         match source {
             Some((source, user)) => {
@@ -1063,7 +1149,8 @@ impl LogonHost {
 
     /// Remote-only computer, nobody at the console: a Remote Desktop session closed without
     /// signing out has no screen, so it is moved to the console, where it can be shared.
-    fn move_to_console(&mut self, exe: &Path, identifier: &str, console: u32) {
+    /// Only the session of `owner`, the user the computer was marked remote-only for.
+    fn move_to_console(&mut self, exe: &Path, identifier: &str, console: u32, owner: &str) {
         if self
             .last_move
             .is_some_and(|t| t.elapsed() < LOGON_RELAUNCH_GAP)
@@ -1073,10 +1160,11 @@ impl LogonHost {
         let Some(sessions) = user_sessions() else {
             return;
         };
-        let Some((id, _)) = sessions
-            .into_iter()
-            .find(|(id, _)| is_disconnected(*id) && user_has_app(*id, identifier))
-        else {
+        let Some((id, _)) = sessions.into_iter().find(|(id, user)| {
+            user.eq_ignore_ascii_case(owner)
+                && is_disconnected(*id)
+                && user_has_app(*id, identifier)
+        }) else {
             return;
         };
         self.last_move = Some(std::time::Instant::now());

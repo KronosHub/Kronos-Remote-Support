@@ -151,11 +151,6 @@ fn cancel_connect(service: State<'_, Service>) {
     service.cancel_connect();
 }
 
-#[tauri::command]
-fn list_devices(service: State<'_, Service>) -> Vec<service::DeviceView> {
-    service.devices()
-}
-
 /// Online state of the saved devices (id digits → online; `None` while unknown); also
 /// asks the server again.
 #[tauri::command]
@@ -601,8 +596,21 @@ fn remote_only(service: State<'_, Service>) -> bool {
 }
 
 #[tauri::command]
-fn set_remote_only(service: State<'_, Service>, enabled: bool) -> Result<bool, String> {
-    service.set_remote_only(enabled)
+async fn set_remote_only(service: State<'_, Service>, enabled: bool) -> Result<bool, String> {
+    service.set_remote_only(enabled).await
+}
+
+#[tauri::command]
+fn host_permissions(service: State<'_, Service>) -> store::HostPermissions {
+    service.host_permissions()
+}
+
+#[tauri::command]
+fn set_host_permissions(
+    service: State<'_, Service>,
+    allowed: store::HostPermissions,
+) -> Result<store::HostPermissions, String> {
+    service.set_host_permissions(allowed)
 }
 
 #[tauri::command]
@@ -829,6 +837,21 @@ pub fn run() {
                     agent_product(),
                     true,
                 );
+                // A remote-only computer stays one across reinstalls (service updates).
+                let r = r.and_then(|()| {
+                    if args.iter().any(|a| a == "--remote-only") {
+                        agent::windows::set_remote_only(service_name(), true)
+                    } else {
+                        Ok(())
+                    }
+                });
+                std::process::exit(if r.is_ok() { 0 } else { 1 });
+            }
+            // Mark this computer remote-only for the user logged on here, or clear the mark
+            // (already elevated by the UAC prompt we requested).
+            Some("--set-remote-only") => {
+                let enabled = args.get(2).is_some_and(|a| a == "on");
+                let r = agent::windows::set_remote_only(service_name(), enabled);
                 std::process::exit(if r.is_ok() { 0 } else { 1 });
             }
             // Started by the service in the console session (remote-only computer).
@@ -974,11 +997,9 @@ pub fn run() {
                 // it when the service changed (e.g. the host before login, ADR 0056). Asked
                 // once per service revision; the button stays.
                 let handle = app.handle().clone();
+                let args = uac::install_args(service.remote_only());
                 tauri::async_runtime::spawn_blocking(move || {
-                    if !matches!(
-                        agent::windows::run_self_elevated(&["--install-service"]),
-                        Ok(true)
-                    ) {
+                    if !matches!(agent::windows::run_self_elevated(&args), Ok(true)) {
                         handle
                             .state::<Service>()
                             .set_service_update_declined(agent::windows::SERVICE_REVISION);
@@ -1026,7 +1047,6 @@ pub fn run() {
             new_password,
             respond_approval,
             cancel_connect,
-            list_devices,
             device_presence,
             lan_peers,
             set_lan_name,
@@ -1080,6 +1100,8 @@ pub fn run() {
             set_display_name,
             remote_only,
             set_remote_only,
+            host_permissions,
+            set_host_permissions,
             audio_supported,
             close_view,
             end_session,

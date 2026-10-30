@@ -77,6 +77,19 @@ struct Prefs {
     /// service from its copy of this file.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     remote_only: bool,
+    /// Partners may not share the clipboard with this computer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    deny_clipboard: bool,
+    /// Partners may not browse or copy this computer's files (file manager).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    deny_files: bool,
+}
+
+/// What partners may do on this computer besides seeing and controlling it.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct HostPermissions {
+    pub clipboard: bool,
+    pub files: bool,
 }
 
 pub struct Store {
@@ -386,6 +399,21 @@ impl Store {
     pub fn set_remote_only(&self, enabled: bool) -> std::io::Result<()> {
         let mut prefs = self.read::<Prefs>(PREFS_FILE).unwrap_or_default();
         prefs.remote_only = enabled;
+        self.write(PREFS_FILE, &prefs)
+    }
+
+    pub fn host_permissions(&self) -> HostPermissions {
+        let prefs = self.read::<Prefs>(PREFS_FILE).unwrap_or_default();
+        HostPermissions {
+            clipboard: !prefs.deny_clipboard,
+            files: !prefs.deny_files,
+        }
+    }
+
+    pub fn set_host_permissions(&self, allowed: HostPermissions) -> std::io::Result<()> {
+        let mut prefs = self.read::<Prefs>(PREFS_FILE).unwrap_or_default();
+        prefs.deny_clipboard = !allowed.clipboard;
+        prefs.deny_files = !allowed.files;
         self.write(PREFS_FILE, &prefs)
     }
 

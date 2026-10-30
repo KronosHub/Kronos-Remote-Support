@@ -55,21 +55,34 @@ pub fn uac_support() -> UacSupport {
     }
 }
 
+/// Arguments of the elevated service install: a remote-only computer stays one.
+#[cfg(windows)]
+pub fn install_args(remote_only: bool) -> Vec<&'static str> {
+    let mut args = vec!["--install-service"];
+    if remote_only {
+        args.push("--remote-only");
+    }
+    args
+}
+
 /// Installs (with a UAC prompt) or removes the agent service. Full app, Windows only.
 #[tauri::command]
-pub async fn set_uac_support(enable: bool) -> Result<UacSupport, String> {
+pub async fn set_uac_support(
+    service: tauri::State<'_, crate::service::Service>,
+    enable: bool,
+) -> Result<UacSupport, String> {
     #[cfg(windows)]
     {
         if crate::QUICK {
             return Err("in Quick Support si attiva avviando come amministratore".into());
         }
-        let arg = if enable {
-            "--install-service"
+        let args = if enable {
+            install_args(service.remote_only())
         } else {
-            "--uninstall-service"
+            vec!["--uninstall-service"]
         };
         let accepted =
-            tauri::async_runtime::spawn_blocking(move || agent::windows::run_self_elevated(&[arg]))
+            tauri::async_runtime::spawn_blocking(move || agent::windows::run_self_elevated(&args))
                 .await
                 .map_err(|e| e.to_string())?
                 .map_err(|e| format!("{e:#}"))?;
@@ -80,7 +93,7 @@ pub async fn set_uac_support(enable: bool) -> Result<UacSupport, String> {
     }
     #[cfg(not(windows))]
     {
-        let _ = enable;
+        let _ = (service, enable);
         Err("non disponibile su questo sistema".into())
     }
 }

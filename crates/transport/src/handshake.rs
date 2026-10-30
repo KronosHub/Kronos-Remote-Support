@@ -30,6 +30,8 @@ pub enum HandshakeError {
     Protocol(String),
     #[error("canale chiuso durante l'autenticazione")]
     Closed,
+    #[error("tempo scaduto durante l'autenticazione")]
+    Timeout,
     #[error("errore di invio: {0}")]
     Send(String),
 }
@@ -218,9 +220,11 @@ pub async fn authenticate_viewer(
 }
 
 /// Host side. `refuse_early` is told whether the viewer uses the personal password and may
-/// block before any crypto (rate limiting); `approve` (given the viewer's user name) is
-/// awaited only for the temporary password, after it checked out. `name` is ours, sent
-/// with the acceptance. Returns the access granted and the viewer's user name.
+/// block before any crypto (rate limiting); `approve` (told the same, and given the viewer's
+/// user name) is awaited once the password checked out, before anything is sent back: for
+/// the temporary password it asks the user, for the personal one it re-checks the limits
+/// (guesses made in parallel). `name` is ours, sent with the acceptance. Returns the access
+/// granted and the viewer's user name.
 pub async fn authenticate_host<R, A, F>(
     channel: &Arc<dyn DataChannel>,
     secrets: HostSecrets<'_>,
@@ -231,8 +235,8 @@ pub async fn authenticate_host<R, A, F>(
 ) -> Result<(Access, Option<String>), HandshakeError>
 where
     R: FnOnce(bool) -> Option<Refusal>,
-    A: FnOnce(Option<String>) -> F,
-    F: Future<Output = bool>,
+    A: FnOnce(bool, Option<String>) -> F,
+    F: Future<Output = Result<(), Refusal>>,
 {
     let (peer_msg, personal) = match recv(channel).await? {
         AuthMsg::Spake { msg, personal } => (unhex(&msg)?, personal),
@@ -272,13 +276,14 @@ where
         return Err(HandshakeError::BadPassword);
     }
 
+    if let Err(refusal) = approve(personal, peer_name.clone()).await {
+        deny(channel, refusal.reason()).await;
+        return Err(HandshakeError::Denied(refusal.reason().into()));
+    }
     let access = if personal {
         Access::Unattended
-    } else if approve(peer_name.clone()).await {
-        Access::Approved
     } else {
-        deny(channel, Refusal::Rejected.reason()).await;
-        return Err(HandshakeError::Denied(Refusal::Rejected.reason().into()));
+        Access::Approved
     };
     send(
         channel,

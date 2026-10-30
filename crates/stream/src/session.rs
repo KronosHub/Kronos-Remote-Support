@@ -188,6 +188,8 @@ pub enum HostCommand {
     CancelTransfer,
     /// This app is about to quit to install an update: tell the viewer, then end.
     Updating,
+    /// End, telling the viewer why (shown in its summary).
+    End(String),
 }
 
 /// Host: streams until the viewer leaves, the channel closes or `Stop` arrives.
@@ -561,6 +563,10 @@ pub async fn serve_host(
                     send(&channel, &ControlMsg::Chat { text }).await;
                 }
                 Some(HostCommand::PartnerLeft) => break "il partner si è disconnesso".to_owned(),
+                Some(HostCommand::End(reason)) => {
+                    send_bye(&channel, &reason).await;
+                    break reason;
+                }
                 Some(HostCommand::Stop) | None => {
                     send_bye(&channel, "terminata dall'host").await;
                     break "terminata da te".to_owned();
@@ -946,9 +952,10 @@ pub async fn run_viewer(
     // Packet counters at the previous report, and the latest RTT, for adaptive quality.
     let mut reported = packets.get();
     let mut last_rtt_ms = 0u32;
-    // What the viewer copied before connecting counts too.
+    // Only what is copied while sharing is on goes to the host: what was copied before
+    // (often a password just pasted somewhere) stays here.
     let mut clipboard = ClipboardShare::new(files);
-    clipboard.set_enabled(share_clipboard, true).await;
+    clipboard.set_enabled(share_clipboard, false).await;
     let enabled = clipboard.enabled();
     send(&channel, &ControlMsg::ClipboardMode { enabled }).await;
     on_event(ViewerEvent::ClipboardEnabled(enabled));
@@ -993,6 +1000,11 @@ pub async fn run_viewer(
                 }
                 // The host does not allow clipboard sharing.
                 Some(ControlMsg::ClipboardMode { enabled: false }) => {
+                    if clipboard.enabled() {
+                        on_event(ViewerEvent::Clipboard(
+                            "il computer remoto non consente la condivisione degli appunti".into(),
+                        ));
+                    }
                     clipboard.set_enabled(false, false).await;
                     on_event(ViewerEvent::ClipboardEnabled(false));
                 }
@@ -1037,7 +1049,7 @@ pub async fn run_viewer(
                 Some(ViewerCommand::RequestKeyframe) => want_keyframe = true,
                 Some(ViewerCommand::Chat(text)) => send(&channel, &ControlMsg::Chat { text }).await,
                 Some(ViewerCommand::Clipboard(enabled)) => {
-                    clipboard.set_enabled(enabled, true).await;
+                    clipboard.set_enabled(enabled, false).await;
                     let enabled = clipboard.enabled();
                     send(&channel, &ControlMsg::ClipboardMode { enabled }).await;
                     on_event(ViewerEvent::ClipboardEnabled(enabled));

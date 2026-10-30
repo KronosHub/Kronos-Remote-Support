@@ -472,6 +472,8 @@
   /** Windows: reached remotely only, no monitor (a disconnected Remote Desktop session is
    * moved to the console by the service so it can be shared). */
   let remoteOnly = $state(false);
+  /** What partners may do here besides seeing and controlling (sessions from now on). */
+  let hostPermissions = $state({ clipboard: true, files: true });
   /** "Solo da remoto" exists on Windows (session moved to the screen, ADR 0059) and on the Mac. */
   const isMac = navigator.userAgent.includes("Mac OS X");
   /** Asking whether this PC is reached remotely only (after unattended access is turned on). */
@@ -950,6 +952,7 @@
     refreshPresence();
     invoke<boolean>("get_autostart").then((a) => (autostart = a));
     invoke<boolean>("remote_only").then((r) => (remoteOnly = r));
+    invoke<{ clipboard: boolean; files: boolean }>("host_permissions").then((p) => (hostPermissions = p));
     invoke<string | null>("display_name").then((n) => {
       displayName = n;
       nameDraft = n ?? "";
@@ -1241,6 +1244,18 @@
           ? "computer usato solo da remoto: chi controlla può adattare la risoluzione alla sua finestra"
           : "computer usato solo da remoto: la sessione di Desktop remoto chiusa resta condivisibile e chi controlla può adattare la risoluzione"
         : "computer con monitor: risoluzione e sessione non vengono cambiate da remoto");
+    } catch (e) {
+      addLog("error", String(e));
+    }
+  }
+
+  async function setHostPermission(kind: "clipboard" | "files", enabled: boolean) {
+    try {
+      hostPermissions = await invoke("set_host_permissions", {
+        allowed: { ...hostPermissions, [kind]: enabled },
+      });
+      const what = kind === "clipboard" ? "appunti condivisi" : "trasferimento file";
+      addLog("info", `${what} ${enabled ? "consentito" : "non consentito"} a chi si collega (dalle prossime sessioni)`);
     } catch (e) {
       addLog("error", String(e));
     }
@@ -2103,6 +2118,8 @@
           </label>
           {#if remoteOnly && uac?.supported && !uac.active}
             <p class="hint small">Serve il controllo finestre di amministratore (UAC) attivo.</p>
+          {:else if uac?.supported}
+            <p class="hint small">Vale per tutto il computer: cambiarla chiede il permesso di amministratore.</p>
           {/if}
         {/if}
       {:else}
@@ -2117,6 +2134,17 @@
           </button>
         </div>
       {/if}
+      <span class="label">Chi si collega a questo computer può</span>
+      <label class="check">
+        <input type="checkbox" checked={hostPermissions.clipboard}
+          onchange={() => setHostPermission("clipboard", !hostPermissions.clipboard)} />
+        Condividere gli appunti
+      </label>
+      <label class="check">
+        <input type="checkbox" checked={hostPermissions.files}
+          onchange={() => setHostPermission("files", !hostPermissions.files)} />
+        Usare il Trasferimento file
+      </label>
       {#if !quick}
       <label class="check">
         <input type="checkbox" checked={autostart} onchange={toggleAutostart} />

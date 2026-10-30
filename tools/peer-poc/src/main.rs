@@ -314,7 +314,7 @@ async fn serve(
             secrets,
             transcript,
             |_| None,
-            |_| async { true },
+            |_, _| async { Ok(()) },
             None,
         )
         .await?;

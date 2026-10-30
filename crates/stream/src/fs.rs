@@ -10,7 +10,7 @@
 //! complete, under a new name ("name (2).ext") or, when the user chose to overwrite,
 //! replacing what has the same name.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -499,6 +499,35 @@ fn rand_suffix() -> u32 {
     RandomState::new().hash_one(std::time::SystemTime::now()) as u32
 }
 
+/// Host where the file manager is not allowed: every request gets `message` as its answer.
+pub async fn refuse(channel: Arc<dyn DataChannel>, message: &str) {
+    let lock = tokio::sync::Mutex::new(());
+    let mut decoder = Decoder::default();
+    loop {
+        let data = match channel.poll().await {
+            Some(DataChannelEvent::OnMessage(message)) => message.data,
+            Some(DataChannelEvent::OnClose) | None => break,
+            Some(_) => continue,
+        };
+        let req = match decoder.feed(&data) {
+            Ok(Some(Frame::Msg(
+                FsMsg::List { req, .. }
+                | FsMsg::Mkdir { req, .. }
+                | FsMsg::Download { req, .. }
+                | FsMsg::Upload { req, .. },
+            ))) => req,
+            _ => continue,
+        };
+        let error = FsMsg::Error {
+            req,
+            message: message.into(),
+        };
+        if send_msg(&channel, &lock, &error).await.is_err() {
+            break;
+        }
+    }
+}
+
 /// Host side: answers the viewer's requests until the channel closes. `on_log` gets short
 /// messages for the activity list, phrased to follow the partner's name ("ha copiato…").
 pub async fn serve(channel: Arc<dyn DataChannel>, mut on_log: impl FnMut(String)) {
@@ -692,18 +721,42 @@ type Waiter = oneshot::Sender<Result<Answer, String>>;
 struct ClientState {
     /// Answers awaited, by request.
     waiting: HashMap<u32, Waiter>,
-    /// Downloads under way: their local folder and where their progress goes.
-    /// Destination, progress and "overwrite" of each download under way.
-    downloads: HashMap<
-        u32,
-        (
-            PathBuf,
-            Option<mpsc::UnboundedSender<TransferProgress>>,
-            bool,
-        ),
-    >,
+    /// Downloads under way, by request.
+    downloads: HashMap<u32, Download>,
     /// Uploads being sent, to stop on cancel.
     uploads: HashMap<u32, JoinHandle<()>>,
+}
+
+/// A download under way: where it goes and what was asked for.
+#[derive(Clone)]
+struct Download {
+    dest: PathBuf,
+    progress: Option<mpsc::UnboundedSender<TransferProgress>>,
+    /// Overwrite items with the same name in `dest`.
+    replace: bool,
+    /// Names of the requested items: the host may send nothing else, or it could place
+    /// (or, with `replace`, overwrite) any file in the destination.
+    names: HashSet<String>,
+}
+
+impl Download {
+    fn expects(&self, entries: &[Entry]) -> bool {
+        entries.iter().all(|e| {
+            let top = e.path.split('/').next().unwrap_or_default();
+            self.names.contains(top)
+        })
+    }
+}
+
+/// Possible last components of a path of the host, whose separator we do not know: `\\`
+/// on Windows, while on a Mac or Linux it may be part of a name.
+fn host_file_names(path: &str) -> impl Iterator<Item = &str> {
+    let unix = path.trim_end_matches('/').rsplit('/').next();
+    let windows = path
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next();
+    unix.into_iter().chain(windows).filter(|n| !n.is_empty())
 }
 
 fn answer(state: &Mutex<ClientState>, req: u32, result: Result<Answer, String>) {
@@ -799,11 +852,20 @@ impl FsClient {
         replace: bool,
         progress: Option<mpsc::UnboundedSender<TransferProgress>>,
     ) -> Result<Vec<String>, String> {
-        self.state
-            .lock()
-            .unwrap()
-            .downloads
-            .insert(req, (dest, progress, replace));
+        let names = paths
+            .iter()
+            .flat_map(|p| host_file_names(p))
+            .map(str::to_owned)
+            .collect();
+        self.state.lock().unwrap().downloads.insert(
+            req,
+            Download {
+                dest,
+                progress,
+                replace,
+                names,
+            },
+        );
         let result = self.ask(req, FsMsg::Download { req, paths }, None).await;
         self.state.lock().unwrap().downloads.remove(&req);
         match result? {
@@ -942,8 +1004,21 @@ async fn read_answers(
             Frame::Msg(FsMsg::Sending { req, entries }) => {
                 incoming = None;
                 let target = state.lock().unwrap().downloads.get(&req).cloned();
-                if let Some((dest, progress, replace)) = target {
-                    match Incoming::start(req, &dest, entries, progress, replace) {
+                if let Some(download) = target {
+                    let started = if download.expects(&entries) {
+                        Incoming::start(
+                            req,
+                            &download.dest,
+                            entries,
+                            download.progress,
+                            download.replace,
+                        )
+                    } else {
+                        Err(anyhow::anyhow!(
+                            "il computer remoto ha inviato file non richiesti"
+                        ))
+                    };
+                    match started {
                         Ok(started) => incoming = Some(started),
                         Err(e) => {
                             answer(&state, req, Err(format!("{e:#}")));
@@ -998,6 +1073,29 @@ async fn read_answers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn downloads_accept_only_the_requested_items() {
+        let names = ["/Users/a/report.pdf", "C:\\Users\\a\\Docs\\"]
+            .iter()
+            .flat_map(|p| host_file_names(p))
+            .map(str::to_owned)
+            .collect();
+        let download = Download {
+            dest: PathBuf::new(),
+            progress: None,
+            replace: true,
+            names,
+        };
+        let entry = |path: &str| Entry {
+            path: path.into(),
+            dir: false,
+            size: 0,
+        };
+        assert!(download.expects(&[entry("report.pdf"), entry("Docs/a.txt")]));
+        assert!(!download.expects(&[entry("report.pdf"), entry(".zshrc")]));
+        assert!(!download.expects(&[entry(".ssh/authorized_keys")]));
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
