@@ -1923,7 +1923,9 @@
         onblur={releaseKeys}
       ></canvas>
       {#if view.ended && view.reconnecting}
-        <p class="overlay">{view.ended}: ricollegamento in corso…</p>
+        <div class="reconnect-cover">
+          <p>{view.ended.charAt(0).toUpperCase() + view.ended.slice(1)}: ricollegamento in corso…</p>
+        </div>
       {:else if view.ended}
         <p class="overlay">Sessione terminata: {view.ended}</p>
       {:else if view.error}
@@ -3763,5 +3765,21 @@
   }
   .error-text {
     color: var(--err);
+  }
+  /* Connecting again: the old picture is hidden, the message is what matters. */
+  .reconnect-cover {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: #000;
+  }
+  .reconnect-cover p {
+    margin: 0;
+    color: #f1f5f9;
+    font-size: 1.25rem;
+    text-align: center;
   }
 </style>
