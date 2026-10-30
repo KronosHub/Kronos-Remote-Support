@@ -45,6 +45,14 @@ protocol = { path = "crates/protocol" }
 stream = { path = "crates/stream" }
 
 # Size/speed for shipped binaries (Tauri guideline: https://tauri.app/concept/size/).
+# Local builds: line numbers in backtraces, no full debug info (target/debug stays small,
+# linking is faster).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 codegen-units = 1
 lto = true
