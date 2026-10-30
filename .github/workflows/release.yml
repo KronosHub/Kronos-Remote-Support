@@ -1,6 +1,7 @@
 # Builds Kronos Remote Support at a tag and publishes the installers + latest.json
 # (in-app updater, ADR 0023) as a release of this repository. Manual trigger only:
 #   gh workflow run release.yml -R KronosHub/Kronos-Remote-Support -f tag=v1.2.1
+# With -f draft_only=true the release stays a draft (installers to test before publishing).
 #
 # One job creates the release as a draft, the four builds upload into it, and the last job
 # publishes it once they all succeed. Before, every build created the release on its own and two
@@ -17,6 +18,10 @@ on:
       tag:
         description: Tag to build (e.g. v1.2.1)
         required: true
+      draft_only:
+        description: Leave the release as a draft (to test the installers first)
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -260,6 +265,7 @@ jobs:
 
   publish:
     needs: [release, desktop]
+    if: ${{ !inputs.draft_only }}
     runs-on: ubuntu-latest
     steps:
       # Each build merges its platforms into latest.json: check none was lost before the
