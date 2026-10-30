@@ -1207,6 +1207,37 @@ impl Service {
         .await;
     }
 
+    /// Windows is ending this user's session (logoff, or shutdown/restart): every partner is
+    /// told to connect again (the pre-login host takes over, or the app once the computer
+    /// is back), at once rather than after the silence timeout. Waits a moment at most.
+    #[cfg(windows)]
+    pub async fn end_hosting_for_session_end(&self, logoff: bool) {
+        let reason = if logoff {
+            "logout di Windows"
+        } else {
+            "Windows si sta riavviando o spegnendo"
+        };
+        let sessions: Vec<SessionId> = {
+            let hosting = self.shared.hosting.lock().unwrap();
+            for host in hosting.values() {
+                let _ = host.commands.send(HostCommand::End {
+                    reason: reason.into(),
+                    reconnect: true,
+                });
+            }
+            hosting.keys().copied().collect()
+        };
+        let _ = tokio::time::timeout(Duration::from_secs(2), async {
+            while sessions
+                .iter()
+                .any(|s| self.shared.hosting.lock().unwrap().contains_key(s))
+            {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+    }
+
     pub fn stop_hosting(&self, session: SessionId) {
         if let Some(host) = self.shared.hosting.lock().unwrap().get(&session) {
             let _ = host.commands.send(HostCommand::Stop);
@@ -2917,7 +2948,9 @@ async fn view_partner(
         },
     )
     .await;
-    let reconnect = partner_reconnect || (lost && credential.personal);
+    // Only with the personal password: a temporary one does not survive the host's restart,
+    // and the host before login does not take it.
+    let reconnect = (partner_reconnect || lost) && credential.personal;
     if reconnect {
         *shared.reconnect.lock().unwrap() = Some(Reconnect {
             target: partner.clone(),

@@ -1018,6 +1018,19 @@ pub fn run() {
                 });
             }
             app.manage(service);
+            // Logoff or restart: partners connect again at once (ADR 0063).
+            #[cfg(windows)]
+            {
+                let handle = app.handle().clone();
+                agent::windows::on_session_end(move |logoff| {
+                    tracing::info!(logoff, "Windows is ending the session");
+                    tauri::async_runtime::block_on(
+                        handle
+                            .state::<Service>()
+                            .end_hosting_for_session_end(logoff),
+                    );
+                });
+            }
             test_connect(app.handle());
             build_tray(app)?;
             if !std::env::args().any(|a| a == HIDDEN_ARG) {

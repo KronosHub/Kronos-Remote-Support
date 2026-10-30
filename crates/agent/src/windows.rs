@@ -1349,3 +1349,81 @@ pub fn prepare_system_host() {
         );
     }
 }
+
+// ---- Session end ----------------------------------------------------------------------
+
+/// Called once when Windows ends the user's session: true for a logoff, false for a
+/// shutdown or restart. It may block for a moment (Windows waits for it, a few seconds).
+static SESSION_END: OnceLock<Box<dyn Fn(bool) + Send + Sync>> = OnceLock::new();
+
+/// Runs `on_end` when the user logs off or the computer shuts down, before this process is
+/// ended: a hidden top-level window gets the WM_ENDSESSION that Windows sends (a GUI process
+/// gets no console logoff event, and message-only windows no broadcasts).
+pub fn on_session_end(on_end: impl Fn(bool) + Send + Sync + 'static) {
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DispatchMessageW, ENDSESSION_LOGOFF, GetMessageW, MSG,
+        RegisterClassW, WM_ENDSESSION, WM_QUERYENDSESSION, WNDCLASSW, WS_OVERLAPPED,
+    };
+
+    unsafe extern "system" fn window_proc(
+        window: windows_sys::Win32::Foundation::HWND,
+        message: u32,
+        wparam: usize,
+        lparam: isize,
+    ) -> isize {
+        match message {
+            WM_QUERYENDSESSION => 1,
+            WM_ENDSESSION => {
+                if wparam != 0
+                    && let Some(on_end) = SESSION_END.get()
+                {
+                    on_end(lparam as u32 & ENDSESSION_LOGOFF != 0);
+                }
+                0
+            }
+            _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
+        }
+    }
+
+    if SESSION_END.set(Box::new(on_end)).is_err() {
+        return;
+    }
+    std::thread::spawn(|| unsafe {
+        let instance = GetModuleHandleW(std::ptr::null());
+        let class = wide("KronosSessionEnd");
+        let info = WNDCLASSW {
+            lpfnWndProc: Some(window_proc),
+            hInstance: instance,
+            lpszClassName: class.as_ptr(),
+            ..std::mem::zeroed()
+        };
+        RegisterClassW(&info);
+        // Never shown: it exists only to receive the session end messages.
+        let window = CreateWindowExW(
+            0,
+            class.as_ptr(),
+            class.as_ptr(),
+            WS_OVERLAPPED,
+            0,
+            0,
+            0,
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            instance,
+            std::ptr::null(),
+        );
+        if window.is_null() {
+            tracing::warn!(
+                "cannot watch for the end of the session: {}",
+                std::io::Error::last_os_error()
+            );
+            return;
+        }
+        let mut message: MSG = std::mem::zeroed();
+        while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
+            DispatchMessageW(&message);
+        }
+    });
+}
