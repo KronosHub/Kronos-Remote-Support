@@ -236,6 +236,11 @@ pub enum UiEvent {
         session: SessionId,
         blocked: bool,
     },
+    /// The partner has not answered for a few seconds (the window says it is waiting).
+    ViewSilent {
+        session: SessionId,
+        silent: bool,
+    },
     /// The partner's own mouse and keyboard are (no longer) blocked.
     ViewInputBlocked {
         session: SessionId,
@@ -2906,6 +2911,9 @@ async fn view_partner(
             ViewerEvent::PartnerUpdating => partner_updating = true,
             ViewerEvent::PartnerReconnect => partner_reconnect = true,
             ViewerEvent::ConnectionLost => lost = true,
+            ViewerEvent::Silent(silent) => {
+                shared.view_event(app, session, UiEvent::ViewSilent { session, silent });
+            }
         },
     )
     .await;

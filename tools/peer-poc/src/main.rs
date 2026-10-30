@@ -575,6 +575,8 @@ async fn view(
             ViewerEvent::PartnerUpdating => println!("Host is quitting to update"),
             ViewerEvent::PartnerReconnect => println!("Host asks to connect again"),
             ViewerEvent::ConnectionLost => println!("Connection lost"),
+            ViewerEvent::Silent(true) => println!("Host silent, waiting"),
+            ViewerEvent::Silent(false) => println!("Host answers again"),
             ViewerEvent::Transfer(p) => println!("Transfer: {}/{} bytes", p.done, p.total),
             ViewerEvent::InputBlocked { blocked, message } => {
                 println!(

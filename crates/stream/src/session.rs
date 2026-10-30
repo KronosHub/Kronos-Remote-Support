@@ -21,7 +21,10 @@ const MIN_KEYFRAME_REQUEST_GAP: Duration = Duration::from_millis(500);
 /// reports usage every 2 s): the session is over even if no goodbye arrived.
 const PEER_TIMEOUT: Duration = Duration::from_secs(20);
 /// How often that is checked.
-const LIVENESS_CHECK: Duration = Duration::from_secs(5);
+const LIVENESS_CHECK: Duration = Duration::from_secs(1);
+/// Viewer: silent host for this long, the window says it is waiting (the session goes on
+/// until `PEER_TIMEOUT`).
+const PEER_SILENT: Duration = Duration::from_secs(4);
 /// How often the host checks where the shared screen sits (see `serve_host`).
 const BOUNDS_CHECK: Duration = Duration::from_secs(2);
 
@@ -891,6 +894,8 @@ pub enum ViewerEvent {
     /// The session ended without anyone ending it: the host stopped answering, or the
     /// connection broke (e.g. its user logged off, the computer restarted).
     ConnectionLost,
+    /// The host has been silent for a few seconds (true) or speaks again (false).
+    Silent(bool),
     /// The host's sound cannot be played (here or on the host); the button goes off.
     AudioUnavailable(String),
     /// A clipboard file transfer moved on.
@@ -980,6 +985,7 @@ pub async fn run_viewer(
 
     let mut last_heard = Instant::now();
     let mut liveness = tokio::time::interval(LIVENESS_CHECK);
+    let mut silent = false;
     let reason = loop {
         if want_keyframe
             && last_keyframe_request.is_none_or(|t| t.elapsed() >= MIN_KEYFRAME_REQUEST_GAP)
@@ -996,80 +1002,89 @@ pub async fn run_viewer(
                     on_event(ViewerEvent::ConnectionLost);
                     break "il partner non risponde".to_owned();
                 }
+                if !silent && last_heard.elapsed() > PEER_SILENT {
+                    silent = true;
+                    on_event(ViewerEvent::Silent(true));
+                }
             }
-            msg = recv(&channel) => match heard(&mut last_heard, msg) {
-                Some(ControlMsg::StreamStarted { width, height, hardware }) => {
-                    on_event(ViewerEvent::Started { width, height, hardware });
+            msg = recv(&channel) => {
+                if std::mem::take(&mut silent) {
+                    on_event(ViewerEvent::Silent(false));
                 }
-                Some(ControlMsg::StreamError { message }) => {
-                    on_event(ViewerEvent::Error(message.clone()));
-                    send_bye(&channel, "condivisione non disponibile").await;
-                    break message;
-                }
-                Some(ControlMsg::Pong { sent_us, .. }) => {
-                    let now_us = start.elapsed().as_micros() as u64;
-                    let rtt = Duration::from_micros(now_us.saturating_sub(sent_us));
-                    last_rtt_ms = (rtt.as_millis() as u32).max(1);
-                    on_event(ViewerEvent::Rtt(rtt));
-                }
-                Some(ControlMsg::Clipboard { text }) => clipboard.remote_text(text),
-                Some(ControlMsg::TransferCancelled) => {
-                    clipboard.cancel_transfer(&channel, false).await;
-                    on_event(ViewerEvent::Clipboard("trasferimento annullato dal partner".into()));
-                }
-                // The host does not allow clipboard sharing.
-                Some(ControlMsg::ClipboardMode { enabled: false }) => {
-                    if clipboard.enabled() {
-                        on_event(ViewerEvent::Clipboard(
-                            "il computer remoto non consente la condivisione degli appunti".into(),
-                        ));
+                match heard(&mut last_heard, msg) {
+                    Some(ControlMsg::StreamStarted { width, height, hardware }) => {
+                        on_event(ViewerEvent::Started { width, height, hardware });
                     }
-                    clipboard.set_enabled(false, false).await;
-                    on_event(ViewerEvent::ClipboardEnabled(false));
-                }
-                Some(ControlMsg::Chat { text }) => on_event(ViewerEvent::Chat(text)),
-                Some(ControlMsg::InputBlocked { blocked, message }) => {
-                    on_event(ViewerEvent::InputBlocked { blocked, message });
-                }
-                Some(ControlMsg::AudioUnavailable { message }) => {
-                    let _ = sound.set_enabled(false).await;
-                    on_event(ViewerEvent::AudioUnavailable(message));
-                }
-                Some(ControlMsg::Usage { cpu, ram_mb }) => {
-                    on_event(ViewerEvent::PartnerUsage { cpu, ram_mb })
-                }
-                Some(ControlMsg::Quality { kbps, fps, limited }) => {
-                    on_event(ViewerEvent::Quality { kbps, fps, limited })
-                }
-                Some(ControlMsg::Displays { displays, current }) => {
-                    on_event(ViewerEvent::Displays { displays, current });
-                }
-                Some(ControlMsg::InputUnavailable { message }) => {
-                    on_event(ViewerEvent::ControlUnavailable(message));
-                }
-                Some(ControlMsg::ScreenUnavailable { message }) => {
-                    on_event(ViewerEvent::ScreenUnavailable(message));
-                }
-                Some(ControlMsg::ResolutionAdjustable) => on_event(ViewerEvent::ResolutionAdjustable),
-                Some(ControlMsg::Bye {
-                    reason,
-                    updating,
-                    reconnect,
-                }) => {
-                    if updating {
-                        on_event(ViewerEvent::PartnerUpdating);
+                    Some(ControlMsg::StreamError { message }) => {
+                        on_event(ViewerEvent::Error(message.clone()));
+                        send_bye(&channel, "condivisione non disponibile").await;
+                        break message;
                     }
-                    if reconnect {
-                        on_event(ViewerEvent::PartnerReconnect);
+                    Some(ControlMsg::Pong { sent_us, .. }) => {
+                        let now_us = start.elapsed().as_micros() as u64;
+                        let rtt = Duration::from_micros(now_us.saturating_sub(sent_us));
+                        last_rtt_ms = (rtt.as_millis() as u32).max(1);
+                        on_event(ViewerEvent::Rtt(rtt));
                     }
-                    break reason;
+                    Some(ControlMsg::Clipboard { text }) => clipboard.remote_text(text),
+                    Some(ControlMsg::TransferCancelled) => {
+                        clipboard.cancel_transfer(&channel, false).await;
+                        on_event(ViewerEvent::Clipboard("trasferimento annullato dal partner".into()));
+                    }
+                    // The host does not allow clipboard sharing.
+                    Some(ControlMsg::ClipboardMode { enabled: false }) => {
+                        if clipboard.enabled() {
+                            on_event(ViewerEvent::Clipboard(
+                                "il computer remoto non consente la condivisione degli appunti".into(),
+                            ));
+                        }
+                        clipboard.set_enabled(false, false).await;
+                        on_event(ViewerEvent::ClipboardEnabled(false));
+                    }
+                    Some(ControlMsg::Chat { text }) => on_event(ViewerEvent::Chat(text)),
+                    Some(ControlMsg::InputBlocked { blocked, message }) => {
+                        on_event(ViewerEvent::InputBlocked { blocked, message });
+                    }
+                    Some(ControlMsg::AudioUnavailable { message }) => {
+                        let _ = sound.set_enabled(false).await;
+                        on_event(ViewerEvent::AudioUnavailable(message));
+                    }
+                    Some(ControlMsg::Usage { cpu, ram_mb }) => {
+                        on_event(ViewerEvent::PartnerUsage { cpu, ram_mb })
+                    }
+                    Some(ControlMsg::Quality { kbps, fps, limited }) => {
+                        on_event(ViewerEvent::Quality { kbps, fps, limited })
+                    }
+                    Some(ControlMsg::Displays { displays, current }) => {
+                        on_event(ViewerEvent::Displays { displays, current });
+                    }
+                    Some(ControlMsg::InputUnavailable { message }) => {
+                        on_event(ViewerEvent::ControlUnavailable(message));
+                    }
+                    Some(ControlMsg::ScreenUnavailable { message }) => {
+                        on_event(ViewerEvent::ScreenUnavailable(message));
+                    }
+                    Some(ControlMsg::ResolutionAdjustable) => on_event(ViewerEvent::ResolutionAdjustable),
+                    Some(ControlMsg::Bye {
+                        reason,
+                        updating,
+                        reconnect,
+                    }) => {
+                        if updating {
+                            on_event(ViewerEvent::PartnerUpdating);
+                        }
+                        if reconnect {
+                            on_event(ViewerEvent::PartnerReconnect);
+                        }
+                        break reason;
+                    }
+                    Some(_) => {}
+                    None => {
+                        on_event(ViewerEvent::ConnectionLost);
+                        break "connessione chiusa".to_owned();
+                    }
                 }
-                Some(_) => {}
-                None => {
-                    on_event(ViewerEvent::ConnectionLost);
-                    break "connessione chiusa".to_owned();
-                }
-            },
+            }
             Some(event) = frames.recv() => match event {
                 Assembled::Frame(frame) => on_event(ViewerEvent::Frame(frame)),
                 Assembled::Lost => want_keyframe = true,

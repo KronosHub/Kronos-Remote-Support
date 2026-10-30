@@ -41,6 +41,7 @@
     | { kind: "view_clipboard"; session: number; enabled: boolean }
     | { kind: "view_audio"; session: number; enabled: boolean }
     | { kind: "view_input_blocked"; session: number; blocked: boolean }
+    | { kind: "view_silent"; session: number; silent: boolean }
     | { kind: "view_resolution_adjustable"; session: number }
     | { kind: "hosting_input_blocked"; session: number; blocked: boolean }
     | { kind: "view_notice"; session: number; message: string }
@@ -126,6 +127,8 @@
     /** Connecting again by itself (see `Reconnect` in service.rs): the window closes when
      * the new session to the same device opens. */
     reconnecting: boolean;
+    /** The partner has not answered for a few seconds. */
+    silent: boolean;
   };
   type InputEvent =
     | { k: "mouse_move"; x: number; y: number }
@@ -866,6 +869,9 @@
       case "view_clipboard":
         if (view?.session === event.session) view.clipboard = event.enabled;
         break;
+      case "view_silent":
+        if (view?.session === event.session) view.silent = event.silent;
+        break;
       case "view_input_blocked":
         if (view?.session === event.session) view.inputBlocked = event.blocked;
         break;
@@ -1355,6 +1361,7 @@
       notice: null,
       ended: null,
       reconnecting: false,
+      silent: false,
       chat: [],
       showChat: false,
       unread: 0,
@@ -1928,6 +1935,10 @@
         </div>
       {:else if view.ended}
         <p class="overlay">Sessione terminata: {view.ended}</p>
+      {:else if view.silent}
+        <div class="reconnect-cover">
+          <p>Il computer remoto non risponde: attendo…</p>
+        </div>
       {:else if view.error}
         <p class="overlay error-text">{view.error}</p>
       {:else if view.noScreen}
