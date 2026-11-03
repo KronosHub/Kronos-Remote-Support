@@ -2,7 +2,7 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
-## 2.1.0 — 2026-10-29
+## 2.1.0 — 2026-11-03
 Versione dedicata alla **sicurezza**, dopo una nuova revisione del codice.
 - Collegamento più protetto: nessuno, nemmeno chi gestisce il server, può inserirsi in una sessione, e i tentativi
   di indovinare la password personale non superano più il limite. Una connessione lasciata a metà si chiude da sola.
@@ -19,6 +19,8 @@ Versione dedicata alla **sicurezza**, dopo una nuova revisione del codice.
   Su Windows dopo il logout ritrovi la schermata di accesso, e dopo l'accesso il tuo desktop con appunti e
   Trasferimento file, senza ricollegarti a mano: la finestra dice "ricollegamento in corso" finché non si apre
   quella nuova. Serve la 2.1.0 su entrambi i computer; se l'app non si avvia all'accesso, la avvia il servizio.
+- Windows: quando sul computer controllato si esce dall'account, lo si riavvia o lo si spegne, chi è collegato lo
+  sa subito e si ricollega appena torna disponibile, senza aspettare che la connessione scada.
 - Se il computer controllato smette di rispondere, dopo pochi secondi la finestra lo dice ("attendo…") invece di
   sembrare bloccata.
 - Windows: sulla schermata di accesso, prima che qualcuno entri, il Trasferimento file non è disponibile; se accede

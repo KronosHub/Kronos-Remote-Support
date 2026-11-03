@@ -715,3 +715,10 @@
   (stile TeamViewer) invece di far fare i file al processo SYSTEM con l'identità dell'utente.- Prova: dal logout alla schermata di accesso ok. Dall'accesso al desktop no: sulla VM "Avvia all'accesso" era
   spento, l'app dell'utente non partiva e il PC restava offline. Ora l'host aspetta l'app (30 s) o tiene la sessione;
   messaggio "ricollegamento in corso" nella finestra; consiglio di attivare l'avvio all'accesso.
+
+## 2026-11-03 — Pubblicazione della 2.1.0
+- Ultimi commit della 2.1.0: al logout o allo spegnimento di Windows l'app dell'utente avvisa subito i partner
+  (`WM_ENDSESSION`, poi da `RunEvent::Exit` perché Tauri chiude il processo prima), che si ricollegano solo con la
+  password personale; il viewer dice dopo 4 s di silenzio che il computer controllato non risponde.
+- CHANGELOG: data al 2026-11-03 e riga sull'avviso ai partner. `security-2.1` unito in `main`, tag `v2.1.0`
+  spostato sul commit finale, `release.yml` senza `draft_only`.
