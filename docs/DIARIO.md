@@ -733,3 +733,8 @@
   duplicano (ADR 0064); provato qui con `--take-over`. Log con i dati di ogni schermo.
 - Richiesta dell'utente: pulsante "Scarica i log" (zip in Download), messo in Aggiornamenti.
 - `cargo test -p stream --test file_manager` fallisce anche senza le modifiche (peer WebRTC locali, 30 s).
+- 2.1.1 pubblicata (con monitor per job su richiesta dell'utente). Sul Mac mini lo schermo virtuale viene creato ma
+  l'immagine resta verde: lo zip dei log dice `macos x86_64`, versione Intel sotto Rosetta. Con il dmg Apple Silicon
+  funziona. Qui la versione Intel sotto Rosetta va bene: il guasto è dell'insieme Rosetta + Mac senza monitor.
+- 2.1.2: l'updater porta l'app Intel su Apple Silicon alla versione nativa (`sysctl.proc_translated`), provato il
+  rilevamento con un programmino compilato per le due architetture.

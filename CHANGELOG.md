@@ -2,6 +2,10 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 2.1.2 — 2026-11-11
+- Su un Mac Apple Silicon con installata per errore la versione Intel, l'aggiornamento passa da solo alla versione
+  **Apple Silicon**: con quella Intel un Mac mini senza monitor mostrava l'immagine verde e ridotta in un angolo.
+
 ## 2.1.1 — 2026-11-11
 - **Mac senza monitor** (Mac mini, Mac Studio) con "Computer usato solo da remoto": l'immagine non è più verde e
   ridotta in un angolo e il mouse va dove lo punti. L'app usa il suo schermo virtuale e ci sposta il desktop per
