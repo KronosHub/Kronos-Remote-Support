@@ -738,3 +738,13 @@
   funziona. Qui la versione Intel sotto Rosetta va bene: il guasto è dell'insieme Rosetta + Mac senza monitor.
 - 2.1.2: l'updater porta l'app Intel su Apple Silicon alla versione nativa (`sysctl.proc_translated`), provato il
   rilevamento con un programmino compilato per le due architetture.
+
+## 2026-11-11 — Preferenze e risoluzione dello schermo virtuale
+- 2.1.2 pubblicata.
+- Richiesta: scelta della risoluzione dello schermo virtuale, Aggiornamenti trasformato in Preferenze, mockup chiaro/scuro.
+- Mockup sul canvas "Kronos Preferenze — mockup": A (pagina a sezioni, chiaro e scuro) e B (schede, risoluzione a
+  riquadri). L'utente ha scelto A e lo spostamento di nome, avvio e permessi nelle Preferenze.
+- Fatto: `virtual_size` nelle preferenze e nella sessione, tema Sistema/Chiaro/Scuro, pagina Preferenze (ADR 0065).
+  Provata l'app in sviluppo (identificatore `.dev`) in chiaro e in scuro; test e clippy puliti.
+- Mockup della schermata principale (chiaro, scuro con schermo condiviso). L'utente ha scelto la schermata principale
+  nuova e le Preferenze B (a schede): implementate, viste nell'app in sviluppo, release 2.2.0.

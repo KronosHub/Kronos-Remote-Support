@@ -1,6 +1,18 @@
 # Novità
 
-Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
+Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**, quando la versione è disponibile.
+
+## 2.2.0 — 2026-11-11
+- **Nuova schermata principale**: ID e password in evidenza con i pulsanti per copiarli, l'accesso non presidiato
+  su una riga, la scelta **Con conferma / Password personale** e, sotto, **I miei dispositivi** per collegarti con
+  un clic a quelli salvati.
+- **Aggiornamenti** diventa **Preferenze**, a schede: **Generale** (il tuo nome, tema, avvio all'accesso),
+  **Connessioni** (appunti e Trasferimento file per chi si collega), **Schermo**, **Aggiornamenti** e **Assistenza**
+  (Scarica i log).
+- **Tema chiaro o scuro** a scelta, oppure come il sistema.
+- **Mac senza monitor**: in Preferenze › Schermo scegli la **risoluzione dello schermo virtuale**. Automatica si
+  adatta alla finestra di chi controlla; una risoluzione fissa resta uguale per tutti.
+- Testo scuro sui pulsanti arancioni, più leggibile.
 
 ## 2.1.2 — 2026-11-11
 - Su un Mac Apple Silicon con installata per errore la versione Intel, l'aggiornamento passa da solo alla versione
