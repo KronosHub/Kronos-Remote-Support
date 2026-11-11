@@ -2,6 +2,13 @@
 
 Le note di ogni versione compaiono nell'app, nella sezione **Aggiornamenti**, quando la versione è disponibile.
 
+## 2.1.1 — 2026-11-11
+- **Mac senza monitor** (Mac mini, Mac Studio) con "Computer usato solo da remoto": l'immagine non è più verde e
+  ridotta in un angolo e il mouse va dove lo punti. L'app usa il suo schermo virtuale e ci sposta il desktop per
+  tutta la sessione; alla fine torna tutto com'era.
+- Nuovo pulsante **Scarica i log** nella sezione **Aggiornamenti**: salva nella cartella Download un file zip con i
+  log dell'app, da mandare a chi ti assiste quando qualcosa non va.
+
 ## 2.1.0 — 2026-11-03
 Versione dedicata alla **sicurezza**, dopo una nuova revisione del codice.
 - Collegamento più protetto: nessuno, nemmeno chi gestisce il server, può inserirsi in una sessione, e i tentativi

@@ -722,3 +722,14 @@
   password personale; il viewer dice dopo 4 s di silenzio che il computer controllato non risponde.
 - CHANGELOG: data al 2026-11-03 e riga sull'avviso ai partner. `security-2.1` unito in `main`, tag `v2.1.0`
   spostato sul commit finale, `release.yml` senza `draft_only`.
+
+## 2026-11-11 — Mac mini senza monitor: immagine verde e ridotta
+- Segnalazione: Mac mini M2 (macOS 26.3) senza niente collegato, "solo da remoto": desktop in un quarto della
+  finestra, verde, mouse che non segue. Il log mostra `display=3` 1920×1080 e nessuno schermo virtuale: macOS
+  tiene un display di ripiego contato come monitor vero.
+- Qui non riproducibile: lo schermo virtuale catturato con VideoToolbox (con e senza copia) e OpenH264 è corretto.
+  Preparato `~/Downloads/kronos-diagnosi` (capture-poc + script), ma l'utente non può fare prove ora.
+- Scelta: con "solo da remoto" e nessuno schermo integrato lo schermo virtuale diventa principale e gli altri lo
+  duplicano (ADR 0064); provato qui con `--take-over`. Log con i dati di ogni schermo.
+- Richiesta dell'utente: pulsante "Scarica i log" (zip in Download), messo in Aggiornamenti.
+- `cargo test -p stream --test file_manager` fallisce anche senza le modifiche (peer WebRTC locali, 30 s).
