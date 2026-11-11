@@ -22,6 +22,53 @@ fn err(e: impl std::fmt::Display) -> String {
     format!("aggiornamento non riuscito: {e}")
 }
 
+/// True for the Intel build running on Apple Silicon through Rosetta: there a Mac mini
+/// without a monitor streamed a green, shrunk picture (ADR 0064).
+#[cfg(target_os = "macos")]
+fn translated() -> bool {
+    unsafe extern "C" {
+        fn sysctlbyname(
+            name: *const std::ffi::c_char,
+            old: *mut std::ffi::c_void,
+            old_len: *mut usize,
+            new: *mut std::ffi::c_void,
+            new_len: usize,
+        ) -> i32;
+    }
+    let mut value: i32 = 0;
+    let mut len = std::mem::size_of::<i32>();
+    // SAFETY: an int-sized out buffer; the name is a static C string. Fails (-1) on
+    // Intel Macs, where the key does not exist.
+    let status = unsafe {
+        sysctlbyname(
+            c"sysctl.proc_translated".as_ptr(),
+            (&mut value as *mut i32).cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    status == 0 && value == 1
+}
+
+#[cfg(not(target_os = "macos"))]
+fn translated() -> bool {
+    false
+}
+
+/// The updater; the Intel build under Rosetta takes the Apple Silicon package instead,
+/// even at the same version, so it moves to the native build at once.
+fn updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
+    let mut builder = app.updater_builder();
+    if translated() {
+        tracing::info!("Intel build on Apple Silicon: updating to the Apple Silicon one");
+        builder = builder
+            .target("darwin-aarch64")
+            .version_comparator(|current, remote| remote.version >= current);
+    }
+    builder.build().map_err(err)
+}
+
 #[tauri::command]
 pub fn app_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
@@ -34,7 +81,7 @@ pub async fn check_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> 
         // Quick access is downloaded fresh each time: nothing to update.
         return Ok(None);
     }
-    let update = app.updater().map_err(err)?.check().await.map_err(err)?;
+    let update = updater(&app)?.check().await.map_err(err)?;
     Ok(update.map(|u| UpdateInfo {
         version: u.version.clone(),
         current: u.current_version.clone(),
@@ -49,9 +96,7 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
     if crate::QUICK {
         return Err(err("non disponibile in Quick access"));
     }
-    let update = app
-        .updater()
-        .map_err(err)?
+    let update = updater(&app)?
         .check()
         .await
         .map_err(err)?

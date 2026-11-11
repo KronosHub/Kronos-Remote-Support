@@ -37,3 +37,16 @@ codificato allo stesso modo, esce corretto. Non è stato possibile fare altre pr
   se si può riconoscere e trattare allo stesso modo.
 - Lo schermo del Mac, se qualcuno lo collegasse durante la sessione, mostra la stessa immagine dello schermo
   virtuale (1920×1080 o la risoluzione adattata).
+
+## Aggiornamento 2026-11-11: la causa era la versione Intel
+Con la 2.1.1 il Mac mini ha creato lo schermo virtuale (il display finto di macOS, `vendor 0x756e6b6e` "unkn"
+`model 0x76697274` "virt", sparisce da solo quando ne compare uno vero) ma l'immagine restava verde e ridotta.
+`info.txt` di "Scarica i log" diceva `macos x86_64`: sul Mac mini M2 era installata la versione Intel, sotto
+Rosetta. Con la versione Apple Silicon funziona. Qui (MacBook Apple Silicon con monitor) la versione Intel sotto
+Rosetta cattura e codifica bene: il guasto viene dall'insieme Rosetta + Mac senza monitor + VideoToolbox.
+- L'aggiornamento automatico teneva la versione Intel per sempre (il plugin sceglie `darwin-x86_64` in base
+  all'architettura del processo). Ora, se `sysctl.proc_translated` = 1, l'updater usa la voce `darwin-aarch64` di
+  `latest.json` e accetta anche la stessa versione: un'app Intel su Apple Silicon passa alla versione nativa al
+  primo controllo.
+- Lo schermo virtuale principale con "solo da remoto" resta: con il display finto di macOS il mouse e la
+  risoluzione adattata lavorano su uno schermo nostro.
