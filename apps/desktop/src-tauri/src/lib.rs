@@ -1,4 +1,5 @@
 mod devices_file;
+mod logs;
 mod permissions;
 mod privacy;
 mod service;
@@ -243,24 +244,34 @@ async fn export_devices(
     })
     .await
     .map_err(|e| e.to_string())??;
+    let path = download_path(&app, "dispositivi-kronos", "json")?;
+    std::fs::write(&path, text).map_err(|e| format!("impossibile scrivere il file: {e}"))?;
+    Ok(path.display().to_string())
+}
+
+/// A free name for a new file in the Downloads folder (the home folder without one):
+/// `stem.ext`, else `stem (2).ext` and so on.
+pub(crate) fn download_path(
+    app: &AppHandle,
+    stem: &str,
+    ext: &str,
+) -> Result<std::path::PathBuf, String> {
     let dir = app
         .path()
         .download_dir()
         .or_else(|_| app.path().home_dir())
         .map_err(|e| format!("cartella Download non trovata: {e}"))?;
-    let path = (1..1000)
+    (1..1000)
         .map(|n| {
             let name = if n == 1 {
-                "dispositivi-kronos.json".to_owned()
+                format!("{stem}.{ext}")
             } else {
-                format!("dispositivi-kronos ({n}).json")
+                format!("{stem} ({n}).{ext}")
             };
             dir.join(name)
         })
         .find(|p| !p.exists())
-        .ok_or("troppi file esportati nella cartella Download")?;
-    std::fs::write(&path, text).map_err(|e| format!("impossibile scrivere il file: {e}"))?;
-    Ok(path.display().to_string())
+        .ok_or_else(|| "troppi file con lo stesso nome nella cartella Download".to_owned())
 }
 
 /// Whether an exported file needs its password to be imported.
@@ -1083,6 +1094,7 @@ pub fn run() {
             export_devices,
             devices_file_locked,
             import_devices,
+            logs::export_logs,
             permissions::get_permissions,
             permissions::open_permission_settings,
             uac::uac_support,

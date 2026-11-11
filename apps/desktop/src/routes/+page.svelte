@@ -502,6 +502,12 @@
   };
   let virtualMonitor = $state<VirtualMonitor | null>(null);
   let virtualMonitorBusy = $state(false);
+  /** "Scarica i log": busy while the zip is written, then where it went (or the error). */
+  let logsExport = $state<{ busy: boolean; message: string; error: boolean }>({
+    busy: false,
+    message: "",
+    error: false,
+  });
   let virtualMonitorError = $state("");
   let update = $state<UpdateState>({ kind: "idle" });
   let autostart = $state(false);
@@ -1109,6 +1115,17 @@
   }
 
   /** Installs/updates (`install`) or removes the virtual monitor; Windows asks for admin rights. */
+  async function exportLogs() {
+    if (logsExport.busy) return;
+    logsExport = { busy: true, message: "", error: false };
+    try {
+      const path = await invoke<string>("export_logs");
+      logsExport = { busy: false, message: `Log salvati in ${path}`, error: false };
+      addLog("info", `log salvati in ${path}`);
+    } catch (e) {
+      logsExport = { busy: false, message: String(e), error: true };
+    }
+  }
   async function setVirtualMonitor(install: boolean) {
     if (!install) {
       const ok = await askConfirm(
@@ -2576,6 +2593,20 @@
         </div>
       </section>
     {/if}
+    <section class="card">
+      <h2>Log dell'app</h2>
+      <p class="hint">
+        Per segnalare un problema: salva nella cartella Download un file zip con i log degli ultimi
+        giorni, da inviare a chi ti assiste.
+      </p>
+      {#if logsExport.message}
+        <p class={logsExport.error ? "error" : "hint small"}>{logsExport.message}</p>
+      {/if}
+      <div class="row">
+        <button class="icon-btn" disabled={logsExport.busy} onclick={exportLogs}>Scarica i log</button>
+        {#if logsExport.busy}<span class="spinner"></span>{/if}
+      </div>
+    </section>
   </main>
   {/if}
   {/if}
