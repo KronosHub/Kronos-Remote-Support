@@ -623,6 +623,19 @@ async fn set_remote_only(service: State<'_, Service>, enabled: bool) -> Result<b
 }
 
 #[tauri::command]
+fn virtual_size(service: State<'_, Service>) -> service::VirtualSize {
+    service.virtual_size()
+}
+
+#[tauri::command]
+fn set_virtual_size(
+    service: State<'_, Service>,
+    size: Option<(u32, u32)>,
+) -> Result<service::VirtualSize, String> {
+    service.set_virtual_size(size)
+}
+
+#[tauri::command]
 fn host_permissions(service: State<'_, Service>) -> store::HostPermissions {
     service.host_permissions()
 }
@@ -1123,6 +1136,8 @@ pub fn run() {
             set_display_name,
             remote_only,
             set_remote_only,
+            virtual_size,
+            set_virtual_size,
             host_permissions,
             set_host_permissions,
             audio_supported,

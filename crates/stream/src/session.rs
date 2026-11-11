@@ -256,7 +256,10 @@ pub async fn serve_host(
     }
     // The viewer may set this screen to its window size (computers used remotely, ADR 0061).
     let mut display_resize = crate::resize::DisplayResize::default();
-    if config.resize_display && capture::resolution::SUPPORTED {
+    if config.resize_display
+        && capture::resolution::SUPPORTED
+        && !fixed_size(&config, &screen_keeper)
+    {
         send(&channel, &ControlMsg::ResolutionAdjustable).await;
     }
 
@@ -531,7 +534,9 @@ pub async fn serve_host(
                         sink.send(event);
                     }
                 }
-                Some(ControlMsg::MatchResolution { width, height, scale }) if config.resize_display => {
+                Some(ControlMsg::MatchResolution { width, height, scale })
+                    if config.resize_display && !fixed_size(&config, &screen_keeper) =>
+                {
                     let Some(display) = handle.as_ref().map(|h| h.display_id) else { continue };
                     let max = if high_resolution { config.max_size } else { (1920, 1080) };
                     let want = capture::resolution::Request { width, height, scale };
@@ -803,6 +808,7 @@ async fn ensure_screen(config: &StreamConfig, keeper: &mut Option<VirtualScreen>
         return;
     }
     let remote_only = config.resize_display;
+    let size = config.virtual_size;
     let made = tokio::task::spawn_blocking(move || {
         virtual_display::log_displays();
         if remote_only && !virtual_display::has_builtin() {
@@ -810,6 +816,27 @@ async fn ensure_screen(config: &StreamConfig, keeper: &mut Option<VirtualScreen>
             if let Err(e) = screen.take_over() {
                 tracing::warn!("virtual display not made the main one: {e}");
                 return Err(e);
+            }
+            if let Some((width, height)) = size {
+                // Also when the display already existed, set to another size by a viewer.
+                let want = capture::resolution::Request { width, height, scale: 1.0 };
+                match capture::resolution::set(screen.id(), want) {
+                    Ok(Some(_)) => {
+                        // macOS applies the mode a moment later: capture once it has.
+                        let deadline = Instant::now() + WAKE_TIMEOUT;
+                        let applied = || {
+                            capture::displays().is_ok_and(|all| {
+                                all.iter().any(|d| d.id == screen.id() && d.width == width)
+                            })
+                        };
+                        while !applied() && Instant::now() < deadline {
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                        tracing::info!(width, height, "virtual display at the size chosen");
+                    }
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!("virtual display size not set: {e}"),
+                }
             }
             return Ok(Some(screen));
         }
@@ -842,6 +869,12 @@ async fn ensure_screen(config: &StreamConfig, keeper: &mut Option<VirtualScreen>
         Ok(Err(e)) => tracing::warn!("no virtual display: {e}"),
         Ok(Ok(None)) | Err(_) => {}
     }
+}
+
+/// The shared screen is a virtual display whose size the preferences fix (ADR 0065): the
+/// viewer may not change it.
+fn fixed_size(config: &StreamConfig, keeper: &Option<VirtualScreen>) -> bool {
+    config.virtual_size.is_some() && keeper.is_some()
 }
 
 #[cfg(not(target_os = "macos"))]

@@ -56,6 +56,19 @@ pub struct StreamConfig {
     /// Host: the viewer may set the shared screen to its window size (ADR 0061); only for
     /// computers used remotely, where nobody sees the monitor change.
     pub resize_display: bool,
+    /// Host, macOS: the size of the virtual display shared by a Mac used only remotely,
+    /// fixed in the preferences (ADR 0065); the viewer may then not change it. `None`: it
+    /// follows the viewer's window.
+    pub virtual_size: Option<(u32, u32)>,
+}
+
+/// The sizes the virtual display of a Mac used only remotely can have (`virtual_size`);
+/// none elsewhere.
+pub fn virtual_sizes() -> &'static [(u32, u32)] {
+    #[cfg(target_os = "macos")]
+    return &capture::virtual_display::SIZES;
+    #[cfg(not(target_os = "macos"))]
+    &[]
 }
 
 impl Default for StreamConfig {
@@ -76,6 +89,7 @@ impl Default for StreamConfig {
             agent_product: None,
             hardware_encoding: true,
             resize_display: false,
+            virtual_size: None,
         }
     }
 }

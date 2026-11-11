@@ -77,6 +77,10 @@ struct Prefs {
     /// service from its copy of this file.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     remote_only: bool,
+    /// macOS, remote only: the size of the virtual display, fixed by the user (ADR 0065);
+    /// none: it follows the viewer's window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    virtual_size: Option<(u32, u32)>,
     /// Partners may not share the clipboard with this computer.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     deny_clipboard: bool,
@@ -402,6 +406,16 @@ impl Store {
         self.write(PREFS_FILE, &prefs)
     }
 
+    pub fn virtual_size(&self) -> Option<(u32, u32)> {
+        self.read::<Prefs>(PREFS_FILE).and_then(|p| p.virtual_size)
+    }
+
+    pub fn set_virtual_size(&self, size: Option<(u32, u32)>) -> std::io::Result<()> {
+        let mut prefs = self.read::<Prefs>(PREFS_FILE).unwrap_or_default();
+        prefs.virtual_size = size;
+        self.write(PREFS_FILE, &prefs)
+    }
+
     pub fn host_permissions(&self) -> HostPermissions {
         let prefs = self.read::<Prefs>(PREFS_FILE).unwrap_or_default();
         HostPermissions {
@@ -503,6 +517,20 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         (Store::new(Some(dir.clone())), dir)
+    }
+
+    #[test]
+    fn virtual_size_kept_with_the_other_preferences() {
+        let (store, dir) = store();
+        assert_eq!(store.virtual_size(), None);
+        store.set_remote_only(true).unwrap();
+        store.set_virtual_size(Some((2560, 1440))).unwrap();
+        assert_eq!(store.virtual_size(), Some((2560, 1440)));
+        assert!(store.remote_only());
+        store.set_virtual_size(None).unwrap();
+        assert_eq!(store.virtual_size(), None);
+        assert!(store.remote_only());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

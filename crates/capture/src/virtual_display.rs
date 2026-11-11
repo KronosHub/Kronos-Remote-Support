@@ -20,14 +20,15 @@ use crate::{CaptureError, Result};
 /// Size of the virtual monitor: what most remote screens are viewed at.
 pub const WIDTH: u32 = 1920;
 pub const HEIGHT: u32 = 1080;
-/// Other sizes it offers, for a viewer whose window asks for one (ADR 0061); the first
-/// mode, `WIDTH`×`HEIGHT`, is the one it starts with.
-const OTHER_MODES: [(u32, u32); 9] = [
+/// Every size it offers, smallest first: for a viewer whose window asks for one (ADR 0061)
+/// or a size fixed in the preferences (ADR 0065). It starts at `WIDTH`×`HEIGHT`.
+pub const SIZES: [(u32, u32); 10] = [
     (1280, 720),
     (1280, 800),
     (1440, 900),
     (1600, 900),
     (1680, 1050),
+    (WIDTH, HEIGHT),
     (1920, 1200),
     (2048, 1152),
     (2560, 1440),
@@ -403,8 +404,10 @@ fn make() -> Result<VirtualDisplay> {
         let settings: Retained<AnyObject> = msg_send![class(c"CGVirtualDisplaySettings")?, new];
         check(&settings, sel!(setHiDPI:))?;
         check(&settings, sel!(setModes:))?;
-        let mut modes = Vec::with_capacity(OTHER_MODES.len() + 1);
-        for (width, height) in std::iter::once((WIDTH, HEIGHT)).chain(OTHER_MODES) {
+        // The first mode is the one it starts with.
+        let mut modes = Vec::with_capacity(SIZES.len());
+        let others = SIZES.into_iter().filter(|&size| size != (WIDTH, HEIGHT));
+        for (width, height) in std::iter::once((WIDTH, HEIGHT)).chain(others) {
             let allocated: Allocated<AnyObject> = msg_send![class(c"CGVirtualDisplayMode")?, alloc];
             let mode: Option<Retained<AnyObject>> = msg_send![
                 allocated,

@@ -1055,6 +1055,27 @@ impl Service {
         Ok(enabled)
     }
 
+    /// macOS: the sizes the virtual display of a Mac used only remotely can have (none
+    /// elsewhere) and the one fixed in the preferences (`None`: it follows the viewer).
+    pub fn virtual_size(&self) -> VirtualSize {
+        VirtualSize {
+            sizes: stream::virtual_sizes().to_vec(),
+            fixed: self.shared.store.virtual_size(),
+        }
+    }
+
+    pub fn set_virtual_size(&self, size: Option<(u32, u32)>) -> Result<VirtualSize, String> {
+        if size.is_some_and(|s| !stream::virtual_sizes().contains(&s)) {
+            return Err("risoluzione non disponibile".into());
+        }
+        self.shared
+            .store
+            .set_virtual_size(size)
+            .map_err(|e| format!("impossibile salvare l'impostazione: {e}"))?;
+        tracing::info!(?size, "virtual display size");
+        Ok(self.virtual_size())
+    }
+
     pub fn host_permissions(&self) -> HostPermissions {
         self.shared.store.host_permissions()
     }
@@ -2285,6 +2306,13 @@ fn watch_state(app: &AppHandle, peer: &PeerSession, session: SessionId) {
 
 /// Remote-only computer (ADR 0059). On Windows with the service installed, the setting of
 /// the computer (the pre-login host, SYSTEM, has the user's copied preference instead).
+/// What the preferences show about the virtual display's size.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VirtualSize {
+    pub sizes: Vec<(u32, u32)>,
+    pub fixed: Option<(u32, u32)>,
+}
+
 fn remote_only(store: &Store) -> bool {
     #[cfg(windows)]
     if !crate::logon_host() && agent::windows::is_service_installed(crate::service_name()) {
@@ -2504,6 +2532,7 @@ async fn serve_partner(
         agent_product: (!crate::logon_host()).then(|| crate::agent_product().to_owned()),
         // Computers used only remotely: the viewer may set the screen to its window size.
         resize_display: remote_only(&shared.store),
+        virtual_size: shared.store.virtual_size().filter(|s| stream::virtual_sizes().contains(s)),
         allow_clipboard: allowed.clipboard && !logon,
         ..StreamConfig::default()
     };

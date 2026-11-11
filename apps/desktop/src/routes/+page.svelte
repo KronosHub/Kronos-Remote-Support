@@ -420,8 +420,14 @@
   }
   // Opening the list asks again (the app also asks every 30 s on its own).
   $effect(() => {
-    if (section === "devices") refreshPresence();
+    if (section === "devices" || section === "support") refreshPresence();
   });
+  /** The home page's shortcuts: three saved devices, those online first. */
+  const homeDevices = $derived(
+    [...devices]
+      .sort((a, b) => Number(deviceOnline(b) === true) - Number(deviceOnline(a) === true))
+      .slice(0, 3),
+  );
   function refreshPresence() {
     invoke<Record<string, boolean> | null>("device_presence").then((p) => {
       if (p !== null) presence = p;
@@ -457,7 +463,7 @@
   /** Partner of each session we viewed (from view_opened), for the end popup. */
   const viewedPeers = new Map<number, string>();
   /** Main window page chosen in the sidebar. */
-  type Section = "support" | "devices" | "chat" | "activity" | "updates";
+  type Section = "support" | "devices" | "chat" | "activity" | "preferences";
   let section = $state<Section>("support");
   /** Stroke icons (24×24, lucide style) for the sidebar. */
   const icons: Record<Section, string> = {
@@ -465,7 +471,8 @@
     devices: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>',
     chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
     activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
-    updates: '<path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/>',
+    preferences:
+      '<path d="M4 6h10"/><path d="M18 6h2"/><circle cx="16" cy="6" r="2"/><path d="M4 12h4"/><path d="M12 12h8"/><circle cx="10" cy="12" r="2"/><path d="M4 18h12"/><circle cx="18" cy="18" r="2"/>',
   };
   /** Renaming a LAN device (in-app dialog: the macOS web view has no window.prompt). */
   let renameDialog = $state<{ id: string; host: string; name: string; error: string } | null>(null);
@@ -490,6 +497,22 @@
   let hostPermissions = $state({ clipboard: true, files: true });
   /** "Solo da remoto" exists on Windows (session moved to the screen, ADR 0059) and on the Mac. */
   const isMac = navigator.userAgent.includes("Mac OS X");
+
+  function savedTheme(): Theme {
+    try {
+      const saved = localStorage.getItem("theme");
+      return saved === "light" || saved === "dark" ? saved : "system";
+    } catch {
+      return "system";
+    }
+  }
+
+  /** `data-theme` on <html> overrides the system's appearance (see the :root rules). */
+  function applyTheme(value: Theme) {
+    if (value === "system") delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = value;
+  }
+  applyTheme(savedTheme());
   /** Asking whether this PC is reached remotely only (after unattended access is turned on). */
   let remoteOnlyAsk = $state(false);
   /** Windows: the virtual monitor for PCs without one (ADR 0049). */
@@ -509,6 +532,12 @@
     error: false,
   });
   let virtualMonitorError = $state("");
+  /** macOS, remote only: the virtual display's possible sizes and the one fixed (ADR 0065). */
+  type VirtualSize = { sizes: [number, number][]; fixed: [number, number] | null };
+  let virtualSize = $state<VirtualSize | null>(null);
+  /** Light, dark or as the system (remembered on this computer only). */
+  type Theme = "system" | "light" | "dark";
+  let theme = $state<Theme>(savedTheme());
   let update = $state<UpdateState>({ kind: "idle" });
   let autostart = $state(false);
   /** Our user name as partners see it, and the text being edited. */
@@ -991,6 +1020,13 @@
     refreshPresence();
     invoke<boolean>("get_autostart").then((a) => (autostart = a));
     invoke<boolean>("remote_only").then((r) => (remoteOnly = r));
+    // The theme chosen in another window of the app (viewer, chat) applies here too.
+    window.addEventListener("storage", (e) => {
+      if (e.key === "theme" || e.key === null) {
+        theme = savedTheme();
+        applyTheme(theme);
+      }
+    });
     invoke<{ clipboard: boolean; files: boolean }>("host_permissions").then((p) => (hostPermissions = p));
     invoke<string | null>("display_name").then((n) => {
       displayName = n;
@@ -1107,11 +1143,53 @@
     }
   }
 
-  /** Opening the section checks again (an update already found stays shown). */
-  function openUpdates() {
-    section = "updates";
+  type PrefsTab = "general" | "connections" | "screen" | "updates" | "support";
+  let prefsTab = $state<PrefsTab>("general");
+  const prefsTabs = $derived<{ id: PrefsTab; label: string }[]>([
+    { id: "general", label: "Generale" },
+    { id: "connections", label: "Connessioni" },
+    ...(uac?.supported || isMac || virtualMonitor?.supported ? [{ id: "screen" as const, label: "Schermo" }] : []),
+    { id: "updates", label: "Aggiornamenti" },
+    { id: "support", label: "Assistenza" },
+  ]);
+  /** "Full HD", "16:10"… under a size in the preferences. */
+  function sizeName([w, h]: [number, number]) {
+    const names: Record<string, string> = { "1280x720": "HD", "1920x1080": "Full HD", "2560x1440": "QHD" };
+    return names[`${w}x${h}`] ?? (Math.abs(w / h - 1.6) < 0.01 ? "16:10" : "16:9");
+  }
+
+  /** Opening the section checks for updates again (an update already found stays shown). */
+  function openPreferences(tab?: PrefsTab) {
+    section = "preferences";
+    if (tab) prefsTab = tab;
+    else if (update.kind === "available") prefsTab = "updates";
     if (update.kind !== "available") checkUpdate();
     invoke<VirtualMonitor>("virtual_monitor_status").then((v) => (virtualMonitor = v));
+    invoke<VirtualSize>("virtual_size").then((v) => (virtualSize = v));
+  }
+
+  /** "Automatica" (null) or one of the sizes, as "1920x1080". */
+  async function setVirtualSize(value: string) {
+    const size = value ? (value.split("x").map(Number) as [number, number]) : null;
+    try {
+      virtualSize = await invoke<VirtualSize>("set_virtual_size", { size });
+      addLog("info", size
+        ? `schermo virtuale a ${size[0]}×${size[1]} dalla prossima connessione`
+        : "schermo virtuale alla dimensione della finestra di chi controlla");
+    } catch (e) {
+      addLog("error", String(e));
+    }
+  }
+
+  function setTheme(value: Theme) {
+    theme = value;
+    applyTheme(value);
+    try {
+      if (value === "system") localStorage.removeItem("theme");
+      else localStorage.setItem("theme", value);
+    } catch {
+      // Not remembered: this run only.
+    }
   }
 
   /** Installs/updates (`install`) or removes the virtual monitor; Windows asks for admin rights. */
@@ -1743,6 +1821,80 @@
   });
 </script>
 
+{#snippet nameEditor()}
+  {#if editingName}
+    <form class="value-row" onsubmit={(e) => { e.preventDefault(); saveName(); }}>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input
+        class="name-input"
+        maxlength="40"
+        placeholder="es. Alberto – Kronos"
+        aria-label="Il tuo nome"
+        autofocus
+        bind:value={nameDraft}
+        onkeydown={(e) => e.key === "Escape" && cancelName()}
+      />
+      <button class="icon-btn primary" type="submit">Salva</button>
+      <button class="icon-btn" type="button" onclick={cancelName}>Annulla</button>
+    </form>
+  {:else}
+    <div class="value-row">
+      <span class:muted={!displayName}>{displayName ?? "Nessun nome"}</span>
+      <button class="icon-btn" onclick={() => (editingName = true)}>Modifica</button>
+    </div>
+  {/if}
+{/snippet}
+
+{#snippet updatesGroup()}
+  <section class="card rows" class:highlight={update.kind === "available"}>
+    <div class="pref">
+      <div class="pref-text">
+        {#if update.kind === "available"}
+          <span class="pref-title">È disponibile la versione {update.info.version} <span class="pill">Nuova</span></span>
+          <span class="hint small">
+            Installata: {appVersion}. L'app si riavvia al termine; su macOS potrebbe servire concedere di nuovo i
+            permessi Registrazione schermo e Accessibilità.
+          </span>
+        {:else if update.kind === "installing"}
+          <span class="pref-title">Download della versione {update.info.version}…</span>
+          <div class="countdown">
+            <div style="width: {update.total ? Math.min(100, (update.downloaded / update.total) * 100) : 5}%"></div>
+          </div>
+          <span class="hint small">
+            {(update.downloaded / 1048576).toFixed(1)} MB{update.total
+              ? ` di ${(update.total / 1048576).toFixed(1)} MB`
+              : ""}
+          </span>
+        {:else}
+          <span class="pref-title">Versione {appVersion}</span>
+          {#if update.kind === "none"}
+            <span class="hint small status-line"><span class="dot ok"></span>Hai già l'ultima versione.</span>
+          {:else if update.kind === "error"}
+            <span class="error">{update.message}</span>
+          {:else if update.kind === "checking"}
+            <span class="hint small">Controllo in corso…</span>
+          {/if}
+        {/if}
+      </div>
+      {#if update.kind === "available"}
+        <button class="primary" onclick={installUpdate}>Installa e riavvia</button>
+      {:else if update.kind !== "installing"}
+        <button class="icon-btn" disabled={update.kind === "checking"} onclick={checkUpdate}>
+          Controlla aggiornamenti
+        </button>
+      {/if}
+    </div>
+    {#if update.kind === "available" && update.info.notes}
+      <div class="notes">
+        {#each changesSince(update.info.notes, update.info.current) as change}
+          {#if change.title}<strong>Versione {change.title}</strong>{/if}
+          <pre>{change.body}</pre>
+        {/each}
+      </div>
+    {/if}
+  </section>
+{/snippet}
+
 {#if filesSession !== null}
   <FileManager session={filesSession} />
 {:else if chatPopupSession !== null}
@@ -2008,10 +2160,10 @@
     </div>
     <div class="nav-bottom">
       {#if mode === "full"}
-        <button class="nav-item" class:selected={section === "updates"} onclick={openUpdates}
-          title="Versione {appVersion}">
-          <svg viewBox="0 0 24 24" aria-hidden="true">{@html icons.updates}</svg>
-          <span class="nav-label">Aggiornamenti</span>
+        <button class="nav-item" class:selected={section === "preferences"} onclick={() => openPreferences()}
+          title="Preferenze e aggiornamenti">
+          <svg viewBox="0 0 24 24" aria-hidden="true">{@html icons.preferences}</svg>
+          <span class="nav-label">Preferenze</span>
           {#if update.kind === "available"}<span class="update-dot" title="Nuova versione {update.info.version}"></span>{/if}
         </button>
       {/if}
@@ -2051,52 +2203,57 @@
 
   {#if mode}
   {#if section === "support"}
-  <main class="grid">
-    <section class="card">
-      <h2>Consenti il controllo</h2>
-      <p class="hint">Comunica ID e password a chi deve connettersi a questo computer.</p>
-
-      <span class="label">Il tuo ID</span>
-      <div class="value-row">
-        <span class="big mono">{status.id ?? "— — —"}</span>
-        <button class="icon-btn" onclick={() => copy(status.id, "id")} disabled={!status.id}>
-          {copied === "id" ? "Copiato" : "Copia"}
-        </button>
+  <main class="home">
+    {#if !quick}
+      <div class="page-head">
+        <h1>Supporto remoto</h1>
+        <span class="hint small">Fatti aiutare o aiuta qualcuno</span>
+      </div>
+    {/if}
+    <div class="home-grid">
+    <section class="card home-card">
+      <div class="card-head">
+        <span class="card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="m8 17-5-5 5-5"/><path d="M3 12h13a5 5 0 0 1 0 10h-2"/></svg>
+        </span>
+        <div>
+          <h2>Consenti il controllo</h2>
+          <span class="hint small">Comunica ID e password a chi ti assiste</span>
+        </div>
       </div>
 
-      <span class="label">Password</span>
-      <div class="value-row">
-        <span class="big mono">{status.password}</span>
-        <button class="icon-btn" onclick={() => copy(status.password, "pw")}>
-          {copied === "pw" ? "Copiato" : "Copia"}
-        </button>
-        <button class="icon-btn" onclick={newPassword} title="Genera una nuova password">Nuova</button>
+      <div class="credentials">
+        <div class="cred-row">
+          <div class="cred">
+            <span class="label">Il tuo ID</span>
+            <span class="cred-id mono">{status.id ?? "— — —"}</span>
+          </div>
+          <button class="square-btn" onclick={() => copy(status.id, "id")} disabled={!status.id}
+            aria-label="Copia ID" title={copied === "id" ? "Copiato" : "Copia ID"}>
+            {#if copied === "id"}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>{:else}<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>{/if}
+          </button>
+        </div>
+        <div class="cred-row">
+          <div class="cred">
+            <span class="label">Password</span>
+            <span class="cred-pw mono">{status.password}</span>
+          </div>
+          <button class="square-btn" onclick={() => copy(status.password, "pw")}
+            aria-label="Copia password" title={copied === "pw" ? "Copiata" : "Copia password"}>
+            {#if copied === "pw"}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>{:else}<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>{/if}
+          </button>
+          <button class="square-btn" onclick={newPassword} aria-label="Nuova password" title="Genera una nuova password">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg>
+          </button>
+        </div>
       </div>
       <p class="hint small">Con questa password ogni connessione va confermata da te.</p>
 
-      <span class="label">Il tuo nome</span>
-      {#if editingName}
-        <form class="value-row" onsubmit={(e) => { e.preventDefault(); saveName(); }}>
-          <!-- svelte-ignore a11y_autofocus -->
-          <input
-            class="name-input"
-            maxlength="40"
-            placeholder="es. Alberto – Kronos"
-            aria-label="Il tuo nome"
-            autofocus
-            bind:value={nameDraft}
-            onkeydown={(e) => e.key === "Escape" && cancelName()}
-          />
-          <button class="icon-btn primary" type="submit">Salva</button>
-          <button class="icon-btn" type="button" onclick={cancelName}>Annulla</button>
-        </form>
-      {:else}
-        <div class="value-row">
-          <span class:muted={!displayName}>{displayName ?? "Nessun nome"}</span>
-          <button class="icon-btn" onclick={() => (editingName = true)}>Modifica</button>
-        </div>
+      {#if quick}
+        <span class="label">Il tuo nome</span>
+        {@render nameEditor()}
+        <p class="hint small">Lo vede chi ti controlla e chi controlli, accanto al tuo ID.</p>
       {/if}
-      <p class="hint small">Lo vede chi ti controlla e chi controlli, accanto al tuo ID.</p>
 
       {#if permissions?.required && (!permissions.screen || !permissions.accessibility)}
         <div class="permissions">
@@ -2165,75 +2322,69 @@
           terminare la condivisione.
         </p>
       {/if}
-      <span class="label">Accesso non presidiato</span>
-      {#if status.unattended}
-        <p class="unattended on">
-          Attivo: chi conosce la tua <strong>password personale</strong> entra senza conferma.
-        </p>
-        <div class="row">
-          <button class="icon-btn" onclick={() => (personalDialog = { first: "", second: "", error: "" })}>
-            Cambia password personale
-          </button>
-          <button class="icon-btn" onclick={disablePersonal}>Disattiva</button>
-        </div>
-        {#if (uac?.supported || isMac) && !quick}
-          <label class="check" title={isMac
-            ? "Per Mac raggiunti solo da remoto, senza nessuno davanti a un monitor: chi controlla può portare lo schermo alla risoluzione della sua finestra"
-            : "Per server e macchine virtuali raggiunti solo da remoto, senza nessuno davanti a un monitor: la sessione di Desktop remoto chiusa resta condivisibile e chi controlla può portare lo schermo alla risoluzione della sua finestra"}>
-            <input type="checkbox" checked={remoteOnly} onchange={() => setRemoteOnly(!remoteOnly)} />
-            Computer usato solo da remoto (senza monitor)
-          </label>
-          {#if remoteOnly && uac?.supported && !uac.active}
-            <p class="hint small">Serve il controllo finestre di amministratore (UAC) attivo.</p>
-          {:else if uac?.supported}
-            <p class="hint small">Vale per tutto il computer: cambiarla chiede il permesso di amministratore.</p>
+      <div class="unattended-row">
+        <span class="shield" class:on={status.unattended} aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>{#if status.unattended}<path d="m9 12 2 2 4-4"/>{/if}</svg>
+        </span>
+        <div class="pref-text">
+          <span class="pref-title">Accesso non presidiato</span>
+          {#if status.unattended}
+            <span class="small ok-text">Attivo · con la password personale si entra senza conferma</span>
+          {:else}
+            <span class="hint small">
+              Con una password personale entri senza conferma{#if quick}, finché questa finestra è aperta{/if}
+            </span>
           {/if}
-        {/if}
-      {:else}
-        <p class="hint small">
-          Imposta una password personale per controllare questo computer senza conferma{#if quick}, finché
-          questa finestra è aperta{/if}.
-        </p>
-        <div class="row">
-          <button class="icon-btn" disabled={!status.id}
-            onclick={() => (personalDialog = { first: "", second: "", error: "" })}>
-            Imposta password personale
-          </button>
         </div>
-      {/if}
-      <span class="label">Chi si collega a questo computer può</span>
-      <label class="check">
-        <input type="checkbox" checked={hostPermissions.clipboard}
-          onchange={() => setHostPermission("clipboard", !hostPermissions.clipboard)} />
-        Condividere gli appunti
-      </label>
-      <label class="check">
-        <input type="checkbox" checked={hostPermissions.files}
-          onchange={() => setHostPermission("files", !hostPermissions.files)} />
-        Usare il Trasferimento file
-      </label>
-      {#if !quick}
-      <label class="check">
-        <input type="checkbox" checked={autostart} onchange={toggleAutostart} />
-        Avvia all'accesso (nascosto nella barra)
-      </label>
-      {#if status.unattended && !autostart}
-        <p class="hint small">
-          Con l'accesso non presidiato conviene attivarlo: dopo l'accesso a Windows (o un riavvio) il computer
-          resta raggiungibile e chi ti assiste si ricollega da solo.
+        {#if status.unattended}
+          <button class="icon-btn" onclick={() => (personalDialog = { first: "", second: "", error: "" })}
+            title="Cambia password personale">Cambia password</button>
+          <button class="icon-btn" onclick={disablePersonal}>Disattiva</button>
+        {:else}
+          <button class="icon-btn" disabled={!status.id}
+            onclick={() => (personalDialog = { first: "", second: "", error: "" })}>Attiva</button>
+        {/if}
+      </div>
+      {#if quick}
+        <span class="label">Chi si collega a questo computer può</span>
+        <label class="check">
+          <input type="checkbox" checked={hostPermissions.clipboard}
+            onchange={() => setHostPermission("clipboard", !hostPermissions.clipboard)} />
+          Condividere gli appunti
+        </label>
+        <label class="check">
+          <input type="checkbox" checked={hostPermissions.files}
+            onchange={() => setHostPermission("files", !hostPermissions.files)} />
+          Usare il Trasferimento file
+        </label>
+      {:else}
+        <p class="hint small prefs-link">
+          {#if status.unattended && !autostart}
+            Conviene attivare <strong>Avvia all'accesso</strong>: dopo un riavvio il computer resta raggiungibile.
+          {:else}
+            Nome, permessi di chi si collega e computer senza monitor:
+          {/if}
+          <button class="link" type="button" onclick={() => openPreferences()}>Preferenze</button>
         </p>
-      {/if}
       {/if}
     </section>
 
     {#if !quick}
-    <section class="card">
-      <h2>Controlla un computer remoto</h2>
-      <form onsubmit={connect}>
+    <section class="card home-card">
+      <div class="card-head">
+        <span class="card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+        </span>
+        <div>
+          <h2>Controlla un computer remoto</h2>
+          <span class="hint small">Inserisci ID e password del partner</span>
+        </div>
+      </div>
+      <form class="connect-form" onsubmit={connect}>
         <label>
           <span class="label">ID partner</span>
           <input
-            class="mono"
+            class="mono partner-id"
             inputmode="numeric"
             placeholder="123 456 789"
             value={partnerId}
@@ -2254,10 +2405,14 @@
               (partnerPassword = usePersonal ? e.currentTarget.value : e.currentTarget.value.toLowerCase())}
           />
         </label>
-        <label class="check">
-          <input type="checkbox" bind:checked={usePersonal} />
-          Password personale (senza conferma)
-        </label>
+        <div class="segmented wide" role="group" aria-label="Tipo di password">
+          <button type="button" aria-pressed={!usePersonal} class:on={!usePersonal}
+            title="Il partner conferma la connessione" onclick={() => (usePersonal = false)}>Con conferma</button>
+          <button type="button" aria-pressed={usePersonal} class:on={usePersonal}
+            title="Password personale del partner: si entra senza conferma" onclick={() => (usePersonal = true)}>
+            Password personale
+          </button>
+        </div>
         {#if usePersonal}
           <label>
             <span class="label">Salva in "I miei dispositivi" come (facoltativo)</span>
@@ -2273,19 +2428,44 @@
           </div>
         {:else}
           <button
-            class="primary"
+            class="primary connect-btn"
             type="submit"
             disabled={status.link !== "online" || partnerId.length < 11 || !partnerPassword}
           >
             Connetti
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
           </button>
         {/if}
       </form>
-
     </section>
     {/if}
-  </main>
+    </div>
 
+    {#if !quick && devices.length > 0}
+      <section class="card quick-devices" aria-labelledby="quick-devices-title">
+        <div class="quick-devices-head">
+          <h2 id="quick-devices-title" class="group-title">I miei dispositivi</h2>
+          <button class="link" type="button" onclick={() => (section = "devices")}>Tutti →</button>
+        </div>
+        <div class="quick-devices-list">
+          {#each homeDevices as d (d.id)}
+            {@const online = deviceOnline(d)}
+            <button type="button" class="quick-device" disabled={busy || status.link !== "online"}
+              title="Connetti a {d.name}" onclick={() => connectDevice(d)}>
+              <span class="dot" class:ok={online === true} class:off={online !== true}></span>
+              <span class="quick-device-text">
+                <span class="quick-device-name">{d.name}</span>
+                <span class="hint small mono">{d.id}</span>
+              </span>
+              <span class="small" class:ok-text={online === true} class:muted={online !== true}>
+                {online === true ? "Online" : online === false ? "Offline" : ""}
+              </span>
+            </button>
+          {/each}
+        </div>
+      </section>
+    {/if}
+  </main>
   {:else if section === "devices"}
   {#snippet tree(parent: string | null, depth: number)}
     {#each childGroups(parent) as g (g.id)}
@@ -2503,110 +2683,196 @@
     </section>
   </main>
 
-  {:else if section === "updates"}
-  <main>
-    <h1>Aggiornamenti</h1>
-    <section class="card">
-      <p>Versione installata: <strong>{appVersion}</strong></p>
-      {#if update.kind === "available"}
-        <p>
-          È disponibile la versione <strong>{update.info.version}</strong>.
-        </p>
-        {#if update.info.notes}
-          <div class="notes">
-            {#each changesSince(update.info.notes, update.info.current) as change}
-              {#if change.title}<strong>Versione {change.title}</strong>{/if}
-              <pre>{change.body}</pre>
-            {/each}
-          </div>
-        {/if}
-        <p class="hint small">
-          L'app si riavvia al termine. Su macOS potrebbe servire concedere di nuovo i permessi
-          Registrazione schermo e Accessibilità.
-        </p>
-        <div class="row">
-          <button class="primary" onclick={installUpdate}>Installa e riavvia</button>
+  {:else if section === "preferences"}
+  <main class="prefs">
+    <h1>Preferenze</h1>
+    <div class="tabs" role="tablist" aria-label="Sezioni delle preferenze">
+      {#each prefsTabs as t (t.id)}
+        <button type="button" role="tab" aria-selected={prefsTab === t.id} class:on={prefsTab === t.id}
+          onclick={() => (prefsTab = t.id)}>
+          {t.label}
+          {#if t.id === "updates" && update.kind === "available"}<span class="update-dot" title="Nuova versione"></span>{/if}
+        </button>
+      {/each}
+    </div>
+
+    {#if prefsTab === "general"}
+    <section class="card rows">
+      <div class="pref">
+        <div class="pref-text">
+          <span class="pref-title">Il tuo nome</span>
+          <span class="hint small">Lo vede chi ti controlla e chi controlli, accanto al tuo ID.</span>
         </div>
-      {:else if update.kind === "installing"}
-        <p>Download della versione {update.info.version}…</p>
-        <div class="countdown">
-          <div
-            style="width: {update.total ? Math.min(100, (update.downloaded / update.total) * 100) : 5}%"
-          ></div>
+        {@render nameEditor()}
+      </div>
+      <div class="pref">
+        <div class="pref-text">
+          <span class="pref-title" id="theme-title">Tema</span>
+          <span class="hint small">Sistema segue l'aspetto scelto in {isMac ? "macOS" : "Windows"}.</span>
         </div>
-        <p class="hint small">
-          {(update.downloaded / 1048576).toFixed(1)} MB{update.total
-            ? ` di ${(update.total / 1048576).toFixed(1)} MB`
-            : ""}
-        </p>
-      {:else}
-        {#if update.kind === "none"}
-          <p class="hint">Hai già l'ultima versione.</p>
-        {:else if update.kind === "error"}
-          <p class="error">{update.message}</p>
-        {:else if update.kind === "checking"}
-          <p class="hint">Controllo in corso…</p>
-        {/if}
-        <div class="row">
-          <button class="icon-btn" disabled={update.kind === "checking"} onclick={checkUpdate}>
-            Controlla aggiornamenti
-          </button>
+        <div class="segmented" role="group" aria-labelledby="theme-title">
+          {#each [["system", "Sistema"], ["light", "Chiaro"], ["dark", "Scuro"]] as [value, label]}
+            <button type="button" aria-pressed={theme === value} class:on={theme === value}
+              onclick={() => setTheme(value as Theme)}>{label}</button>
+          {/each}
         </div>
-      {/if}
-    </section>
-    {#if virtualMonitor?.supported}
-      <section class="card">
-        <h2>Monitor virtuale</h2>
-        <p class="hint">
-          Per un PC senza monitor collegato: aggiunge uno schermo virtuale 1920×1080, così chi si
-          collega vede e controlla il desktop. Usa Virtual Display Driver (licenza MIT, firmato da
-          SignPath Foundation); Windows chiede il permesso di amministratore.
-        </p>
-        {#if virtualMonitor.installed}
-          <p>
-            Installato{virtualMonitor.version ? ` (versione ${virtualMonitor.version})` : ""}.
-          </p>
-          {#if virtualMonitor.bundled && virtualMonitor.version !== virtualMonitor.bundled}
-            <p>È disponibile la versione <strong>{virtualMonitor.bundled}</strong>.</p>
-          {/if}
-        {:else}
-          <p>Non installato.</p>
-        {/if}
-        {#if virtualMonitor.message}<p class="hint small">{virtualMonitor.message}</p>{/if}
-        {#if virtualMonitorError}<p class="error">{virtualMonitorError}</p>{/if}
-        <div class="row">
-          {#if !virtualMonitor.installed}
-            <button class="primary" disabled={virtualMonitorBusy} onclick={() => setVirtualMonitor(true)}>
-              Installa monitor virtuale
-            </button>
-          {:else}
-            {#if virtualMonitor.bundled && virtualMonitor.version !== virtualMonitor.bundled}
-              <button class="primary" disabled={virtualMonitorBusy} onclick={() => setVirtualMonitor(true)}>
-                Aggiorna
-              </button>
+      </div>
+      <div class="pref">
+        <div class="pref-text">
+          <span class="pref-title">Avvia all'accesso</span>
+          <span class="hint small">
+            {#if status.unattended && !autostart}
+              Consigliato con l'accesso non presidiato: dopo un riavvio il computer resta raggiungibile e chi ti
+              assiste si ricollega da solo.
+            {:else}
+              Parte nascosta nella barra: chi ti assiste ti trova anche dopo un riavvio.
             {/if}
-            <button class="danger" disabled={virtualMonitorBusy} onclick={() => setVirtualMonitor(false)}>
-              Rimuovi
-            </button>
-          {/if}
-          {#if virtualMonitorBusy}<span class="spinner"></span>{/if}
+          </span>
         </div>
-      </section>
-    {/if}
-    <section class="card">
-      <h2>Log dell'app</h2>
-      <p class="hint">
-        Per segnalare un problema: salva nella cartella Download un file zip con i log degli ultimi
-        giorni, da inviare a chi ti assiste.
-      </p>
-      {#if logsExport.message}
-        <p class={logsExport.error ? "error" : "hint small"}>{logsExport.message}</p>
-      {/if}
-      <div class="row">
-        <button class="icon-btn" disabled={logsExport.busy} onclick={exportLogs}>Scarica i log</button>
-        {#if logsExport.busy}<span class="spinner"></span>{/if}
+        <button type="button" class="switch" role="switch" aria-checked={autostart} aria-label="Avvia all'accesso"
+          onclick={toggleAutostart}><span></span></button>
       </div>
     </section>
+
+    {:else if prefsTab === "connections"}
+    <p class="hint small group-note">Chi si collega a questo computer può:</p>
+    <section class="card rows">
+      <div class="pref">
+        <div class="pref-text">
+          <span class="pref-title">Condividere gli appunti</span>
+          <span class="hint small">Testo e file copiati passano da un computer all'altro (dalle prossime sessioni).</span>
+        </div>
+        <button type="button" class="switch" role="switch" aria-checked={hostPermissions.clipboard}
+          aria-label="Condividere gli appunti"
+          onclick={() => setHostPermission("clipboard", !hostPermissions.clipboard)}><span></span></button>
+      </div>
+      <div class="pref">
+        <div class="pref-text">
+          <span class="pref-title">Usare il Trasferimento file</span>
+          <span class="hint small">Sfogliare e copiare i file di questo computer.</span>
+        </div>
+        <button type="button" class="switch" role="switch" aria-checked={hostPermissions.files}
+          aria-label="Usare il Trasferimento file"
+          onclick={() => setHostPermission("files", !hostPermissions.files)}><span></span></button>
+      </div>
+    </section>
+
+    {:else if prefsTab === "screen"}
+      <section class="card rows">
+        {#if uac?.supported || isMac}
+          <div class="pref">
+            <div class="pref-text">
+              <span class="pref-title">Computer usato solo da remoto</span>
+              <span class="hint small">
+                {#if isMac}
+                  Per un Mac raggiunto solo da remoto, senza nessuno davanti a un monitor: chi controlla può
+                  cambiare la risoluzione e un Mac senza monitor (Mac mini, Mac Studio) condivide uno schermo virtuale.
+                {:else}
+                  Per server e macchine virtuali raggiunti solo da remoto: la sessione di Desktop remoto chiusa
+                  resta condivisibile e chi controlla può portare lo schermo alla risoluzione della sua finestra.
+                {/if}
+              </span>
+              {#if remoteOnly && uac?.supported && !uac.active}
+                <span class="error">Serve il controllo finestre di amministratore (UAC) attivo, in Supporto remoto.</span>
+              {:else if uac?.supported}
+                <span class="hint small">Vale per tutto il computer: cambiarla chiede il permesso di amministratore.</span>
+              {/if}
+            </div>
+            <button type="button" class="switch" role="switch" aria-checked={remoteOnly}
+              aria-label="Computer usato solo da remoto" disabled={!status.unattended && !remoteOnly}
+              onclick={() => setRemoteOnly(!remoteOnly)}><span></span></button>
+          </div>
+        {/if}
+        {#if isMac && remoteOnly && virtualSize && virtualSize.sizes.length > 0}
+          {@const fixed = virtualSize.fixed}
+          <div class="pref column">
+            <div class="pref-text">
+              <span class="pref-title" id="virtual-size-title">Risoluzione dello schermo virtuale</span>
+              <span class="hint small">
+                {#if fixed}
+                  Fissa: chi controlla vede sempre {fixed[0]} × {fixed[1]}, qualunque sia la sua finestra.
+                {:else}
+                  Automatica: si adatta alla finestra di chi controlla.
+                {/if}
+                Vale dalla prossima connessione.
+              </span>
+            </div>
+            <div class="size-grid" role="radiogroup" aria-labelledby="virtual-size-title">
+              {#each [null, ...virtualSize.sizes] as size (size ? size.join("x") : "auto")}
+                {@const on = size ? fixed?.[0] === size[0] && fixed?.[1] === size[1] : !fixed}
+                <button type="button" role="radio" aria-checked={on} class="size-tile" class:on
+                  onclick={() => setVirtualSize(size ? size.join("x") : "")}>
+                  <span class="size-shape" aria-hidden="true">
+                    <span style:width="{size ? 22 + (size[0] - 1280) / 50 : 38}px"
+                      style:height="{size ? (22 + (size[0] - 1280) / 50) * size[1] / size[0] : 24}px"></span>
+                  </span>
+                  <span class="size-label">{size ? `${size[0]} × ${size[1]}` : "Automatica"}</span>
+                  <span class="hint small">{size ? sizeName(size) : "finestra di chi controlla"}</span>
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+        {#if virtualMonitor?.supported}
+          <div class="pref">
+            <div class="pref-text">
+              <span class="pref-title">Monitor virtuale</span>
+              <span class="hint small">
+                Per un PC senza monitor collegato: aggiunge uno schermo virtuale 1920×1080, così chi si collega vede e
+                controlla il desktop. Usa Virtual Display Driver (licenza MIT, firmato da SignPath Foundation);
+                Windows chiede il permesso di amministratore.
+              </span>
+              <span class="small">
+                {#if virtualMonitor.installed}
+                  Installato{virtualMonitor.version ? ` (versione ${virtualMonitor.version})` : ""}{#if virtualMonitor.bundled && virtualMonitor.version !== virtualMonitor.bundled}
+                    · disponibile la versione <strong>{virtualMonitor.bundled}</strong>{/if}.
+                {:else}
+                  Non installato.
+                {/if}
+              </span>
+              {#if virtualMonitor.message}<span class="hint small">{virtualMonitor.message}</span>{/if}
+              {#if virtualMonitorError}<span class="error">{virtualMonitorError}</span>{/if}
+            </div>
+            <div class="pref-actions">
+              {#if virtualMonitorBusy}<span class="spinner"></span>{/if}
+              {#if !virtualMonitor.installed}
+                <button class="icon-btn" disabled={virtualMonitorBusy} onclick={() => setVirtualMonitor(true)}>Installa</button>
+              {:else}
+                {#if virtualMonitor.bundled && virtualMonitor.version !== virtualMonitor.bundled}
+                  <button class="icon-btn" disabled={virtualMonitorBusy} onclick={() => setVirtualMonitor(true)}>Aggiorna</button>
+                {/if}
+                <button class="icon-btn" disabled={virtualMonitorBusy} onclick={() => setVirtualMonitor(false)}>Rimuovi</button>
+              {/if}
+            </div>
+          </div>
+        {/if}
+      </section>
+      {#if (uac?.supported || isMac) && !status.unattended && !remoteOnly}
+        <p class="hint small group-note">Si attiva insieme all'accesso non presidiato, in Supporto remoto.</p>
+      {/if}
+
+    {:else if prefsTab === "updates"}
+      {@render updatesGroup()}
+
+    {:else}
+    <section class="card rows">
+      <div class="pref">
+        <div class="pref-text">
+          <span class="pref-title">Log dell'app</span>
+          <span class="hint small">
+            Salva nella cartella Download un file zip con i log degli ultimi giorni, da inviare a chi ti assiste.
+          </span>
+          {#if logsExport.message}
+            <span class={logsExport.error ? "error" : "hint small"}>{logsExport.message}</span>
+          {/if}
+        </div>
+        <div class="pref-actions">
+          {#if logsExport.busy}<span class="spinner"></span>{/if}
+          <button class="icon-btn" disabled={logsExport.busy} onclick={exportLogs}>Scarica i log</button>
+        </div>
+      </div>
+    </section>
+    {/if}
   </main>
   {/if}
   {/if}
@@ -2622,11 +2888,11 @@
       {#if isMac}
         <p class="hint">
           Rispondi <strong>Sì</strong> per un Mac senza monitor, raggiunto solo da remoto: chi lo controlla può
-          portare il suo schermo alla risoluzione della propria finestra (ripristinata alla fine).
+          portare il suo schermo alla risoluzione della propria finestra (ripristinata alla fine), oppure puoi fissarla nelle Preferenze.
         </p>
         <p class="hint">
           Rispondi <strong>No</strong> per un Mac con un monitor: chi è davanti vedrebbe cambiare la risoluzione.
-          Si può cambiare in seguito da Accesso non presidiato.
+          Si può cambiare in seguito nelle Preferenze.
         </p>
       {:else}
         <p class="hint">
@@ -2637,7 +2903,7 @@
         </p>
         <p class="hint">
           Rispondi <strong>No</strong> per un PC con un monitor: spostandola, la sessione comparirebbe sbloccata
-          davanti a chiunque sia lì. Si può cambiare in seguito da Accesso non presidiato.
+          davanti a chiunque sia lì. Si può cambiare in seguito nelle Preferenze.
         </p>
       {/if}
       {#if uac?.supported && !uac?.active}
@@ -2862,18 +3128,23 @@
     --border: #e2e8f0;
     --accent: #e8830c;
     --accent-2: #f39200;
-    --accent-text: #ffffff;
+    /* Dark text on the orange: white on it reads poorly (about 2.6:1). */
+    --accent-text: #111827;
     --ok: #16a34a;
     --warn: #d97706;
     --caution: #eab308;
     --err: #dc2626;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
     font-size: 15px;
+    --switch-off: #cbd5e1;
+    --raised: #ffffff;
     color: var(--text);
     background: var(--bg);
+    color-scheme: light;
   }
+  /* Dark: the system's choice unless the preferences force light (data-theme on <html>). */
   @media (prefers-color-scheme: dark) {
-    :global(:root) {
+    :global(:root:not([data-theme="light"])) {
       --bg: #0b1120;
       --surface: #111827;
       --text: #e5e7eb;
@@ -2881,7 +3152,22 @@
       --border: #1f2937;
       --accent: #f39200;
       --accent-2: #ffb347;
+      --switch-off: #334155;
+      --raised: #1f2937;
+      color-scheme: dark;
     }
+  }
+  :global(:root[data-theme="dark"]) {
+    --bg: #0b1120;
+    --surface: #111827;
+    --text: #e5e7eb;
+    --muted: #94a3b8;
+    --border: #1f2937;
+    --accent: #f39200;
+    --accent-2: #ffb347;
+    --switch-off: #334155;
+    --raised: #1f2937;
+    color-scheme: dark;
   }
   :global(body) {
     margin: 0;
@@ -3046,17 +3332,6 @@
     max-width: 860px;
     box-sizing: border-box;
   }
-  main.grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    align-content: start;
-    max-width: none;
-  }
-  .app.quick main.grid {
-    grid-template-columns: 1fr;
-    max-width: 560px;
-    margin: 0 auto;
-  }
   main.chat-page {
     min-height: 0;
   }
@@ -3100,18 +3375,10 @@
   .mono {
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
-  .big {
-    font-size: 28px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-  }
   .value-row {
     display: flex;
     align-items: center;
     gap: 8px;
-  }
-  .value-row .big {
-    flex: 1;
   }
   .dot {
     width: 8px;
@@ -3377,6 +3644,450 @@
     border: 1px solid var(--border);
     background: var(--surface);
     color: var(--text);
+  }
+  /* Home ("Supporto remoto"): two cards side by side, saved devices below. */
+  main.home {
+    max-width: 1000px;
+  }
+  .page-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+  .page-head h1 {
+    font-size: 22px;
+    margin: 0;
+  }
+  .home-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 16px;
+    align-items: start;
+  }
+  .app.quick .home-grid {
+    grid-template-columns: 1fr;
+    max-width: 560px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  .home-card {
+    border-radius: 14px;
+    padding: 18px 20px;
+    gap: 12px;
+  }
+  .card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .card-head h2 {
+    margin: 0;
+  }
+  .card-icon {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    border-radius: 9px;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--accent);
+  }
+  .card-icon svg,
+  .square-btn svg,
+  .shield svg,
+  .connect-btn svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .credentials {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: var(--bg);
+  }
+  .cred-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .cred-row + .cred-row {
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .cred {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .cred .label {
+    margin-top: 0;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .cred-id {
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .cred-pw {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+  }
+  .square-btn {
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+  }
+  .square-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+  .unattended-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  .shield {
+    display: grid;
+    color: var(--muted);
+  }
+  .shield svg {
+    width: 20px;
+    height: 20px;
+  }
+  .shield.on {
+    color: var(--ok);
+  }
+  .ok-text {
+    color: var(--ok);
+  }
+  .connect-form {
+    gap: 10px;
+  }
+  .connect-form .label {
+    margin: 0 0 4px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .partner-id {
+    font-size: 20px;
+    letter-spacing: 0.04em;
+  }
+  .segmented.wide button {
+    flex: 1;
+  }
+  .connect-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 4px;
+    padding: 11px 14px;
+    border-radius: 10px;
+    font-weight: 700;
+  }
+  .quick-devices {
+    border-radius: 14px;
+    padding: 12px 16px;
+    gap: 10px;
+  }
+  .quick-devices-head {
+    display: flex;
+    align-items: center;
+  }
+  .quick-devices-head .group-title {
+    flex: 1;
+    margin: 0;
+  }
+  .quick-devices-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px;
+  }
+  .quick-device {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: 10px;
+    background: var(--bg);
+    text-align: left;
+    min-width: 0;
+  }
+  .quick-device:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+  .quick-device-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .quick-device-name {
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .dot.ok {
+    background: var(--ok);
+  }
+  .dot.off {
+    background: var(--muted);
+  }
+  .prefs-link {
+    margin-top: 2px;
+  }
+
+  /* Preferences: tabs, then rows with the text on the left and the control on the right. */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin: 6px 0 10px;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .tabs button {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: 14px;
+    white-space: nowrap;
+  }
+  .tabs button:hover {
+    color: var(--text);
+  }
+  .tabs button.on {
+    border-bottom-color: var(--accent);
+    color: var(--text);
+    font-weight: 600;
+  }
+  .tabs button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  .pref.column {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .size-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+    gap: 8px;
+  }
+  .size-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 6px 10px;
+    border-radius: 10px;
+    background: var(--bg);
+  }
+  .size-tile:hover {
+    border-color: var(--muted);
+  }
+  .size-tile.on {
+    border: 2px solid var(--accent);
+    padding: 11px 5px 9px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+  .size-tile .hint {
+    text-align: center;
+  }
+  .size-shape {
+    display: grid;
+    place-items: center;
+    width: 64px;
+    height: 42px;
+  }
+  .size-shape span {
+    box-sizing: border-box;
+    border: 2px solid var(--muted);
+    border-radius: 3px;
+  }
+  .size-tile.on .size-shape span {
+    border-color: var(--accent);
+  }
+  .size-label {
+    font-size: 13px;
+    font-weight: 600;
+  }
+  main.prefs {
+    gap: 8px;
+    max-width: 800px;
+  }
+  main.prefs > .hint {
+    margin-bottom: 6px;
+  }
+  .group-title {
+    margin: 12px 0 2px 4px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+  }
+  .group-note {
+    margin: 0 4px;
+  }
+  .card.rows {
+    padding: 0;
+    gap: 0;
+    overflow: hidden;
+  }
+  .card.rows.highlight {
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  .card.rows .notes {
+    margin: 0 18px 14px;
+  }
+  .pref {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 14px 18px;
+  }
+  .pref + .pref {
+    border-top: 1px solid var(--border);
+  }
+  .pref-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .pref-title {
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .pref-text .error {
+    margin: 2px 0 0;
+    font-size: 12px;
+  }
+  .pref-text .countdown {
+    margin: 6px 0;
+  }
+  .pref .primary {
+    margin-top: 0;
+  }
+  .pref .value-row {
+    flex-shrink: 0;
+    max-width: 360px;
+  }
+  .pref .name-input {
+    font-size: 14px;
+    padding: 6px 9px;
+  }
+  .pref-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .pill {
+    margin-left: 6px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    color: var(--accent);
+    vertical-align: 1px;
+  }
+  .status-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .dot.ok {
+    width: 7px;
+    height: 7px;
+    background: var(--ok);
+  }
+  .switch {
+    flex-shrink: 0;
+    width: 40px;
+    height: 24px;
+    padding: 2px;
+    border: none;
+    border-radius: 12px;
+    background: var(--switch-off);
+    display: flex;
+    transition: background 0.15s;
+  }
+  .switch span {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+    transition: transform 0.15s;
+  }
+  .switch[aria-checked="true"] {
+    background: var(--accent);
+  }
+  .switch[aria-checked="true"] span {
+    transform: translateX(16px);
+  }
+  .switch:focus-visible,
+  .segmented button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .segmented {
+    display: flex;
+    flex-shrink: 0;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .segmented button {
+    font-size: 13px;
+    padding: 5px 14px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--muted);
+  }
+  .segmented button.on {
+    background: var(--raised);
+    color: var(--text);
+    font-weight: 600;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  }
+  button.link {
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent);
+    font-size: inherit;
+    text-decoration: underline;
   }
   .notes {
     font-size: 12px;
