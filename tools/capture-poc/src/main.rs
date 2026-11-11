@@ -42,6 +42,18 @@ struct Args {
     /// (OpenH264) otherwise.
     #[arg(long)]
     hardware: bool,
+    /// Capture a virtual display created for the run (macOS).
+    #[arg(long)]
+    virtual_display: bool,
+    /// With --hardware: capture copies to BGRA instead of handing the pixel buffer over.
+    #[arg(long)]
+    copy: bool,
+    /// Print what CoreGraphics says about each display (no permissions needed) and exit.
+    #[arg(long)]
+    cg: bool,
+    /// With --virtual-display: make it the main display, mirrored by the others.
+    #[arg(long)]
+    take_over: bool,
 }
 
 #[derive(Default)]
@@ -64,6 +76,13 @@ fn main() -> Result<()> {
         .init();
     let args = Args::parse();
 
+    #[cfg(target_os = "macos")]
+    if args.cg {
+        cg::print();
+        println!("monitors(): {:?}", capture::virtual_display::monitors());
+        return Ok(());
+    }
+
     if args.list {
         for d in capture::displays().context("listing displays")? {
             println!(
@@ -81,12 +100,27 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    #[cfg(target_os = "macos")]
+    let virtual_display = if args.virtual_display {
+        let display = capture::virtual_display::VirtualDisplay::create()?;
+        if args.take_over {
+            display.take_over()?;
+            capture::virtual_display::log_displays();
+        }
+        Some(display)
+    } else {
+        None
+    };
+    #[cfg(target_os = "macos")]
+    let display_id = virtual_display.as_ref().map(|d| d.id()).or(args.display);
+    #[cfg(not(target_os = "macos"))]
+    let display_id = args.display;
     let config = CaptureConfig {
-        display_id: args.display,
+        display_id,
         max_fps: args.fps,
         max_size: Some(encoder_box(args.max_width, args.max_height)),
         show_cursor: true,
-        native: args.hardware,
+        native: args.hardware && !args.copy,
     };
     let mut capturer = capture::start(&config).context(
         "starting capture (on macOS grant Screen Recording permission to the terminal app)",
@@ -246,4 +280,108 @@ fn cpu_seconds() -> f64 {
     let usage = unsafe { usage.assume_init() };
     let secs = |t: &Timeval| t.sec as f64 + t.usec as f64 / 1e6;
     secs(&usage.user) + secs(&usage.system)
+}
+
+#[cfg(target_os = "macos")]
+mod cg {
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGRect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGSize {
+        w: f64,
+        h: f64,
+    }
+    type Mode = *const std::ffi::c_void;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGGetOnlineDisplayList(max: u32, ids: *mut u32, count: *mut u32) -> i32;
+        fn CGGetActiveDisplayList(max: u32, ids: *mut u32, count: *mut u32) -> i32;
+        fn CGDisplayVendorNumber(id: u32) -> u32;
+        fn CGDisplayModelNumber(id: u32) -> u32;
+        fn CGDisplaySerialNumber(id: u32) -> u32;
+        fn CGDisplayIsBuiltin(id: u32) -> u32;
+        fn CGDisplayIsMain(id: u32) -> u32;
+        fn CGDisplayIsAsleep(id: u32) -> u32;
+        fn CGDisplayIsActive(id: u32) -> u32;
+        fn CGDisplayIsOnline(id: u32) -> u32;
+        fn CGDisplayMirrorsDisplay(id: u32) -> u32;
+        fn CGDisplayUnitNumber(id: u32) -> u32;
+        fn CGDisplayPixelsWide(id: u32) -> usize;
+        fn CGDisplayPixelsHigh(id: u32) -> usize;
+        fn CGDisplayBounds(id: u32) -> CGRect;
+        fn CGDisplayScreenSize(id: u32) -> CGSize;
+        fn CGDisplayUsesOpenGLAcceleration(id: u32) -> u32;
+        fn CGDisplayCopyDisplayMode(id: u32) -> Mode;
+        fn CGDisplayModeGetWidth(mode: Mode) -> usize;
+        fn CGDisplayModeGetHeight(mode: Mode) -> usize;
+        fn CGDisplayModeGetPixelWidth(mode: Mode) -> usize;
+        fn CGDisplayModeGetPixelHeight(mode: Mode) -> usize;
+        fn CGDisplayModeGetRefreshRate(mode: Mode) -> f64;
+        fn CGDisplayModeRelease(mode: Mode);
+    }
+
+    pub fn print() {
+        let mut ids = [0u32; 32];
+        let mut count = 0u32;
+        let mut active = [0u32; 32];
+        let mut active_count = 0u32;
+        unsafe {
+            CGGetOnlineDisplayList(32, ids.as_mut_ptr(), &mut count);
+            CGGetActiveDisplayList(32, active.as_mut_ptr(), &mut active_count);
+        }
+        println!("online {:?}", &ids[..count as usize]);
+        println!("active {:?}", &active[..active_count as usize]);
+        for &id in &ids[..count as usize] {
+            unsafe {
+                let b = CGDisplayBounds(id);
+                let mm = CGDisplayScreenSize(id);
+                println!(
+                    "display {id}: vendor {:#x} model {:#x} serial {:#x} unit {} builtin {} main {} \
+                     online {} active {} asleep {} mirrors {} opengl {}",
+                    CGDisplayVendorNumber(id),
+                    CGDisplayModelNumber(id),
+                    CGDisplaySerialNumber(id),
+                    CGDisplayUnitNumber(id),
+                    CGDisplayIsBuiltin(id),
+                    CGDisplayIsMain(id),
+                    CGDisplayIsOnline(id),
+                    CGDisplayIsActive(id),
+                    CGDisplayIsAsleep(id),
+                    CGDisplayMirrorsDisplay(id),
+                    CGDisplayUsesOpenGLAcceleration(id),
+                );
+                println!(
+                    "  pixels {}x{}  bounds ({}, {}) {}x{} pt  size {:.0}x{:.0} mm",
+                    CGDisplayPixelsWide(id),
+                    CGDisplayPixelsHigh(id),
+                    b.x,
+                    b.y,
+                    b.w,
+                    b.h,
+                    mm.w,
+                    mm.h
+                );
+                let mode = CGDisplayCopyDisplayMode(id);
+                if !mode.is_null() {
+                    println!(
+                        "  mode {}x{} pt, {}x{} px, {} Hz",
+                        CGDisplayModeGetWidth(mode),
+                        CGDisplayModeGetHeight(mode),
+                        CGDisplayModeGetPixelWidth(mode),
+                        CGDisplayModeGetPixelHeight(mode),
+                        CGDisplayModeGetRefreshRate(mode)
+                    );
+                    CGDisplayModeRelease(mode);
+                }
+            }
+        }
+    }
 }

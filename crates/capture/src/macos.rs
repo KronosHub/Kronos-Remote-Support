@@ -37,10 +37,11 @@ fn display_filter(display: &SCDisplay) -> Result<SCContentFilter> {
         .map_err(backend)
 }
 
-/// The main display has its origin at (0, 0) in global coordinates.
+/// The main display (menu bar): asked to CoreGraphics, since a display mirroring it sits
+/// at (0, 0) too.
 fn is_main(display: &SCDisplay) -> bool {
-    let f = display.frame();
-    f.origin.x == 0.0 && f.origin.y == 0.0
+    // SAFETY: plain query.
+    display.display_id() == unsafe { CGMainDisplayID() }
 }
 
 fn bounds(display: &SCDisplay) -> crate::Rect {
@@ -217,6 +218,7 @@ struct CGRect {
 unsafe extern "C" {
     fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
     fn CGDisplayBounds(display: u32) -> CGRect;
+    fn CGMainDisplayID() -> u32;
 }
 
 /// Displays in use, from CoreGraphics: far cheaper than `SCShareableContent`, which lists

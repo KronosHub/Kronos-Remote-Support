@@ -58,6 +58,105 @@ unsafe extern "C" {
 unsafe extern "C" {
     fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
     fn CGGetOnlineDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
+    fn CGMainDisplayID() -> u32;
+    fn CGDisplayIsBuiltin(display: u32) -> u32;
+    fn CGDisplayMirrorsDisplay(display: u32) -> u32;
+    fn CGDisplayVendorNumber(display: u32) -> u32;
+    fn CGDisplayModelNumber(display: u32) -> u32;
+    fn CGDisplaySerialNumber(display: u32) -> u32;
+    fn CGDisplayIsAsleep(display: u32) -> u32;
+    fn CGDisplayPixelsWide(display: u32) -> usize;
+    fn CGDisplayPixelsHigh(display: u32) -> usize;
+    fn CGDisplayCopyDisplayMode(display: u32) -> *const c_void;
+    fn CGDisplayModeGetPixelWidth(mode: *const c_void) -> usize;
+    fn CGDisplayModeGetPixelHeight(mode: *const c_void) -> usize;
+    fn CGDisplayModeRelease(mode: *const c_void);
+    fn CGBeginDisplayConfiguration(config: *mut *const c_void) -> i32;
+    fn CGConfigureDisplayMirrorOfDisplay(config: *const c_void, display: u32, master: u32) -> i32;
+    fn CGConfigureDisplayOrigin(config: *const c_void, display: u32, x: i32, y: i32) -> i32;
+    fn CGCompleteDisplayConfiguration(config: *const c_void, option: u32) -> i32;
+    fn CGCancelDisplayConfiguration(config: *const c_void) -> i32;
+}
+
+/// `kCGConfigureForSession`: the change lasts at most until logout.
+const CONFIGURE_FOR_SESSION: u32 = 1;
+/// `kCGNullDirectDisplay`: as a mirror master, ends the mirroring.
+const NO_DISPLAY: u32 = 0;
+
+/// Whether the Mac has a built-in screen in use (a MacBook, an iMac): its owner may be in
+/// front of it, so the virtual display never takes it over.
+pub fn has_builtin() -> bool {
+    // SAFETY: plain queries on display ids CoreGraphics just listed.
+    display_list(false).is_some_and(|ids| {
+        ids.into_iter()
+            .any(|id| unsafe { CGDisplayIsBuiltin(id) } != 0)
+    })
+}
+
+/// Writes to the log what CoreGraphics says about each display: on a Mac seen only
+/// remotely, the way to tell what macOS is drawing on.
+pub fn log_displays() {
+    let main = unsafe { CGMainDisplayID() };
+    let active = display_list(false).unwrap_or_default();
+    for id in display_list(true).unwrap_or_default() {
+        // SAFETY: queries on a listed display id; the mode is released after use.
+        unsafe {
+            let mode = CGDisplayCopyDisplayMode(id);
+            let mode_pixels = if mode.is_null() {
+                (0, 0)
+            } else {
+                let pixels = (
+                    CGDisplayModeGetPixelWidth(mode),
+                    CGDisplayModeGetPixelHeight(mode),
+                );
+                CGDisplayModeRelease(mode);
+                pixels
+            };
+            tracing::info!(
+                id,
+                vendor = format_args!("{:#x}", CGDisplayVendorNumber(id)),
+                model = format_args!("{:#x}", CGDisplayModelNumber(id)),
+                serial = format_args!("{:#x}", CGDisplaySerialNumber(id)),
+                builtin = CGDisplayIsBuiltin(id) != 0,
+                main = id == main,
+                active = active.contains(&id),
+                asleep = CGDisplayIsAsleep(id) != 0,
+                mirrors = CGDisplayMirrorsDisplay(id),
+                points = ?(CGDisplayPixelsWide(id), CGDisplayPixelsHigh(id)),
+                pixels = ?mode_pixels,
+                virtual_display = current().is_some_and(|d| d.id == id),
+                "display"
+            );
+        }
+    }
+}
+
+/// Applies one display configuration for the login session, or cancels it on error.
+fn configure(apply: impl FnOnce(*const c_void) -> i32) -> Result<()> {
+    let mut config = std::ptr::null();
+    // SAFETY: the configuration is completed or cancelled exactly once.
+    unsafe {
+        let error = CGBeginDisplayConfiguration(&mut config);
+        if error != 0 || config.is_null() {
+            return Err(CaptureError::Backend(format!(
+                "configurazione schermi non avviata ({error})"
+            )));
+        }
+        let error = apply(config);
+        if error != 0 {
+            CGCancelDisplayConfiguration(config);
+            return Err(CaptureError::Backend(format!(
+                "configurazione schermi rifiutata ({error})"
+            )));
+        }
+        let error = CGCompleteDisplayConfiguration(config, CONFIGURE_FOR_SESSION);
+        if error != 0 {
+            return Err(CaptureError::Backend(format!(
+                "configurazione schermi non applicata ({error})"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// The Mac's real monitors (the virtual display left out).
@@ -119,6 +218,8 @@ fn queue() -> *mut AnyObject {
 pub struct VirtualDisplay {
     _display: Retained<AnyObject>,
     id: u32,
+    /// The displays made to mirror this one by [`VirtualDisplay::take_over`].
+    mirrored: Mutex<Vec<u32>>,
 }
 
 // SAFETY: the object is only kept alive and released; CoreGraphics does its work on its
@@ -130,6 +231,48 @@ impl VirtualDisplay {
     /// The display's id, as listed by [`crate::displays`].
     pub fn id(&self) -> u32 {
         self.id
+    }
+
+    /// Makes this the main display, with every other display mirroring it: the desktop,
+    /// menu bar and Dock move here. For a Mac used only remotely whose own display does not
+    /// capture well (a Mac mini without a monitor can keep a stand-in display that comes
+    /// out shrunk and discoloured). Undone when the virtual display goes, at the latest at
+    /// logout.
+    pub fn take_over(&self) -> Result<()> {
+        let mut mirrored = self.mirrored.lock().unwrap();
+        let others: Vec<u32> = display_list(false)
+            .unwrap_or_default()
+            .into_iter()
+            // SAFETY: plain query on a listed display id.
+            .filter(|&id| id != self.id && unsafe { CGDisplayMirrorsDisplay(id) } != self.id)
+            .collect();
+        // SAFETY: plain query.
+        if others.is_empty() && unsafe { CGMainDisplayID() } == self.id {
+            return Ok(());
+        }
+        let main_only = |config| {
+            // SAFETY: a configuration in progress.
+            unsafe { CGConfigureDisplayOrigin(config, self.id, 0, 0) }
+        };
+        let mirror = configure(|config| {
+            for &id in &others {
+                // SAFETY: a configuration in progress and a display CoreGraphics listed.
+                let error = unsafe { CGConfigureDisplayMirrorOfDisplay(config, id, self.id) };
+                if error != 0 {
+                    return error;
+                }
+            }
+            main_only(config)
+        });
+        if let Err(e) = mirror {
+            // At least the menu bar and new windows come here; the others stay beside it.
+            tracing::warn!("displays not mirrored ({e}): virtual display only made the main one");
+            configure(main_only)?;
+            return Ok(());
+        }
+        tracing::info!(id = self.id, mirroring = ?others, "virtual display is now the main one");
+        mirrored.extend(others);
+        Ok(())
     }
 
     /// Creates a `WIDTH`×`HEIGHT` monitor and waits until it can be captured.
@@ -146,6 +289,30 @@ impl VirtualDisplay {
         Err(CaptureError::Backend(
             "lo schermo virtuale non è comparso".into(),
         ))
+    }
+}
+
+impl Drop for VirtualDisplay {
+    fn drop(&mut self) {
+        let mirrored = std::mem::take(self.mirrored.get_mut().unwrap());
+        if mirrored.is_empty() {
+            return;
+        }
+        // The displays show their own desktop again (macOS would also do it once this one
+        // is gone, but not always placing them as before).
+        let restored = configure(|config| {
+            for &id in &mirrored {
+                // SAFETY: a configuration in progress; a display gone meanwhile only fails.
+                let error = unsafe { CGConfigureDisplayMirrorOfDisplay(config, id, NO_DISPLAY) };
+                if error != 0 {
+                    return error;
+                }
+            }
+            0
+        });
+        if let Err(e) = restored {
+            tracing::warn!("displays not restored: {e}");
+        }
     }
 }
 
@@ -263,6 +430,7 @@ fn make() -> Result<VirtualDisplay> {
         Ok(VirtualDisplay {
             _display: display,
             id,
+            mirrored: Mutex::new(Vec::new()),
         })
     }
 }

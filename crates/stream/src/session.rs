@@ -436,7 +436,7 @@ pub async fn serve_host(
                     tracing::warn!("no message from the viewer for {:?}, ending", last_heard.elapsed());
                     break "il partner non risponde".to_owned();
                 }
-                if monitor_back(&screen_keeper).await {
+                if monitor_back(&config, &screen_keeper).await {
                     // Without the virtual screen its capture ends and restarts on the real one.
                     tracing::info!("a monitor is on again: leaving the virtual screen");
                     screen_keeper = None;
@@ -791,15 +791,28 @@ const WAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// macOS: with no monitor at all, makes a virtual one (kept in `keeper`) so there is
 /// something to share. A monitor that is only asleep (being woken by `KeepAwake`) is waited
-/// for instead: the login or lock screen appears there. Elsewhere, nothing (a missing
-/// monitor leaves the session waiting).
+/// for instead: the login or lock screen appears there. A Mac used only remotely without a
+/// built-in screen (Mac mini, Studio) always gets one, made the main display with the
+/// others mirroring it: a Mac mini without a monitor can keep a stand-in display that
+/// captures shrunk and discoloured, with the mouse off target (ADR 0064). Elsewhere,
+/// nothing (a missing monitor leaves the session waiting).
 #[cfg(target_os = "macos")]
 async fn ensure_screen(config: &StreamConfig, keeper: &mut Option<VirtualScreen>) {
-    use capture::virtual_display::{Monitors, monitors};
+    use capture::virtual_display::{self, Monitors, monitors};
     if keeper.is_some() || !matches!(config.source, crate::Source::Screen { .. }) {
         return;
     }
-    let made = tokio::task::spawn_blocking(|| {
+    let remote_only = config.resize_display;
+    let made = tokio::task::spawn_blocking(move || {
+        virtual_display::log_displays();
+        if remote_only && !virtual_display::has_builtin() {
+            let screen = virtual_display::shared()?;
+            if let Err(e) = screen.take_over() {
+                tracing::warn!("virtual display not made the main one: {e}");
+                return Err(e);
+            }
+            return Ok(Some(screen));
+        }
         let mut state = monitors();
         if state == Monitors::Asleep {
             tracing::info!("the monitor is asleep: waking it up");
@@ -814,16 +827,20 @@ async fn ensure_screen(config: &StreamConfig, keeper: &mut Option<VirtualScreen>
                 Ok(displays) => displays.is_empty(),
                 Err(e) => matches!(e, capture::CaptureError::NoDisplay),
             };
-        none.then(capture::virtual_display::shared)
+        if none {
+            virtual_display::shared().map(Some)
+        } else {
+            Ok(None)
+        }
     })
     .await;
     match made {
-        Ok(Some(Ok(screen))) => {
-            tracing::info!(id = screen.id(), "no monitor: sharing a virtual one");
+        Ok(Ok(Some(screen))) => {
+            tracing::info!(id = screen.id(), remote_only, "sharing a virtual display");
             *keeper = Some(screen);
         }
-        Ok(Some(Err(e))) => tracing::warn!("no monitor and no virtual one: {e}"),
-        Ok(None) | Err(_) => {}
+        Ok(Err(e)) => tracing::warn!("no virtual display: {e}"),
+        Ok(Ok(None)) | Err(_) => {}
     }
 }
 
@@ -832,17 +849,19 @@ async fn ensure_screen(_config: &StreamConfig, _keeper: &mut Option<VirtualScree
 
 /// macOS: true when the session shares a virtual screen but a real monitor is on again
 /// (woken up late, or plugged in): the virtual one should go, so the capture moves there.
+/// Not for a Mac used only remotely, whose virtual display stays for the whole session.
 #[cfg(target_os = "macos")]
-async fn monitor_back(keeper: &Option<VirtualScreen>) -> bool {
+async fn monitor_back(config: &StreamConfig, keeper: &Option<VirtualScreen>) -> bool {
     use capture::virtual_display::{Monitors, monitors};
     keeper.is_some()
+        && !config.resize_display
         && tokio::task::spawn_blocking(|| monitors() == Monitors::On)
             .await
             .unwrap_or(false)
 }
 
 #[cfg(not(target_os = "macos"))]
-async fn monitor_back(_keeper: &Option<VirtualScreen>) -> bool {
+async fn monitor_back(_config: &StreamConfig, _keeper: &Option<VirtualScreen>) -> bool {
     false
 }
 
