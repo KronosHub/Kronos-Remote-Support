@@ -2847,8 +2847,9 @@ async fn view_partner(
         audio,
         tracks,
         commands,
-        // Off until the user turns it on in the toolbar.
-        false,
+        // On at every connection (the host may refuse it); only what is copied from now on
+        // is shared, and the toolbar turns it off.
+        true,
         |event| match event {
             ViewerEvent::Started {
                 width,

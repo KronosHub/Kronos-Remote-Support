@@ -2,6 +2,14 @@
 
 Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**, quando la versione è disponibile.
 
+## 2.2.1 — 2026-11-12
+- **Appunti condivisi accesi** a ogni connessione: si spengono dal pulsante **Appunti** nella barra. Passa solo
+  ciò che copi durante la sessione, e il computer controllato può sempre vietarli dalle Preferenze.
+- **Barra più pulita**: un clic sul pallino di stato nasconde i dati della connessione (video, rete, risorse) e
+  lascia solo il pallino; un altro clic li mostra di nuovo. La scelta viene ricordata.
+- **Accesso non presidiato** in una riga ordinata con l'etichetta **Attivo** o **Spento**; Cambia password e
+  Disattiva sono nel menu **⋯**.
+
 ## 2.2.0 — 2026-11-11
 - **Nuova schermata principale**: ID e password in evidenza con i pulsanti per copiarli, l'accesso non presidiato
   su una riga, la scelta **Con conferma / Password personale** e, sotto, **I miei dispositivi** per collegarti con

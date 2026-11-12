@@ -759,3 +759,9 @@
   della shell di GitHub (`set +e` nel secondo).
 - Nuova esecuzione con la correzione: tutto verde, 2.2.0 pubblicata (Latest) alle 15:41 UTC.
 - I `checks` della 2.2.0 fallivano su `cargo fmt --check` (`service.rs`, `session.rs`): formattato.
+
+## 2026-11-12 — 2.2.1: appunti, barra, accesso non presidiato
+- `checks` di nuovo verdi dopo `cargo fmt`.
+- Richieste: appunti accesi di default, poter nascondere i dati della barra lasciando il pallino, riga Accesso
+  non presidiato più gradevole. Tre proposte su una pagina (interruttore, riquadro di stato, compatta con menu):
+  scelta la C. Fatto tutto (ADR 0066), svelte-check e `cargo check` puliti.

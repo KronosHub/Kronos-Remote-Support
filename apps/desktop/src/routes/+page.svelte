@@ -547,6 +547,8 @@
   let saveAs = $state("");
   /** Personal password dialog (set / change). */
   let personalDialog = $state<{ first: string; second: string; error: string } | null>(null);
+  /** Menu (⋯) of the unattended access row: change password, turn off. */
+  let unattendedMenu = $state(false);
   let partnerId = $state("");
   let partnerPassword = $state("");
   let formError = $state("");
@@ -1724,6 +1726,25 @@
     invoke("set_block_input", { session: view.session, enabled: !view.inputBlocked });
   }
 
+  /** Connection data in the toolbar hidden (only the status dot), remembered on this computer. */
+  let statsHidden = $state(
+    (() => {
+      try {
+        return localStorage.getItem("viewStatsHidden") === "1";
+      } catch {
+        return false;
+      }
+    })(),
+  );
+
+  function toggleStats() {
+    statsHidden = !statsHidden;
+    try {
+      if (statsHidden) localStorage.setItem("viewStatsHidden", "1");
+      else localStorage.removeItem("viewStatsHidden");
+    } catch {}
+  }
+
   /** Volume of the partner's sound, 0–100, remembered on this computer. */
   let audioVolume = $state(
     (() => {
@@ -1917,6 +1938,9 @@
   <div class="viewer">
     <div class="toolbar">
       <div class="toolbar-row">
+        {#if statsHidden}
+          {@render healthDot(view)}
+        {/if}
         {#if view.peerName}
           <span class="strong peer-name" title="Nome impostato dal partner">{view.peerName}</span>
           <span class="muted">·</span>
@@ -2021,9 +2045,17 @@
         </select>
         <button class="danger" onclick={disconnect}>{view.ended ? "Chiudi" : "Disconnetti"}</button>
       </div>
+      {#snippet healthDot(v: View)}
+        {@const health = connectionLevel(v)}
+        <button type="button" class="health {health.level}" onclick={toggleStats}
+          aria-label={statsHidden ? "Mostra i dati della connessione" : "Nascondi i dati della connessione"}
+          title={(health.reasons.join("\n") || "Connessione in buone condizioni") +
+            (statsHidden ? "\nClic: mostra i dati della connessione" : "\nClic: nascondi i dati, resta solo il pallino")}
+        ></button>
+      {/snippet}
+      {#if !statsHidden}
       <div class="toolbar-row stats">
-        <span class="health {connectionLevel(view).level}" title={connectionLevel(view).reasons.join("\n") ||
-            "Connessione in buone condizioni"}></span>
+        {@render healthDot(view)}
         {#if view.path}
           <span class="badge path {view.path}" title={pathHint[view.path]}>{pathLabel[view.path]}</span>
         {/if}
@@ -2072,6 +2104,7 @@
           </span>
         {/if}
       </div>
+      {/if}
       {#if view.transfer}
         <div class="toolbar-row transfer">
           <progress max={view.transfer.total || 1} value={view.transfer.done}></progress>
@@ -2327,21 +2360,45 @@
           <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>{#if status.unattended}<path d="m9 12 2 2 4-4"/>{/if}</svg>
         </span>
         <div class="pref-text">
-          <span class="pref-title">Accesso non presidiato</span>
-          {#if status.unattended}
-            <span class="small ok-text">Attivo · con la password personale si entra senza conferma</span>
-          {:else}
-            <span class="hint small">
+          <span class="unattended-title">
+            <span class="pref-title">Accesso non presidiato</span>
+            <span class="state-pill" class:on={status.unattended}>{status.unattended ? "Attivo" : "Spento"}</span>
+          </span>
+          <span class="hint small">
+            {#if status.unattended}
+              Con la password personale si entra senza conferma
+            {:else}
               Con una password personale entri senza conferma{#if quick}, finché questa finestra è aperta{/if}
-            </span>
-          {/if}
+            {/if}
+          </span>
         </div>
         {#if status.unattended}
-          <button class="icon-btn" onclick={() => (personalDialog = { first: "", second: "", error: "" })}
-            title="Cambia password personale">Cambia password</button>
-          <button class="icon-btn" onclick={disablePersonal}>Disattiva</button>
+          <div class="menu-anchor">
+            <button class="icon-btn more" type="button" aria-label="Opzioni dell'accesso non presidiato"
+              aria-haspopup="menu" aria-expanded={unattendedMenu} onclick={() => (unattendedMenu = !unattendedMenu)}>
+              <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></svg>
+            </button>
+            {#if unattendedMenu}
+              <div class="popup-menu" role="menu">
+                <button type="button" role="menuitem" onclick={() => {
+                  unattendedMenu = false;
+                  personalDialog = { first: "", second: "", error: "" };
+                }}>
+                  <svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="4" /><path d="m10.8 12.2 8.2-8.2M17 6l2 2M15 8l2 2" /></svg>
+                  Cambia password personale
+                </button>
+                <button type="button" role="menuitem" class="danger-item" onclick={() => {
+                  unattendedMenu = false;
+                  disablePersonal();
+                }}>
+                  <svg viewBox="0 0 24 24"><path d="M12 3v9" /><path d="M6.3 7.3a8 8 0 1 0 11.4 0" /></svg>
+                  Disattiva
+                </button>
+              </div>
+            {/if}
+          </div>
         {:else}
-          <button class="icon-btn" disabled={!status.id}
+          <button class="icon-btn primary-small" disabled={!status.id}
             onclick={() => (personalDialog = { first: "", second: "", error: "" })}>Attiva</button>
         {/if}
       </div>
@@ -3119,6 +3176,15 @@
   </div>
 {/if}
 
+<svelte:window
+  onpointerdown={(e) => {
+    if (unattendedMenu && !(e.target as Element).closest?.(".menu-anchor")) unattendedMenu = false;
+  }}
+  onkeydown={(e) => {
+    if (unattendedMenu && e.key === "Escape") unattendedMenu = false;
+  }}
+/>
+
 <style>
   :global(:root) {
     --bg: #f1f5f9;
@@ -3566,6 +3632,16 @@
     flex: none;
     background: var(--ok);
   }
+  /* A button: a click hides or shows the connection data next to it. */
+  .toolbar button.health {
+    padding: 0;
+    border: none;
+    cursor: pointer;
+  }
+  .toolbar button.health:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
   .health.caution {
     background: var(--caution);
   }
@@ -3775,6 +3851,84 @@
   }
   .ok-text {
     color: var(--ok);
+  }
+  .unattended-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  /* On / off label of the unattended access. */
+  .state-pill {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+    color: var(--muted);
+    background: var(--bg);
+    border: 1px solid var(--border);
+  }
+  .state-pill.on {
+    color: var(--ok);
+    background: color-mix(in srgb, var(--ok) 12%, transparent);
+    border-color: color-mix(in srgb, var(--ok) 30%, transparent);
+  }
+  .menu-anchor {
+    position: relative;
+    flex: none;
+  }
+  .icon-btn.more {
+    display: grid;
+    place-items: center;
+    padding: 5px 8px;
+  }
+  .icon-btn.primary-small {
+    flex: none;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-text);
+    font-weight: 600;
+  }
+  .more svg,
+  .popup-menu svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .popup-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    z-index: 20;
+    min-width: 220px;
+    display: flex;
+    flex-direction: column;
+    padding: 5px;
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px color-mix(in srgb, #000 25%, transparent);
+  }
+  .popup-menu button {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 10px;
+    border: none;
+    background: none;
+    text-align: left;
+    font-size: 13px;
+  }
+  .popup-menu button:hover {
+    background: var(--bg);
+  }
+  .popup-menu .danger-item {
+    color: var(--err);
   }
   .connect-form {
     gap: 10px;
