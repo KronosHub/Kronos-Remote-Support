@@ -27,3 +27,8 @@ schermi" (ADR 0029) esisteva già ma era una voce di un menu a tendina, senza la
 ## Conseguenze
 - Il protocollo resta compatibile nei due sensi (campi con `serde(default)`, test `displays_from_old_hosts`).
 - Su Linux nessun pulsante degli Spazi (scorciatoie diverse per ogni ambiente desktop).
+
+## Aggiornamento (2026-11-12, dopo la prova in produzione della 2.2.3)
+Mission Control (Ctrl+↑) inviato dall'app non si apre sul Mac controllato, mentre Ctrl+← / Ctrl+→ cambiano
+Spazio. Tolto il comando (e Win+Tab su Windows): nella barra al centro resta l'etichetta "Spazi", nel pannello
+due pulsanti "Spazio precedente" / "Spazio successivo".

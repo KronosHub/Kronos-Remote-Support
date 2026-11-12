@@ -2099,29 +2099,26 @@
 
   // Spaces / virtual desktops of the partner (ADR 0068). Their shortcuts never reach the partner from the
   // keyboard: this computer takes Ctrl+arrows (macOS) or Ctrl+Win+arrows (Windows) for itself.
-  type SpaceMove = "prev" | "next" | "overview";
+  // Mission Control / Task view (Ctrl+↑, Win+Tab) did not open from injected keys in production: left out.
+  type SpaceMove = "prev" | "next";
   const SPACE_KEYS: Record<string, Record<SpaceMove, string[]>> = {
     macos: {
       prev: ["ControlLeft", "ArrowLeft"],
       next: ["ControlLeft", "ArrowRight"],
-      overview: ["ControlLeft", "ArrowUp"],
     },
     windows: {
       prev: ["ControlLeft", "MetaLeft", "ArrowLeft"],
       next: ["ControlLeft", "MetaLeft", "ArrowRight"],
-      overview: ["MetaLeft", "Tab"],
     },
   };
   const SPACE_TEXT: Record<string, Record<SpaceMove, [string, string]>> = {
     macos: {
       prev: ["Spazio precedente", "Ctrl ←"],
       next: ["Spazio successivo", "Ctrl →"],
-      overview: ["Mission Control", "Ctrl ↑"],
     },
     windows: {
       prev: ["Desktop precedente", "Ctrl Win ←"],
       next: ["Desktop successivo", "Ctrl Win →"],
-      overview: ["Visualizzazione attività", "Win Tab"],
     },
   };
   let spaceToast = $state<{ text: string; keys: string } | null>(null);
@@ -2455,10 +2452,9 @@
                 aria-label={SPACE_TEXT[view.os].prev[0]}>
                 <svg class="i" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6" /></svg>
               </button>
-              <button type="button" disabled={!view.control} onclick={() => moveSpace("overview")}
-                title={`${SPACE_TEXT[view.os].overview[0]} (${SPACE_TEXT[view.os].overview[1]}): ${view.os === "macos" ? "tutti gli Spazi e le app a tutto schermo" : "tutte le finestre e i desktop"}`}>
+              <span class="vseg-label" title={view.os === "macos" ? "Spazi del Mac del partner: le app a tutto schermo" : "Desktop virtuali del partner"}>
                 {@render gridIcon()}<span class="lbl">{view.os === "macos" ? "Spazi" : "Desktop"}</span>
-              </button>
+              </span>
               <button type="button" disabled={!view.control} onclick={() => moveSpace("next")}
                 title={`${SPACE_TEXT[view.os].next[0]} (${SPACE_TEXT[view.os].next[1]} sul computer del partner)`}
                 aria-label={SPACE_TEXT[view.os].next[0]}>
@@ -2614,14 +2610,11 @@
           {#if view.os && SPACE_KEYS[view.os]}
             <div class="b-label">{view.os === "macos" ? "Spazi del Mac" : "Desktop virtuali"}</div>
             <div class="b-spaces">
-              <button type="button" class="b-act" disabled={!view.control} onclick={() => moveSpace("prev")} aria-label={SPACE_TEXT[view.os].prev[0]}>
-                <svg class="i" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6" /></svg>
+              <button type="button" class="b-act" disabled={!view.control} onclick={() => moveSpace("prev")}>
+                <svg class="i" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6" /></svg>{view.os === "macos" ? "Spazio precedente" : "Desktop precedente"}
               </button>
-              <button type="button" class="b-act" disabled={!view.control} onclick={() => moveSpace("overview")}>
-                {@render gridIcon()}{SPACE_TEXT[view.os].overview[0]}
-              </button>
-              <button type="button" class="b-act" disabled={!view.control} onclick={() => moveSpace("next")} aria-label={SPACE_TEXT[view.os].next[0]}>
-                <svg class="i" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6" /></svg>
+              <button type="button" class="b-act" disabled={!view.control} onclick={() => moveSpace("next")}>
+                {view.os === "macos" ? "Spazio successivo" : "Desktop successivo"}<svg class="i" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6" /></svg>
               </button>
             </div>
           {/if}
@@ -4670,8 +4663,16 @@
   }
   .b-spaces {
     display: grid;
-    grid-template-columns: auto 1fr auto;
+    grid-template-columns: 1fr 1fr;
     gap: 5px;
+  }
+  .vseg-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 6px;
+    font-size: 12.5px;
+    color: var(--g-dim);
   }
   .b-screens {
     display: flex;

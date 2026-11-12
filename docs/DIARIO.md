@@ -787,4 +787,4 @@
   solo i numeri dopo il primo giro: le scritte uscivano dai monitor piccoli). Provato su questo Mac che Ctrl+→
   simulato come fa enigo cambia Spazio. Implementato (ADR 0068); in WebKit la mappa sovrapponeva i Retina
   (pixel contro punti): aggiunte le dimensioni in punti. Corretto il nome nelle Preferenze (form in colonna).
-
+- 2.2.3 pubblicata. Prova dell'utente: Mission Control non funziona dall'app; tolto dall'interfaccia.
