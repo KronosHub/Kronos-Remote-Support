@@ -40,3 +40,17 @@ pannello aperto, stesso vetro per barra e pannello, tema chiaro e scuro.
 ## Conseguenze
 - Senza puntina la barra copre la fascia alta dello schermo nei primi 30 s e quando viene ripristinata.
 - Il pulsante "pallino che nasconde i dati" di ADR 0066 non esce mai in una release.
+
+## Aggiornamento 2.2.2 (2026-11-12)
+- **Spazio per la barra sempre**: finché la barra è fuori (bloccata o no) l'immagine parte sotto di lei; quella
+  fascia dello schermo del partner (menu, schede) conta. Ritirata nel pallino, l'immagine riprende la fascia con
+  una transizione di altezza. Barra a 4 px dal bordo.
+- **Niente `backdrop-filter` sul pannello del pallino**: WebKit (l'app su macOS) non ritaglia lo strato sfocato
+  con il `clip-path`, e dopo la chiusura restava un riquadro sfocato vuoto. Al suo posto una tinta più densa
+  (`--g-panel`).
+- **Chat che si ritira da sola** dopo 30 s senza uso (non se fissata, con il puntatore sopra, con il campo attivo
+  o con del testo scritto); poi i messaggi accendono la linguetta. Linguetta più visibile: 34×92 px, bordo e icona
+  nel colore d'accento, scritta verticale "Chat", due scatti quando la chat si ritira.
+- Prove: oltre a Chrome headless, uno strumento Swift con `WKWebView` (stesso motore dell'app su Mac) che apre la
+  finestra di controllo con Tauri simulato, un decodificatore video finto e ne salva uno screenshot.
+

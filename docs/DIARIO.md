@@ -777,3 +777,9 @@
   `service` inviati a mano): trovati e corretti il campo della chat ristretto da `field-sizing`, il vetro chiaro
   grigio sul nero, "In attesa…" sotto la barra, il pannello vuoto con le animazioni ridotte.
 - 2.2.1 pubblicata (checks verdi, release al primo colpo, Linux senza blocchi apt).
+- Prova della 2.2.1 dell'utente: barra bloccata che copriva lo schermo (nelle prove no; deciso comunque che lo
+  schermo stia sempre sotto la barra aperta), riquadro vuoto dopo il pallino su Mac (WebKit non ritaglia il
+  `backdrop-filter` con il `clip-path`). Costruito `shot`, screenshot con `WKWebView`, e un decodificatore finto
+  nel banco di prova. Chat che si ritira dopo 30 s e linguetta più visibile, prima sulla pagina di esempio.
+- 2.2.2 pubblicata.
+

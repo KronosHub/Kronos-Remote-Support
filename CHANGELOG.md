@@ -2,6 +2,14 @@
 
 Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**, quando la versione è disponibile.
 
+## 2.2.2 — 2026-11-12
+- **Lo schermo non finisce più sotto la barra**: finché la barra è aperta, lo schermo del computer controllato parte
+  sotto di lei; quando si ritira nel pallino, lo schermo torna a tutta finestra. La barra è più vicina al bordo.
+- **Pallino**: uscendo dal pannello si richiude sempre nel pallino (su Mac restava un riquadro vuoto).
+- **Chat**: si ritira da sola sul bordo destro dopo 30 secondi senza usarla (non se è fissata o se stai
+  scrivendo); la linguetta per riaprirla è più grande, arancione, con la scritta CHAT, e si fa notare quando la
+  chat si ritira.
+
 ## 2.2.1 — 2026-11-12
 - **Barra della sessione rifatta**: vetro trasparente sopra lo schermo del computer controllato, azioni con icone,
   numeri della connessione su una riga sottile, tema chiaro e scuro.

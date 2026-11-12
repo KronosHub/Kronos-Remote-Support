@@ -1911,6 +1911,7 @@
       else localStorage.removeItem("chatPinned");
     } catch {}
     if (chatPinned && view) openViewChat(view, false);
+    armChatRetract();
   }
   let chatLog = $state<HTMLDivElement | null>(null);
   let chatInput = $state<HTMLTextAreaElement | null>(null);
@@ -1921,6 +1922,36 @@
     const log = chatLog;
     if (count && log) tick().then(() => log.scrollTo({ top: log.scrollHeight, behavior: "smooth" }));
   });
+  /** The chat slides away after 30 s without use, like the bar (ADR 0067). */
+  const CHAT_AUTO_HIDE_MS = 30_000;
+  let chatTimer: ReturnType<typeof setTimeout> | undefined;
+  let overChat = false;
+  let tabNudge = $state(false);
+  function armChatRetract() {
+    clearTimeout(chatTimer);
+    if (chatPinned || !view?.showChat) return;
+    chatTimer = setTimeout(() => {
+      const v = view;
+      if (!v || !v.showChat || chatPinned) return;
+      // Not while the pointer is on it, while typing or with something written.
+      if (overChat || document.activeElement === chatInput || chatDraft.trim()) {
+        armChatRetract();
+        return;
+      }
+      v.showChat = false;
+      v.chatDismissed = true;
+      // The tab nudges out to show where the chat went.
+      tabNudge = false;
+      tick().then(() => (tabNudge = true));
+      setTimeout(() => (tabNudge = false), 2000);
+    }, CHAT_AUTO_HIDE_MS);
+  }
+  function chatPointer(over: boolean) {
+    overChat = over;
+    if (over) clearTimeout(chatTimer);
+    else armChatRetract();
+  }
+
   function openViewChat(v: View, focus = true) {
     v.showChat = true;
     v.chatUsed = true;
@@ -1929,6 +1960,7 @@
     v.chatPeek = null;
     panelOpen = false;
     if (focus) tick().then(() => chatInput?.focus());
+    armChatRetract();
   }
   function hideViewChat(v: View) {
     if (chatPinned) return;
@@ -1938,7 +1970,10 @@
   }
   function receiveViewChat(v: View, text: string) {
     v.chat.push({ mine: false, text, time: nowTime() });
-    if (v.showChat) return;
+    if (v.showChat) {
+      armChatRetract();
+      return;
+    }
     // The first message opens the drawer, without taking the keyboard from the remote screen.
     if (!v.chatDismissed && !v.chatUsed) {
       openViewChat(v, false);
@@ -2215,10 +2250,9 @@
     {#snippet powerIcon()}
       <svg class="i" viewBox="0 0 24 24"><path d="M12 3v9" /><path d="M6.3 7.3a8 8 0 1 0 11.4 0" /></svg>
     {/snippet}
-    {#if barPinned && barShown}
-      <!-- Pinned: the picture starts below the bar instead of under it. -->
-      <div class="bar-space" style:height="{barHeight + 16}px"></div>
-    {/if}
+    <!-- While the bar is out (pinned or not) the picture starts below it: that strip of the partner's
+         screen (menu bar, tabs) matters. When the bar retracts into the dot, the picture takes it back. -->
+    <div class="bar-space" style:height="{barShown ? barHeight + 8 : 0}px"></div>
     <div class="vbar glass" class:gone={!barShown} bind:this={barEl} bind:clientHeight={barHeight}
       onmouseenter={() => (barHover = true)} onmouseleave={() => (barHover = false)}
       role="toolbar" aria-label="Barra della sessione" tabindex="-1">
@@ -2431,13 +2465,14 @@
     </div>
 
     {#if !view.ended}
-      <aside class="vchat glass" class:open={view.showChat} class:used={view.chatUsed} aria-label="Chat con il partner">
-        <button type="button" class="chat-tab" class:unread={view.unread > 0} style:top="{chatTabY * 100}%"
+      <aside class="vchat glass" class:open={view.showChat} class:used={view.chatUsed} aria-label="Chat con il partner"
+        onpointerenter={() => chatPointer(true)} onpointerleave={() => chatPointer(false)}>
+        <button type="button" class="chat-tab" class:unread={view.unread > 0} class:nudge={tabNudge} style:top="{chatTabY * 100}%"
           onclick={tabClick} onpointerdown={tabDown} onpointermove={tabMove} onpointerup={tabUp} onpointercancel={tabUp}
           onkeydown={tabKey}
           aria-label={view.unread > 0 ? `Apri la chat: ${view.unread} messaggi nuovi` : "Apri la chat"}
           title="Clic: apri la chat. Trascina in alto o in basso per spostare la linguetta" tabindex={view.showChat ? -1 : 0}>
-          {@render chatIcon()}<span class="tab-badge">{view.unread || ""}</span>
+          {@render chatIcon()}<span class="tab-label">Chat</span><span class="tab-badge">{view.unread || ""}</span>
         </button>
         <div class="vchat-head">
           <span class="strong">Chat</span>
@@ -2465,7 +2500,7 @@
         </div>
         <form class="vchat-compose" onsubmit={(e) => view && sendChat(view, e)}>
           <textarea rows="1" placeholder="Scrivi un messaggio" bind:value={chatDraft} bind:this={chatInput}
-            maxlength="2000" onkeydown={chatKey} aria-label="Messaggio"></textarea>
+            maxlength="2000" onkeydown={chatKey} oninput={armChatRetract} onblur={armChatRetract} aria-label="Messaggio"></textarea>
           <button type="submit" class="vsend" aria-label="Invia">
             <svg class="i" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
           </button>
@@ -3516,6 +3551,7 @@
     --g-sep: rgba(15, 23, 42, 0.12);
     --g-shadow: rgba(15, 23, 42, 0.18);
     --g-note: rgba(255, 255, 255, 0.85);
+    --g-panel: rgba(248, 250, 252, 0.94);
     --d-line: rgba(220, 38, 38, 0.28);
     --d-bg: rgba(220, 38, 38, 0.1);
     --d-text: #b91c1c;
@@ -3546,6 +3582,7 @@
       --g-sep: rgba(255, 255, 255, 0.12);
       --g-shadow: rgba(0, 0, 0, 0.28);
       --g-note: rgba(13, 19, 33, 0.8);
+      --g-panel: rgba(14, 20, 34, 0.9);
       --d-line: rgba(248, 113, 113, 0.3);
       --d-bg: rgba(220, 38, 38, 0.22);
       --d-text: #fecaca;
@@ -3573,6 +3610,7 @@
     --g-sep: rgba(255, 255, 255, 0.12);
     --g-shadow: rgba(0, 0, 0, 0.28);
     --g-note: rgba(13, 19, 33, 0.8);
+    --g-panel: rgba(14, 20, 34, 0.9);
     --d-line: rgba(248, 113, 113, 0.3);
     --d-bg: rgba(220, 38, 38, 0.22);
     --d-text: #fecaca;
@@ -3969,6 +4007,7 @@
   }
   .bar-space {
     flex: none;
+    transition: height 0.45s var(--ease-in-out);
   }
   .viewer svg.i {
     width: 15px;
@@ -3985,7 +4024,7 @@
     position: absolute;
     left: 8px;
     right: 8px;
-    top: 8px;
+    top: 4px;
     z-index: 6;
     display: flex;
     flex-direction: column;
@@ -3995,7 +4034,8 @@
     font-size: 13px;
     backdrop-filter: blur(18px) saturate(1.7);
     -webkit-backdrop-filter: blur(18px) saturate(1.7);
-    transform-origin: 15px 15px;
+    /* The dot's centre (23, 23 in the window) seen from the bar's corner (8, 4). */
+    transform-origin: 15px 19px;
     will-change: transform, opacity;
     transition:
       transform var(--dur-slow) var(--spring-soft),
@@ -4255,11 +4295,17 @@
       opacity 0.25s var(--ease-out) 0.3s,
       transform 0.45s var(--spring) 0.3s;
   }
+  /* No backdrop-filter here: WebKit (the macOS app) does not clip the blurred layer with clip-path, so
+     after closing an empty frosted rectangle stayed on screen. A denser tint gives the same glass look. */
   .blob.shown.open {
     clip-path: inset(0 0 0 0 round 18px);
-    backdrop-filter: blur(18px) saturate(1.7);
-    -webkit-backdrop-filter: blur(18px) saturate(1.7);
     transition: clip-path var(--dur-slow) var(--spring-soft);
+  }
+  .blob.glass {
+    background:
+      radial-gradient(70% 160% at 18% -40%, rgba(255, 255, 255, 0.16), transparent 60%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02) 55%, rgba(255, 255, 255, 0.05)),
+      var(--g-panel);
   }
   .blob.fading {
     clip-path: inset(0 0 0 0 round 18px);
@@ -4603,28 +4649,34 @@
     flex: none;
     transition: transform 0.45s var(--spring);
   }
+  /* Wide enough to see: accent edge and icon, a vertical "Chat", a soft accent glow. */
   .chat-tab {
     position: absolute;
-    left: -27px;
+    left: -34px;
     top: 50%;
-    width: 27px;
-    height: 64px;
-    margin-top: -32px;
+    width: 34px;
+    height: 92px;
+    margin-top: -46px;
     touch-action: none;
     box-sizing: border-box;
     padding: 0;
-    display: grid;
-    place-items: center;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: center;
+    justify-content: center;
     border-radius: 12px 0 0 12px;
     border: 1px solid var(--g-edge);
     border-right: none;
-    color: var(--g-dim);
+    color: var(--accent);
     background:
       linear-gradient(90deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03)),
-      var(--g-tint);
-    backdrop-filter: blur(18px) saturate(1.7);
-    -webkit-backdrop-filter: blur(18px) saturate(1.7);
-    box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.2), -6px 0 18px var(--g-shadow);
+      var(--g-panel);
+    box-shadow:
+      inset 3px 0 0 var(--accent),
+      inset 1px 1px 0 rgba(255, 255, 255, 0.2),
+      -6px 0 22px var(--g-shadow),
+      0 0 18px color-mix(in srgb, var(--accent) 22%, transparent);
     cursor: pointer;
     opacity: 0;
     transform: translateX(10px);
@@ -4642,7 +4694,41 @@
     transition-delay: 0.15s, 0.15s, 0s, 0s;
   }
   .chat-tab:hover {
+    transform: translateX(-3px);
+  }
+  .chat-tab svg.i {
+    width: 17px;
+    height: 17px;
+  }
+  .tab-label {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
     color: var(--text);
+  }
+  .chat-tab.unread .tab-label {
+    color: var(--accent-text);
+  }
+  /* The chat retracted by itself: the tab nudges out twice so the eye finds it. */
+  .chat-tab.nudge {
+    animation: tab-nudge 1.3s var(--ease-out) 0.5s;
+  }
+  @keyframes tab-nudge {
+    0%,
+    40%,
+    80%,
+    100% {
+      transform: none;
+    }
+    20% {
+      transform: translateX(-10px);
+    }
+    60% {
+      transform: translateX(-6px);
+    }
   }
   .tab-badge {
     position: absolute;
@@ -4683,7 +4769,7 @@
   }
   .chat-peek {
     position: absolute;
-    right: 36px;
+    right: 42px;
     top: 50%;
     margin-top: -22px;
     max-width: 240px;
