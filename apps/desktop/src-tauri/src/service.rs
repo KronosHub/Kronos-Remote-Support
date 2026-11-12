@@ -2532,7 +2532,10 @@ async fn serve_partner(
         agent_product: (!crate::logon_host()).then(|| crate::agent_product().to_owned()),
         // Computers used only remotely: the viewer may set the screen to its window size.
         resize_display: remote_only(&shared.store),
-        virtual_size: shared.store.virtual_size().filter(|s| stream::virtual_sizes().contains(s)),
+        virtual_size: shared
+            .store
+            .virtual_size()
+            .filter(|s| stream::virtual_sizes().contains(s)),
         allow_clipboard: allowed.clipboard && !logon,
         ..StreamConfig::default()
     };

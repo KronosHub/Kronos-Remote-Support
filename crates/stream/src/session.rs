@@ -819,7 +819,11 @@ async fn ensure_screen(config: &StreamConfig, keeper: &mut Option<VirtualScreen>
             }
             if let Some((width, height)) = size {
                 // Also when the display already existed, set to another size by a viewer.
-                let want = capture::resolution::Request { width, height, scale: 1.0 };
+                let want = capture::resolution::Request {
+                    width,
+                    height,
+                    scale: 1.0,
+                };
                 match capture::resolution::set(screen.id(), want) {
                     Ok(Some(_)) => {
                         // macOS applies the mode a moment later: capture once it has.
