@@ -748,3 +748,14 @@
   Provata l'app in sviluppo (identificatore `.dev`) in chiaro e in scuro; test e clippy puliti.
 - Mockup della schermata principale (chiaro, scuro con schermo condiviso). L'utente ha scelto la schermata principale
   nuova e le Preferenze B (a schede): implementate, viste nell'app in sviluppo, release 2.2.0.
+
+## 2026-11-11/12 — Release 2.2.0 e runner Ubuntu
+- Prima esecuzione della release: Apple Silicon fallito al caricamento (`Not Found` cancellando un asset, gara tra
+  build parallele su `latest.json`), Linux fermo per 40 min su `apt-get`. Rilanciati i job: Apple Silicon a posto,
+  Linux di nuovo fermo.
+- Causa dal log: il DNS dei runner non risolveva `azure.archive.ubuntu.com`, `archive.ubuntu.com`,
+  `security.ubuntu.com` (gli altri nomi sì). Correzione: tentativi a tempo, poi sorgenti riscritte verso
+  `mirrors.edge.kernel.org` e `mirror.math.princeton.edu`. Primo tentativo di correzione caduto subito per `bash -e`
+  della shell di GitHub (`set +e` nel secondo).
+- Nuova esecuzione con la correzione: tutto verde, 2.2.0 pubblicata (Latest) alle 15:41 UTC.
+- I `checks` della 2.2.0 fallivano su `cargo fmt --check` (`service.rs`, `session.rs`): formattato.
