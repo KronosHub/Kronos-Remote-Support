@@ -782,4 +782,9 @@
   `backdrop-filter` con il `clip-path`). Costruito `shot`, screenshot con `WKWebView`, e un decodificatore finto
   nel banco di prova. Chat che si ritira dopo 30 s e linguetta più visibile, prima sulla pagina di esempio.
 - 2.2.2 pubblicata.
+- 2.2.2 pubblicata. Richiesta: vedere tutti gli schermi con la loro posizione (c'era già, ADR 0029, nascosto in un
+  menu) e passare tra le app a tutto schermo del Mac controllato. Pagina di esempio "Schermi e Spazi" (mappa con
+  solo i numeri dopo il primo giro: le scritte uscivano dai monitor piccoli). Provato su questo Mac che Ctrl+→
+  simulato come fa enigo cambia Spazio. Implementato (ADR 0068); in WebKit la mappa sovrapponeva i Retina
+  (pixel contro punti): aggiunte le dimensioni in punti. Corretto il nome nelle Preferenze (form in colonna).
 

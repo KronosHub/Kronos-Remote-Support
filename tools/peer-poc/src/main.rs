@@ -584,7 +584,9 @@ async fn view(
                     message.unwrap_or_default()
                 )
             }
-            ViewerEvent::Displays { displays, current } => {
+            ViewerEvent::Displays {
+                displays, current, ..
+            } => {
                 for d in displays {
                     let mark = if d.id == current { "*" } else { " " };
                     println!(

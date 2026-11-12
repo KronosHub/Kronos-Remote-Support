@@ -57,6 +57,10 @@ pub enum ControlMsg {
     Displays {
         displays: Vec<DisplayInfo>,
         current: u32,
+        /// The host's operating system (`std::env::consts::OS`: "macos", "windows", "linux"),
+        /// so the viewer offers the right shortcuts (Spaces on macOS). Absent from old hosts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        os: Option<String>,
     },
     /// Viewer → host: share another monitor.
     SelectDisplay {
@@ -142,6 +146,17 @@ pub struct DisplayInfo {
     pub width: u32,
     pub height: u32,
     pub primary: bool,
+    /// Place and size in the host's desktop coordinates (points on macOS, where `width` and
+    /// `height` are native pixels), for drawing the monitors as they are arranged. 0 from old
+    /// hosts.
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
+    #[serde(default)]
+    pub area_width: u32,
+    #[serde(default)]
+    pub area_height: u32,
 }
 
 /// A user input event, independent of the viewer's OS and screen size.
@@ -295,6 +310,30 @@ mod tests {
             r#"{"t":"report","received":300,"lost":2,"rtt_ms":41}"#
         );
         assert_eq!(ControlMsg::from_json(msg.to_json().as_bytes()), Some(msg));
+    }
+
+    #[test]
+    fn displays_from_old_hosts() {
+        // Before 2.2.3: no operating system, no monitor positions.
+        let old = br#"{"t":"displays","displays":[{"id":1,"name":"A","width":1920,"height":1080,"primary":true}],"current":1}"#;
+        let Some(ControlMsg::Displays { displays, os, .. }) = ControlMsg::from_json(old) else {
+            panic!("old displays message not parsed");
+        };
+        assert_eq!(os, None);
+        assert_eq!((displays[0].x, displays[0].y), (0, 0));
+        // New hosts say both.
+        let new = ControlMsg::Displays {
+            displays: vec![DisplayInfo {
+                x: -1512,
+                y: 458,
+                area_width: 1512,
+                area_height: 982,
+                ..displays[0].clone()
+            }],
+            current: 1,
+            os: Some("macos".into()),
+        };
+        assert_eq!(ControlMsg::from_json(new.to_json().as_bytes()), Some(new));
     }
 
     #[test]

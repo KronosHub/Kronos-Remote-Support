@@ -668,6 +668,10 @@ async fn send_displays(channel: &Arc<dyn DataChannel>, config: &StreamConfig, cu
             width,
             height,
             primary: false,
+            x: 0,
+            y: 0,
+            area_width: 0,
+            area_height: 0,
         }
     });
     let displays = displays
@@ -678,10 +682,23 @@ async fn send_displays(channel: &Arc<dyn DataChannel>, config: &StreamConfig, cu
             width: d.width,
             height: d.height,
             primary: d.primary,
+            x: d.bounds.x.round() as i32,
+            y: d.bounds.y.round() as i32,
+            area_width: d.bounds.width.round() as u32,
+            area_height: d.bounds.height.round() as u32,
         })
         .chain(all)
         .collect();
-    send(channel, &ControlMsg::Displays { displays, current }).await;
+    let os = Some(std::env::consts::OS.to_owned());
+    send(
+        channel,
+        &ControlMsg::Displays {
+            displays,
+            current,
+            os,
+        },
+    )
+    .await;
 }
 
 /// Restarts capture on another monitor. The old stream stops first so the two encoders
@@ -940,6 +957,8 @@ pub enum ViewerEvent {
     Displays {
         displays: Vec<protocol::DisplayInfo>,
         current: u32,
+        /// The host's operating system, when it says (see `ControlMsg::Displays`).
+        os: Option<String>,
     },
     /// The host may set its screen to this window's size (`ViewerCommand::MatchResolution`).
     ResolutionAdjustable,
@@ -1111,8 +1130,8 @@ pub async fn run_viewer(
                     Some(ControlMsg::Quality { kbps, fps, limited }) => {
                         on_event(ViewerEvent::Quality { kbps, fps, limited })
                     }
-                    Some(ControlMsg::Displays { displays, current }) => {
-                        on_event(ViewerEvent::Displays { displays, current });
+                    Some(ControlMsg::Displays { displays, current, os }) => {
+                        on_event(ViewerEvent::Displays { displays, current, os });
                     }
                     Some(ControlMsg::InputUnavailable { message }) => {
                         on_event(ViewerEvent::ControlUnavailable(message));

@@ -59,7 +59,7 @@
       }
     | { kind: "view_control_unavailable"; session: number; message: string }
     | { kind: "view_no_screen"; session: number; message: string }
-    | { kind: "view_displays"; session: number; displays: DisplayInfo[]; current: number }
+    | { kind: "view_displays"; session: number; displays: DisplayInfo[]; current: number; os?: string | null }
     | {
         kind: "view_closed";
         session: number;
@@ -92,6 +92,8 @@
     controlError: string | null;
     displays: DisplayInfo[];
     currentDisplay: number | null;
+    /** The partner's operating system ("macos", "windows", "linux"), when it says (2.2.3+). */
+    os: string | null;
     /** When the picture was resynchronised (ms timestamps, last minute only). */
     resyncs: number[];
     /** The first resync is the decoder starting up: not shown. */
@@ -156,7 +158,19 @@
     blocked: boolean;
     transfer: Transfer | null;
   };
-  type DisplayInfo = { id: number; name: string; width: number; height: number; primary: boolean };
+  /** `x`, `y`: top-left in the partner's desktop (0 from hosts before 2.2.3). */
+  type DisplayInfo = {
+    id: number;
+    name: string;
+    width: number;
+    height: number;
+    primary: boolean;
+    x?: number;
+    y?: number;
+    /** Size in the same units as `x`, `y` (points on macOS; `width`/`height` are pixels). */
+    area_width?: number;
+    area_height?: number;
+  };
   type LogLine = { time: string; level: string; message: string };
   type Approval = { session: number; peer: string; deadline: number; total: number };
 
@@ -848,6 +862,7 @@
         if (view?.session === event.session) {
           view.displays = event.displays;
           view.currentDisplay = event.current;
+          view.os = event.os ?? null;
         }
         break;
       case "view_control_unavailable":
@@ -1448,6 +1463,7 @@
       controlError: null,
       displays: [],
       currentDisplay: null,
+      os: null,
       resyncs: [],
       resyncStarted: false,
       hd: true,
@@ -2081,6 +2097,86 @@
     invoke("set_high_resolution", { session: view.session, enabled: view.hd });
   }
 
+  // Spaces / virtual desktops of the partner (ADR 0068). Their shortcuts never reach the partner from the
+  // keyboard: this computer takes Ctrl+arrows (macOS) or Ctrl+Win+arrows (Windows) for itself.
+  type SpaceMove = "prev" | "next" | "overview";
+  const SPACE_KEYS: Record<string, Record<SpaceMove, string[]>> = {
+    macos: {
+      prev: ["ControlLeft", "ArrowLeft"],
+      next: ["ControlLeft", "ArrowRight"],
+      overview: ["ControlLeft", "ArrowUp"],
+    },
+    windows: {
+      prev: ["ControlLeft", "MetaLeft", "ArrowLeft"],
+      next: ["ControlLeft", "MetaLeft", "ArrowRight"],
+      overview: ["MetaLeft", "Tab"],
+    },
+  };
+  const SPACE_TEXT: Record<string, Record<SpaceMove, [string, string]>> = {
+    macos: {
+      prev: ["Spazio precedente", "Ctrl ←"],
+      next: ["Spazio successivo", "Ctrl →"],
+      overview: ["Mission Control", "Ctrl ↑"],
+    },
+    windows: {
+      prev: ["Desktop precedente", "Ctrl Win ←"],
+      next: ["Desktop successivo", "Ctrl Win →"],
+      overview: ["Visualizzazione attività", "Win Tab"],
+    },
+  };
+  let spaceToast = $state<{ text: string; keys: string } | null>(null);
+  let spaceToastTimer: ReturnType<typeof setTimeout> | undefined;
+  function moveSpace(move: SpaceMove) {
+    const os = view?.os;
+    if (!view || !os || !SPACE_KEYS[os] || !view.control) return;
+    const keys = SPACE_KEYS[os][move];
+    // Press in order, release in reverse: the partner sees the same combination a keyboard sends.
+    for (const code of keys) sendInput({ k: "key", code, down: true });
+    for (const code of [...keys].reverse()) sendInput({ k: "key", code, down: false });
+    const [text, combo] = SPACE_TEXT[os][move];
+    spaceToast = { text, keys: combo };
+    clearTimeout(spaceToastTimer);
+    spaceToastTimer = setTimeout(() => (spaceToast = null), 1300);
+  }
+
+  /** Monitors on the map (without "all of them"), scaled into a box of `w`×`h`. Hosts before
+   * 2.2.3 send no positions: then they are drawn side by side. */
+  const ALL_DISPLAYS = 4294967295;
+  function displayMap(list: DisplayInfo[], w: number, h: number) {
+    const mons = list.filter((d) => d.id !== ALL_DISPLAYS);
+    const placed = mons.some((d) => d.x || d.y);
+    let cursor = 0;
+    const rects = mons.map((d) => {
+      const w = d.area_width || d.width;
+      const h = d.area_height || d.height;
+      const x = placed ? (d.x ?? 0) : cursor;
+      cursor += w;
+      return { d, x, y: placed ? (d.y ?? 0) : 0, w, h };
+    });
+    if (!rects.length) return [];
+    const minX = Math.min(...rects.map((r) => r.x));
+    const minY = Math.min(...rects.map((r) => r.y));
+    const spanX = Math.max(...rects.map((r) => r.x + r.w)) - minX;
+    const spanY = Math.max(...rects.map((r) => r.y + r.h)) - minY;
+    const k = Math.min(w / spanX, h / spanY);
+    const offX = (w - spanX * k) / 2;
+    const offY = (h - spanY * k) / 2;
+    // A 2px gap between monitors that touch, as macOS draws them.
+    return rects.map((r, i) => ({
+      d: r.d,
+      n: i + 1,
+      left: offX + (r.x - minX) * k + 1,
+      top: offY + (r.y - minY) * k + 1,
+      width: Math.max(10, r.w * k - 2),
+      height: Math.max(8, r.h * k - 2),
+    }));
+  }
+  let screensOpen = $state(false);
+  function pickDisplay(id: number) {
+    screensOpen = false;
+    selectDisplay(id);
+  }
+
   async function selectDisplay(id: number) {
     if (!view || id === view.currentDisplay) return;
     releaseKeys();
@@ -2247,6 +2343,39 @@
     {#snippet filesIcon()}
       <svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="m10 13 2-2 2 2M12 11v5" /></svg>
     {/snippet}
+    {#snippet gridIcon()}
+      <svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="6" rx="1" /><rect x="14" y="4" width="7" height="6" rx="1" /><rect x="3" y="14" width="7" height="6" rx="1" /><rect x="14" y="14" width="7" height="6" rx="1" /></svg>
+    {/snippet}
+    {#snippet screensMenu()}
+      {@const mons = displayMap(view?.displays ?? [], 306, 96)}
+      {@const all = view?.displays.find((d) => d.id === ALL_DISPLAYS)}
+      <div class="screens-pop" role="dialog" aria-label="Schermi del partner">
+        <span class="strong">Schermi del partner</span>
+        <span class="sp-sub">Disposti come sul suo computer. Scegli quale vedere.</span>
+        <div class="sp-map">
+          {#each mons as m (m.d.id)}
+            <button type="button" class="sp-mon" class:main={m.d.primary} class:cur={m.d.id === view?.currentDisplay}
+              style:left="{m.left}px" style:top="{m.top}px" style:width="{m.width}px" style:height="{m.height}px"
+              title={m.d.name} onclick={() => pickDisplay(m.d.id)}>{m.n}</button>
+          {/each}
+        </div>
+        <div class="sp-list">
+          {#each mons as m (m.d.id)}
+            <button type="button" class:cur={m.d.id === view?.currentDisplay} onclick={() => pickDisplay(m.d.id)}>
+              <span class="sp-n">{m.n}</span>
+              <span class="sp-name">{m.d.name}{#if m.d.primary}<small>principale</small>{/if}</span>
+              <span class="sp-res mono">{m.d.width}×{m.d.height}</span>
+            </button>
+          {/each}
+        </div>
+        {#if all}
+          <button type="button" class="sp-all" class:cur={view?.currentDisplay === ALL_DISPLAYS} onclick={() => pickDisplay(ALL_DISPLAYS)}>
+            <svg class="i" viewBox="0 0 24 24"><rect x="2" y="6" width="8" height="6" rx="1" /><rect x="11" y="4" width="11" height="8" rx="1" /><path d="M8 18h8" /></svg>
+            Tutti gli schermi insieme
+          </button>
+        {/if}
+      </div>
+    {/snippet}
     {#snippet powerIcon()}
       <svg class="i" viewBox="0 0 24 24"><path d="M12 3v9" /><path d="M6.3 7.3a8 8 0 1 0 11.4 0" /></svg>
     {/snippet}
@@ -2319,6 +2448,24 @@
                 ? "HD attivo: con la rete buona fino a 2560×1600. Clic per limitare a 1080p (meno banda e CPU)"
                 : "HD spento: al massimo 1080p. Clic per riattivarlo"}>HD</button>
           </div>
+          {#if view.os && SPACE_KEYS[view.os]}
+            <div class="vseg" role="group" aria-label={view.os === "macos" ? "Spazi del Mac del partner" : "Desktop virtuali del partner"}>
+              <button type="button" disabled={!view.control} onclick={() => moveSpace("prev")}
+                title={`${SPACE_TEXT[view.os].prev[0]} (${SPACE_TEXT[view.os].prev[1]} sul computer del partner)`}
+                aria-label={SPACE_TEXT[view.os].prev[0]}>
+                <svg class="i" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6" /></svg>
+              </button>
+              <button type="button" disabled={!view.control} onclick={() => moveSpace("overview")}
+                title={`${SPACE_TEXT[view.os].overview[0]} (${SPACE_TEXT[view.os].overview[1]}): ${view.os === "macos" ? "tutti gli Spazi e le app a tutto schermo" : "tutte le finestre e i desktop"}`}>
+                {@render gridIcon()}<span class="lbl">{view.os === "macos" ? "Spazi" : "Desktop"}</span>
+              </button>
+              <button type="button" disabled={!view.control} onclick={() => moveSpace("next")}
+                title={`${SPACE_TEXT[view.os].next[0]} (${SPACE_TEXT[view.os].next[1]} sul computer del partner)`}
+                aria-label={SPACE_TEXT[view.os].next[0]}>
+                <svg class="i" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6" /></svg>
+              </button>
+            </div>
+          {/if}
           {#if view.audio && audioSupported}
             <input class="volume" type="range" min="0" max="100" value={audioVolume}
               oninput={(e) => setVolume(Number(e.currentTarget.value))}
@@ -2326,12 +2473,16 @@
           {/if}
         {/if}
         {#if view.displays.length > 1}
-          <select class="vselect" value={view.currentDisplay}
-            onchange={(e) => selectDisplay(Number(e.currentTarget.value))} title="Schermo del partner da visualizzare">
-            {#each view.displays as d (d.id)}
-              <option value={d.id}>{d.name} · {d.width}×{d.height}{d.primary ? " · principale" : ""}</option>
-            {/each}
-          </select>
+          {@const shown = view.displays.find((d) => d.id === view?.currentDisplay)}
+          <span class="screens-anchor">
+            <button type="button" class="vselect screens-btn" aria-haspopup="dialog" aria-expanded={screensOpen}
+              onclick={() => (screensOpen = !screensOpen)} title="Schermi del partner: scegli quale vedere, o tutti insieme">
+              <span class="mini-mons" aria-hidden="true"><i style="width:7px;height:6px"></i><i style="width:10px;height:8px"></i><i style="width:8px;height:6px"></i></span>
+              <span class="lbl">{shown?.name ?? "Schermo"}</span>
+              <svg class="i" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
+            </button>
+          </span>
+          {#if screensOpen}{@render screensMenu()}{/if}
         {/if}
         <select class="vselect" value={shownZoom} onchange={(e) => setZoom(e.currentTarget.value as Zoom)}
           title="Dimensione dell'immagine del partner. Adatta: riempie la finestra, ingrandita con un filtro che mantiene il testo nitido. Ingrandimento intero: ogni pixel del partner diventa un quadrato esatto di pixel del tuo schermo (il più grande che entra). Pixel reali: un pixel del partner per ogni pixel del tuo schermo, con le barre di scorrimento se non entra (senza controllo la rotellina scorre). Risoluzione adattata (solo computer usati da remoto): il partner porta il suo schermo alla risoluzione più vicina alla finestra, poi la ripristina alla fine"
@@ -2421,6 +2572,9 @@
       {#if view.notice}
         <p class="notice">{view.notice}</p>
       {/if}
+      <div class="space-toast glass-note" class:show={!!spaceToast} role="status">
+        {spaceToast?.text ?? ""}{#if spaceToast}<kbd>{spaceToast.keys}</kbd>{/if}
+      </div>
     </div>
 
     <!-- The status dot when the bar is hidden; the same shape grows into the panel. -->
@@ -2457,6 +2611,33 @@
             </button>
             <button type="button" class="b-act disc" onclick={disconnect}>{@render powerIcon()}Disconnetti</button>
           </div>
+          {#if view.os && SPACE_KEYS[view.os]}
+            <div class="b-label">{view.os === "macos" ? "Spazi del Mac" : "Desktop virtuali"}</div>
+            <div class="b-spaces">
+              <button type="button" class="b-act" disabled={!view.control} onclick={() => moveSpace("prev")} aria-label={SPACE_TEXT[view.os].prev[0]}>
+                <svg class="i" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6" /></svg>
+              </button>
+              <button type="button" class="b-act" disabled={!view.control} onclick={() => moveSpace("overview")}>
+                {@render gridIcon()}{SPACE_TEXT[view.os].overview[0]}
+              </button>
+              <button type="button" class="b-act" disabled={!view.control} onclick={() => moveSpace("next")} aria-label={SPACE_TEXT[view.os].next[0]}>
+                <svg class="i" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6" /></svg>
+              </button>
+            </div>
+          {/if}
+          {#if view.displays.length > 1}
+            <div class="b-label">Schermi</div>
+            <div class="b-screens">
+              {#each displayMap(view.displays, 300, 90) as m (m.d.id)}
+                <button type="button" class="b-act" class:cur={m.d.id === view.currentDisplay} title={m.d.name}
+                  onclick={() => selectDisplay(m.d.id)}>{m.n}</button>
+              {/each}
+              {#if view.displays.some((d) => d.id === ALL_DISPLAYS)}
+                <button type="button" class="b-act" class:cur={view.currentDisplay === ALL_DISPLAYS}
+                  onclick={() => selectDisplay(ALL_DISPLAYS)}>Tutti</button>
+              {/if}
+            </div>
+          {/if}
         </div>
       </div>
     </div>
@@ -3516,9 +3697,11 @@
 <svelte:window
   onpointerdown={(e) => {
     if (unattendedMenu && !(e.target as Element).closest?.(".menu-anchor")) unattendedMenu = false;
+    if (screensOpen && !(e.target as Element).closest?.(".screens-anchor")) screensOpen = false;
   }}
   onkeydown={(e) => {
     if (unattendedMenu && e.key === "Escape") unattendedMenu = false;
+    if (screensOpen && e.key === "Escape") screensOpen = false;
   }}
 />
 
@@ -3551,7 +3734,7 @@
     --g-sep: rgba(15, 23, 42, 0.12);
     --g-shadow: rgba(15, 23, 42, 0.18);
     --g-note: rgba(255, 255, 255, 0.85);
-    --g-panel: rgba(248, 250, 252, 0.94);
+    --g-panel: rgba(248, 250, 252, 0.96);
     --d-line: rgba(220, 38, 38, 0.28);
     --d-bg: rgba(220, 38, 38, 0.1);
     --d-text: #b91c1c;
@@ -3582,7 +3765,7 @@
       --g-sep: rgba(255, 255, 255, 0.12);
       --g-shadow: rgba(0, 0, 0, 0.28);
       --g-note: rgba(13, 19, 33, 0.8);
-      --g-panel: rgba(14, 20, 34, 0.9);
+      --g-panel: rgba(14, 20, 34, 0.94);
       --d-line: rgba(248, 113, 113, 0.3);
       --d-bg: rgba(220, 38, 38, 0.22);
       --d-text: #fecaca;
@@ -3610,7 +3793,7 @@
     --g-sep: rgba(255, 255, 255, 0.12);
     --g-shadow: rgba(0, 0, 0, 0.28);
     --g-note: rgba(13, 19, 33, 0.8);
-    --g-panel: rgba(14, 20, 34, 0.9);
+    --g-panel: rgba(14, 20, 34, 0.94);
     --d-line: rgba(248, 113, 113, 0.3);
     --d-bg: rgba(220, 38, 38, 0.22);
     --d-text: #fecaca;
@@ -3828,6 +4011,21 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+  /* The name editor is a form: the global form style stacks its children and gives the primary
+     button a top margin; here field and buttons stay on one line. */
+  form.value-row {
+    flex-direction: row;
+    flex-wrap: nowrap;
+  }
+  form.value-row .name-input {
+    flex: 1;
+    min-width: 160px;
+    width: auto;
+  }
+  form.value-row button {
+    margin-top: 0;
+    flex: none;
   }
   .dot {
     width: 8px;
@@ -4263,6 +4461,234 @@
     outline-offset: 1px;
   }
 
+  /* Spaces and the partner's monitors (ADR 0068). */
+  .vseg button:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .screens-anchor {
+    display: contents;
+  }
+  .screens-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+  }
+  .mini-mons {
+    display: inline-flex;
+    gap: 2px;
+    align-items: flex-end;
+  }
+  .mini-mons i {
+    display: block;
+    border: 1.5px solid currentColor;
+    border-radius: 2px;
+  }
+  /* Hangs from the bar's right edge, so it stays inside the window. */
+  .screens-pop {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 10px;
+    z-index: 20;
+    width: 330px;
+    max-width: calc(100% - 20px);
+    box-sizing: border-box;
+    padding: 12px;
+    border-radius: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background:
+      radial-gradient(70% 160% at 18% -40%, rgba(255, 255, 255, 0.16), transparent 60%),
+      var(--g-panel);
+    border: 1px solid var(--g-edge);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 14px 34px var(--g-shadow);
+    transform-origin: top right;
+    animation: screens-in 0.45s var(--spring-soft);
+  }
+  @keyframes screens-in {
+    from {
+      opacity: 0;
+      transform: scale(0.92) translateY(-6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  .sp-sub {
+    font-size: 11.5px;
+    color: var(--g-dim);
+    margin-top: -6px;
+  }
+  .sp-map {
+    position: relative;
+    height: 104px;
+    border-radius: 12px;
+    background: var(--g-recess);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
+    margin-top: 4px;
+  }
+  /* Like macOS Displays settings: only the number; the main monitor has the menu bar strip. */
+  .sp-mon {
+    position: absolute;
+    box-sizing: border-box;
+    margin-top: 4px;
+    padding: 0;
+    border-radius: 6px;
+    overflow: hidden;
+    cursor: pointer;
+    border: 1.5px solid var(--g-sep);
+    background: linear-gradient(160deg, #3b5b8f, #1b2440);
+    color: #fff;
+    font-weight: 700;
+    font-size: 17px;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+    display: grid;
+    place-items: center;
+    transition:
+      border-color 0.25s var(--ease-out),
+      box-shadow 0.25s var(--ease-out),
+      transform 0.45s var(--spring);
+  }
+  .sp-mon:hover {
+    transform: translateY(-2px);
+    border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+  .sp-mon.main::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 5px;
+    background: rgba(255, 255, 255, 0.75);
+  }
+  .sp-mon.cur {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  .sp-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .sp-list button,
+  .sp-all {
+    display: grid;
+    grid-template-columns: 22px 1fr auto;
+    gap: 8px;
+    align-items: center;
+    padding: 6px 8px;
+    border-radius: 9px;
+    border: 1px solid transparent;
+    background: none;
+    color: var(--text);
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.25s var(--ease-out);
+  }
+  .sp-list button:hover,
+  .sp-all:hover {
+    background: var(--g-hover);
+  }
+  .sp-list button.cur {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  .sp-n {
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    display: grid;
+    place-items: center;
+    font-weight: 700;
+    font-size: 11px;
+    background: var(--g-recess);
+  }
+  .sp-list button.cur .sp-n {
+    background: var(--accent);
+    color: var(--accent-text);
+  }
+  .sp-name small {
+    color: var(--g-dim);
+    margin-left: 6px;
+  }
+  .sp-res {
+    font-size: 11px;
+    color: var(--g-dim);
+  }
+  .sp-all {
+    display: flex;
+    justify-content: center;
+    border-color: var(--g-sep);
+    background: var(--g-on);
+  }
+  .sp-all.cur {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .space-toast {
+    position: absolute;
+    left: 50%;
+    top: 45%;
+    z-index: 4;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 9px 16px;
+    border-radius: 14px;
+    font-size: 13.5px;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.9);
+    transition:
+      opacity 0.25s var(--ease-out),
+      transform 0.45s var(--spring-soft);
+  }
+  .space-toast.show {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+  .space-toast kbd {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    padding: 1px 6px;
+    border-radius: 6px;
+    background: var(--g-recess);
+    border: 1px solid var(--g-sep);
+  }
+  .b-label {
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--g-dim);
+    margin-bottom: -4px;
+  }
+  .b-spaces {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 5px;
+  }
+  .b-screens {
+    display: flex;
+    gap: 5px;
+  }
+  .b-screens .b-act {
+    flex: 1;
+  }
+  .b-act.cur {
+    box-shadow: inset 0 0 0 1px var(--accent);
+    color: var(--accent);
+  }
+  .b-act:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
   /* The dot panel: one shape. Closed, its clip is an 18px circle around the dot (6px in from the
      corner); open, the same clip grows into the rounded panel. */
   .blob {
@@ -4395,6 +4821,9 @@
   }
   .b-rest > :nth-child(3) {
     --d: 0.24s;
+  }
+  .b-rest > :nth-child(n + 4) {
+    --d: 0.28s;
   }
   .b-verdict {
     color: var(--ok-text);

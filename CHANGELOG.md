@@ -2,6 +2,15 @@
 
 Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**, quando la versione è disponibile.
 
+## 2.2.3 — 2026-11-12
+- **Spazi del Mac**: nella barra (e nel pannello del pallino) i pulsanti **‹ Spazi ›** passano da un'app a tutto
+  schermo all'altra e aprono Mission Control sul Mac che controlli, cosa che dalla tua tastiera non si poteva
+  fare. Con un PC Windows gli stessi pulsanti cambiano desktop virtuale.
+- **Schermi del partner**: il menu degli schermi mostra i monitor disposti come sono davvero, con nome e
+  risoluzione, e "Tutti gli schermi insieme". Nel pannello del pallino si sceglie con 1, 2, 3… o Tutti.
+- **Preferenze**: modificando il tuo nome, campo e pulsanti Salva/Annulla restano su una riga.
+- Gli Spazi e la mappa servono la 2.2.3 anche sul computer controllato.
+
 ## 2.2.2 — 2026-11-12
 - **Lo schermo non finisce più sotto la barra**: finché la barra è aperta, lo schermo del computer controllato parte
   sotto di lei; quando si ritira nel pallino, lo schermo torna a tutta finestra. La barra è più vicina al bordo.
