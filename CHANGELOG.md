@@ -3,10 +3,15 @@
 Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**, quando la versione è disponibile.
 
 ## 2.2.1 — 2026-11-12
+- **Barra della sessione rifatta**: vetro trasparente sopra lo schermo del computer controllato, azioni con icone,
+  numeri della connessione su una riga sottile, tema chiaro e scuro.
+- **Più spazio per lo schermo**: dopo 30 secondi la barra si ritira nel pallino in alto a sinistra (o subito, con
+  la freccia accanto all'ID). Passando sul pallino si apre un pannello con la qualità della connessione, Chat,
+  Trasferimento file, **Ripristina barra** e Disconnetti. Con la **puntina** la barra resta sempre in alto.
+- **Chat a lato**: si apre sul bordo destro e si nasconde lasciando una linguetta, che si accende quando arrivano
+  messaggi nuovi.
 - **Appunti condivisi accesi** a ogni connessione: si spengono dal pulsante **Appunti** nella barra. Passa solo
   ciò che copi durante la sessione, e il computer controllato può sempre vietarli dalle Preferenze.
-- **Barra più pulita**: un clic sul pallino di stato nasconde i dati della connessione (video, rete, risorse) e
-  lascia solo il pallino; un altro clic li mostra di nuovo. La scelta viene ricordata.
 - **Accesso non presidiato** in una riga ordinata con l'etichetta **Attivo** o **Spento**; Cambia password e
   Disattiva sono nel menu **⋯**.
 

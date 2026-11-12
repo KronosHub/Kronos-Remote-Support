@@ -765,3 +765,9 @@
 - Richieste: appunti accesi di default, poter nascondere i dati della barra lasciando il pallino, riga Accesso
   non presidiato più gradevole. Tre proposte su una pagina (interruttore, riquadro di stato, compatta con menu):
   scelta la C. Fatto tutto (ADR 0066), svelte-check e `cargo check` puliti.
+- Barra del viewer: dal pallino cliccabile si è passati, con l'utente, a una barra in vetro che si ritira nel
+  pallino dopo 30 s, pannello al passaggio, puntina, "Ripristina barra" che parte dal pannello; poi la chat a
+  cassetto con linguetta. Pagine di esempio pubblicate e ritoccate molte volte (bordi doppi, pallino non
+  centrato di 1 px per il bordo, sfocatura non ritagliata dal `clip-path` in Chrome, chiusura in due tempi per
+  un ritardo ereditato). Implementato nell'app (ADR 0067); controllato con screenshot di Chrome headless solo
+  sulle pagine di esempio, non nell'app.

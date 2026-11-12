@@ -13,9 +13,8 @@ pulsanti. Tra tre proposte (interruttore, riquadro di stato, compatta con menu) 
 - **Appunti:** `run_viewer` parte con `share_clipboard = true`. Resta il resto di ADR 0063: si condivide solo
   ciò che viene copiato dopo l'accensione (quello che era negli appunti prima, spesso una password, non parte),
   il computer controllato può rifiutare con `deny_clipboard`, e la barra li spegne.
-- **Barra del viewer:** il pallino di stato è un pulsante. Un clic nasconde la riga dei dati e porta il pallino
-  nella prima riga, accanto al nome del partner; un altro clic la rimette. La scelta è ricordata su questo
-  computer (`localStorage` `viewStatsHidden`), come zoom e volume.
+- ~~**Barra del viewer:** il pallino di stato come pulsante che nasconde la riga dei dati.~~ Sostituito prima
+  della release da ADR 0067 (barra in vetro che si ritira nel pallino).
 - **Accesso non presidiato:** una riga con scudo, titolo ed etichetta Attivo/Spento, descrizione sotto su tutta
   la larghezza. Da attivo, un pulsante ⋯ apre un menu con "Cambia password personale" e "Disattiva" (si chiude
   con un clic fuori o Esc); da spento, un pulsante "Attiva".

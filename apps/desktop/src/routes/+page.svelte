@@ -120,8 +120,15 @@
     /** Transient message (files received on the clipboard...). */
     notice: string | null;
     chat: ChatMsg[];
+    /** The chat drawer is open on the right edge. */
     showChat: boolean;
     unread: number;
+    /** The drawer was opened at least once: when closed, its tab stays on the edge. */
+    chatUsed: boolean;
+    /** The user hid the drawer: new messages light up the tab instead of opening it. */
+    chatDismissed: boolean;
+    /** Start of the last message received while the drawer is hidden, shown next to the tab. */
+    chatPeek: string | null;
     /** Why the session ended; the window stays open to show it. */
     ended: string | null;
     /** Connecting again by itself (see `Reconnect` in service.rs): the window closes when
@@ -925,7 +932,7 @@
         if (view?.session === event.session) showNotice(event.message);
         break;
       case "view_chat":
-        if (view?.session === event.session) receiveChat(view, event.text);
+        if (view?.session === event.session) receiveViewChat(view, event.text);
         break;
       case "hosting_started":
         hosting = [
@@ -1462,6 +1469,9 @@
       chat: [],
       showChat: false,
       unread: 0,
+      chatUsed: false,
+      chatDismissed: false,
+      chatPeek: null,
     };
     startVideo(session);
   }
@@ -1726,23 +1736,217 @@
     invoke("set_block_input", { session: view.session, enabled: !view.inputBlocked });
   }
 
-  /** Connection data in the toolbar hidden (only the status dot), remembered on this computer. */
-  let statsHidden = $state(
-    (() => {
-      try {
-        return localStorage.getItem("viewStatsHidden") === "1";
-      } catch {
-        return false;
-      }
-    })(),
-  );
-
-  function toggleStats() {
-    statsHidden = !statsHidden;
+  // Viewer bar (ADR 0067): liquid glass over the partner's screen. After 30 s it shrinks into the
+  // status dot (unless pinned); hovering the dot opens a panel with the connection details.
+  const readFlag = (key: string) => {
     try {
-      if (statsHidden) localStorage.setItem("viewStatsHidden", "1");
-      else localStorage.removeItem("viewStatsHidden");
+      return localStorage.getItem(key) === "1";
+    } catch {
+      return false;
+    }
+  };
+  const BAR_AUTO_HIDE_MS = 30_000;
+  /** The hint next to the dot is shown the first times only. */
+  const BAR_HINT_TIMES = 3;
+  let barPinned = $state(readFlag("viewBarPinned"));
+  let barHidden = $state(false);
+  let barHint = $state(false);
+  let panelOpen = $state(false);
+  let panelFading = $state(false);
+  let barEl = $state<HTMLDivElement | null>(null);
+  let blobEl = $state<HTMLDivElement | null>(null);
+  let blobBody = $state<HTMLDivElement | null>(null);
+  let barHeight = $state(0);
+  let panelHeight = $state(220);
+  let barHover = false;
+  let barTimer: ReturnType<typeof setTimeout> | undefined;
+  let panelTimer: ReturnType<typeof setTimeout> | undefined;
+  let hintTimer: ReturnType<typeof setTimeout> | undefined;
+  let barStartedFor: number | null = null;
+  /** The bar stays out while the session is over (Chiudi, reconnecting). */
+  const barShown = $derived(!barHidden || !!view?.ended);
+
+  // Springs as CSS linear(): lightly underdamped, so shapes settle like a liquid.
+  (function installSprings() {
+    const spring = (k: number, c: number) => {
+      const dt = 1 / 240;
+      let x = 0;
+      let v = 0;
+      let t = 0;
+      const points: number[] = [];
+      while (t < 2) {
+        v += (-k * (x - 1) - c * v) * dt;
+        x += v * dt;
+        t += dt;
+        points.push(x);
+        if (t > 0.3 && Math.abs(x - 1) < 0.0005 && Math.abs(v) < 0.005) break;
+      }
+      const n = 90;
+      const values: string[] = [];
+      for (let i = 0; i <= n; i++) {
+        values.push(i === 0 ? "0" : i === n ? "1" : points[Math.round((i / n) * (points.length - 1))].toFixed(4));
+      }
+      return { easing: `linear(${values.join(", ")})`, duration: `${t.toFixed(2)}s` };
+    };
+    const quick = spring(220, 26);
+    const soft = spring(150, 21);
+    const supported = CSS.supports("transition-timing-function", quick.easing);
+    const root = document.documentElement.style;
+    root.setProperty("--spring", supported ? quick.easing : "cubic-bezier(.3, 1.3, .5, 1)");
+    root.setProperty("--spring-soft", supported ? soft.easing : "cubic-bezier(.3, 1.2, .45, 1)");
+    root.setProperty("--dur", quick.duration);
+    root.setProperty("--dur-slow", soft.duration);
+  })();
+
+  function scheduleBarHide(ms = BAR_AUTO_HIDE_MS) {
+    clearTimeout(barTimer);
+    if (barPinned) return;
+    barTimer = setTimeout(() => {
+      // Not while the pointer is on the bar, or a menu of it is open: try again shortly.
+      if (barHover || (document.activeElement && barEl?.contains(document.activeElement))) {
+        scheduleBarHide(3000);
+        return;
+      }
+      if (!barPinned && view && !view.ended) hideBar(true);
+    }, ms);
+  }
+
+  // "Dopo 30 secondi di connessione": counted from the first picture of each session.
+  $effect(() => {
+    if (view && view.width !== null && barStartedFor !== view.session) {
+      barStartedFor = view.session;
+      scheduleBarHide();
+    }
+  });
+
+  function hideBar(auto: boolean) {
+    clearTimeout(barTimer);
+    barHidden = true;
+    panelOpen = false;
+    if (!auto) return;
+    let shown = 0;
+    try {
+      shown = Number(localStorage.getItem("viewBarHint") ?? 0);
+      localStorage.setItem("viewBarHint", String(shown + 1));
     } catch {}
+    if (shown >= BAR_HINT_TIMES) return;
+    barHint = true;
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => (barHint = false), 6000);
+  }
+
+  function togglePin() {
+    barPinned = !barPinned;
+    try {
+      if (barPinned) localStorage.setItem("viewBarPinned", "1");
+      else localStorage.removeItem("viewBarPinned");
+    } catch {}
+    if (barPinned) clearTimeout(barTimer);
+    else scheduleBarHide();
+  }
+
+  function openPanel() {
+    clearTimeout(panelTimer);
+    if (!barHidden || panelOpen) return;
+    barHint = false;
+    panelOpen = true;
+  }
+  function closePanel() {
+    clearTimeout(panelTimer);
+    panelTimer = setTimeout(() => (panelOpen = false), 60);
+  }
+
+  /** "Ripristina barra": the open panel turns into the bar. The bar starts at the panel's size in
+   * the same corner and stretches to full width while the panel fades; nothing goes back through
+   * the dot. */
+  async function restoreBar() {
+    clearTimeout(panelTimer);
+    barHint = false;
+    const bar = barEl;
+    const blob = blobEl;
+    if (bar && blob && bar.offsetWidth && bar.offsetHeight) {
+      const sx = blob.offsetWidth / bar.offsetWidth;
+      const sy = blob.offsetHeight / bar.offsetHeight;
+      bar.style.transition = "none";
+      bar.style.transform = `scale(${sx}, ${sy})`;
+      bar.style.opacity = "0";
+      bar.getBoundingClientRect();
+      panelFading = true;
+      barHidden = false;
+      await tick();
+      bar.style.transition = bar.style.transform = bar.style.opacity = "";
+      setTimeout(() => {
+        panelOpen = false;
+        panelFading = false;
+      }, 450);
+    } else {
+      panelOpen = false;
+      barHidden = false;
+    }
+    scheduleBarHide();
+  }
+
+  $effect(() => {
+    const body = blobBody;
+    if (!body) return;
+    const observer = new ResizeObserver(() => (panelHeight = body.scrollHeight + 2));
+    observer.observe(body);
+    return () => observer.disconnect();
+  });
+
+  /** One line on how the connection is doing, for the dot's panel. */
+  function verdict(v: View): { level: "ok" | Level; text: string } {
+    const { level: l, reasons } = connectionLevel(v);
+    if (l === "ok") return { level: l, text: "Connessione ottima" };
+    const first = reasons[0].replace(/^(Critico|Attenzione): /, "");
+    return { level: l, text: (l === "critical" ? "Connessione in difficoltà: " : "Connessione rallentata: ") + first.toLowerCase() };
+  }
+
+  // Chat drawer on the right edge.
+  let chatLog = $state<HTMLDivElement | null>(null);
+  let chatInput = $state<HTMLTextAreaElement | null>(null);
+  let peekTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    // Follow new messages.
+    const count = view?.chat.length ?? 0;
+    const log = chatLog;
+    if (count && log) tick().then(() => log.scrollTo({ top: log.scrollHeight, behavior: "smooth" }));
+  });
+  function openViewChat(v: View, focus = true) {
+    v.showChat = true;
+    v.chatUsed = true;
+    v.chatDismissed = false;
+    v.unread = 0;
+    v.chatPeek = null;
+    panelOpen = false;
+    if (focus) tick().then(() => chatInput?.focus());
+  }
+  function hideViewChat(v: View) {
+    v.showChat = false;
+    v.chatDismissed = true;
+    chatDraft = "";
+  }
+  function receiveViewChat(v: View, text: string) {
+    v.chat.push({ mine: false, text, time: nowTime() });
+    if (v.showChat) return;
+    // The first message opens the drawer, without taking the keyboard from the remote screen.
+    if (!v.chatDismissed && !v.chatUsed) {
+      openViewChat(v, false);
+      return;
+    }
+    v.chatUsed = true;
+    v.unread += 1;
+    v.chatPeek = text.length > 90 ? text.slice(0, 90) + "…" : text;
+    clearTimeout(peekTimer);
+    peekTimer = setTimeout(() => {
+      if (view) view.chatPeek = null;
+    }, 4500);
+  }
+  function chatKey(e: KeyboardEvent) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      (e.currentTarget as HTMLTextAreaElement).form?.requestSubmit();
+    }
   }
 
   /** Volume of the partner's sound, 0–100, remembered on this computer. */
@@ -1935,185 +2139,154 @@
     </form>
   </div>
 {:else if viewSession !== null && view}
-  <div class="viewer">
-    <div class="toolbar">
-      <div class="toolbar-row">
-        {#if statsHidden}
-          {@render healthDot(view)}
-        {/if}
-        {#if view.peerName}
-          <span class="strong peer-name" title="Nome impostato dal partner">{view.peerName}</span>
-          <span class="muted">·</span>
-        {/if}
-        <span class="mono strong peer">{view.peer}</span>
-        <span class="spacer"></span>
-        {#if view.displays.length > 1}
-          <select
-            class="displays"
-            value={view.currentDisplay}
-            onchange={(e) => selectDisplay(Number(e.currentTarget.value))}
-            title="Schermo del partner da visualizzare"
-          >
-            {#each view.displays as d (d.id)}
-              <option value={d.id}>
-                {d.name} · {d.width}×{d.height}{d.primary ? " · principale" : ""}
-              </option>
-            {/each}
-          </select>
-        {/if}
-        {#if view.clipboard !== null && !view.ended}
-          <button class:active={view.clipboard} onclick={toggleClipboard}
-            title="Testo e file copiati su un computer si possono incollare sull'altro">
-            Appunti {view.clipboard ? "condivisi" : "spenti"}
+  {@const health = connectionLevel(view)}
+  {@const said = verdict(view)}
+  {@const resyncCount = recentResyncs(view)}
+  <div class="viewer" class:chat-open={view.showChat && !view.ended}>
+    {#snippet chatIcon()}
+      <svg class="i" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z" /></svg>
+    {/snippet}
+    {#snippet filesIcon()}
+      <svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="m10 13 2-2 2 2M12 11v5" /></svg>
+    {/snippet}
+    {#snippet powerIcon()}
+      <svg class="i" viewBox="0 0 24 24"><path d="M12 3v9" /><path d="M6.3 7.3a8 8 0 1 0 11.4 0" /></svg>
+    {/snippet}
+    {#if barPinned && barShown}
+      <!-- Pinned: the picture starts below the bar instead of under it. -->
+      <div class="bar-space" style:height="{barHeight + 16}px"></div>
+    {/if}
+    <div class="vbar glass" class:gone={!barShown} bind:this={barEl} bind:clientHeight={barHeight}
+      onmouseenter={() => (barHover = true)} onmouseleave={() => (barHover = false)}
+      role="toolbar" aria-label="Barra della sessione" tabindex="-1">
+      <div class="vrow">
+        <span class="vdot {health.level}" title={health.reasons.join("\n") || "Connessione in buone condizioni"}></span>
+        {#if view.peerName}<span class="vname" title="Nome impostato dal partner">{view.peerName}</span>{/if}
+        <span class="vid mono">{view.peer}</span>
+        <button type="button" class="vib" class:on={barPinned} aria-pressed={barPinned} onclick={togglePin}
+          title={barPinned ? "Barra bloccata in alto. Clic per farla nascondere da sola dopo 30 secondi" : "Blocca la barra in alto (non si nasconde da sola)"}
+          aria-label="Blocca la barra">
+          <svg class="i" viewBox="0 0 24 24"><path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z" /><path d="M12 14v6" /></svg>
+        </button>
+        {#if !view.ended}
+          <button type="button" class="vib" onclick={() => hideBar(false)}
+            title="Nascondi la barra (più spazio per lo schermo); passa sul pallino in alto a sinistra per ripristinarla"
+            aria-label="Nascondi la barra">
+            <svg class="i" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6" /></svg>
           </button>
         {/if}
+        <span class="spacer"></span>
         {#if view.ended && view.reconnecting}
           <span class="badge warn">Ricollegamento…</span>
         {:else if view.ended}
           <span class="badge warn">Sessione terminata</span>
-        {:else if view.controlError}
-          <span class="badge warn" title={view.controlError}>Solo visione</span>
         {:else}
-          <button class:active={view.control} onclick={toggleControl}
-            title="Invia mouse e tastiera al partner">
-            Controllo {view.control ? "attivo" : "spento"}
-          </button>
-        {/if}
-        {#if !view.ended && view.control && !view.controlError}
-          <button
-            class:active={view.inputBlocked}
-            onclick={toggleBlockInput}
-            title={view.inputBlocked
-              ? "Mouse e tastiera del partner bloccati: chi è davanti al suo computer non può usarli (può sbloccarli premendo Esc tre volte). Clic per sbloccarli"
-              : "Blocca mouse e tastiera del partner, così chi è davanti al suo computer non interferisce"}>
-            {view.inputBlocked ? "Input partner bloccato" : "Blocca input partner"}
-          </button>
-        {/if}
-        {#if !view.ended}
-          <button
-            class:active={view.showChat}
-            class:blink={view.unread > 0 && !view.showChat}
-            onclick={() => view && toggleChat(view)}
-            title="Scrivi al partner">
-            Chat{#if view.unread > 0} <span class="chat-badge">{view.unread}</span>{/if}
-          </button>
-        {/if}
-        {#if !view.ended}
-          <button onclick={openFiles}
-            title="Sfoglia le cartelle del partner e copia file nei due sensi">Trasferimento file</button>
-        {/if}
-        {#if !view.ended && audioSupported}
-          <button
-            class:active={view.audio}
-            onclick={toggleAudio}
-            title={view.audio ? "Audio del partner attivo. Clic per spegnerlo" : "Ascolta l'audio del partner (circa 64 kbit/s)"}
-            >Audio</button>
-          {#if view.audio}
-            <input
-              class="volume"
-              type="range"
-              min="0"
-              max="100"
-              value={audioVolume}
+          <div class="vseg">
+            {#if view.controlError}
+              <span class="badge warn" title={view.controlError}>Solo visione</span>
+            {:else}
+              <button type="button" class:on={view.control} onclick={toggleControl}
+                title={view.control ? "Controllo attivo: mouse e tastiera vanno al partner. Clic per guardare soltanto" : "Solo visione. Clic per inviare mouse e tastiera al partner"}>
+                <svg class="i" viewBox="0 0 24 24"><path d="m4 4 7 16 2-7 7-2z" /></svg><span class="lbl">Controllo</span>
+              </button>
+              {#if view.control}
+                <button type="button" class:on={view.inputBlocked} onclick={toggleBlockInput}
+                  title={view.inputBlocked
+                    ? "Mouse e tastiera del partner bloccati: chi è davanti al suo computer non può usarli (può sbloccarli premendo Esc tre volte). Clic per sbloccarli"
+                    : "Blocca mouse e tastiera del partner, così chi è davanti al suo computer non interferisce"}>
+                  <svg class="i" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg><span class="lbl">Blocca input</span>
+                </button>
+              {/if}
+            {/if}
+            <button type="button" class="chat-btn" class:on={view.showChat} class:unread={view.unread > 0}
+              onclick={() => view && (view.showChat ? hideViewChat(view) : openViewChat(view))} title="Scrivi al partner">
+              {@render chatIcon()}<span class="lbl">Chat</span>{#if view.unread > 0}<span class="count">{view.unread}</span>{/if}
+            </button>
+            {#if view.clipboard !== null}
+              <button type="button" class:on={view.clipboard} onclick={toggleClipboard}
+                title={view.clipboard ? "Appunti condivisi: testo e file copiati su un computer si incollano sull'altro. Clic per spegnerli" : "Appunti spenti. Clic per condividerli"}>
+                <svg class="i" viewBox="0 0 24 24"><rect x="7" y="4" width="10" height="4" rx="1" /><path d="M7 6H5v15h14V6h-2" /></svg><span class="lbl">Appunti</span>
+              </button>
+            {/if}
+            <button type="button" onclick={openFiles} title="Sfoglia le cartelle del partner e copia file nei due sensi">
+              {@render filesIcon()}<span class="lbl">File</span>
+            </button>
+            {#if audioSupported}
+              <button type="button" class:on={view.audio} onclick={toggleAudio}
+                title={view.audio ? "Audio del partner attivo. Clic per spegnerlo" : "Ascolta l'audio del partner (circa 64 kbit/s)"}>
+                <svg class="i" viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4z" /><path d="M16 9a4 4 0 0 1 0 6" /></svg><span class="lbl">Audio</span>
+              </button>
+            {/if}
+            <button type="button" class:on={view.hd} onclick={toggleHd}
+              title={view.hd
+                ? "HD attivo: con la rete buona fino a 2560×1600. Clic per limitare a 1080p (meno banda e CPU)"
+                : "HD spento: al massimo 1080p. Clic per riattivarlo"}>HD</button>
+          </div>
+          {#if view.audio && audioSupported}
+            <input class="volume" type="range" min="0" max="100" value={audioVolume}
               oninput={(e) => setVolume(Number(e.currentTarget.value))}
-              title="Volume: {audioVolume} %"
-              aria-label="Volume dell'audio del partner"
-            />
+              title="Volume: {audioVolume} %" aria-label="Volume dell'audio del partner" />
           {/if}
         {/if}
-        {#if !view.ended}
-          <button
-            class:active={view.hd}
-            onclick={toggleHd}
-            title={view.hd
-              ? "HD attivo: con la rete buona fino a 2560×1600. Clic per limitare a 1080p (meno banda e CPU)"
-              : "HD spento: al massimo 1080p. Clic per riattivarlo"}>HD</button>
+        {#if view.displays.length > 1}
+          <select class="vselect" value={view.currentDisplay}
+            onchange={(e) => selectDisplay(Number(e.currentTarget.value))} title="Schermo del partner da visualizzare">
+            {#each view.displays as d (d.id)}
+              <option value={d.id}>{d.name} · {d.width}×{d.height}{d.primary ? " · principale" : ""}</option>
+            {/each}
+          </select>
         {/if}
-        <select
-          class="displays"
-          value={shownZoom}
-          onchange={(e) => setZoom(e.currentTarget.value as Zoom)}
+        <select class="vselect" value={shownZoom} onchange={(e) => setZoom(e.currentTarget.value as Zoom)}
           title="Dimensione dell'immagine del partner. Adatta: riempie la finestra, ingrandita con un filtro che mantiene il testo nitido. Ingrandimento intero: ogni pixel del partner diventa un quadrato esatto di pixel del tuo schermo (il più grande che entra). Pixel reali: un pixel del partner per ogni pixel del tuo schermo, con le barre di scorrimento se non entra (senza controllo la rotellina scorre). Risoluzione adattata (solo computer usati da remoto): il partner porta il suo schermo alla risoluzione più vicina alla finestra, poi la ripristina alla fine"
-          aria-label="Dimensione dell'immagine"
-        >
+          aria-label="Dimensione dell'immagine">
           <option value="fit">Adatta</option>
           <option value="whole">Intero ×{wholeMultiple}</option>
           <option value="native">Pixel reali</option>
-          {#if view.resizable}
-            <option value="remote">Risoluzione adattata</option>
-          {/if}
+          {#if view.resizable}<option value="remote">Risoluzione adattata</option>{/if}
         </select>
-        <button class="danger" onclick={disconnect}>{view.ended ? "Chiudi" : "Disconnetti"}</button>
+        <button type="button" class="vdisc" onclick={disconnect}>{@render powerIcon()}{view.ended ? "Chiudi" : "Disconnetti"}</button>
       </div>
-      {#snippet healthDot(v: View)}
-        {@const health = connectionLevel(v)}
-        <button type="button" class="health {health.level}" onclick={toggleStats}
-          aria-label={statsHidden ? "Mostra i dati della connessione" : "Nascondi i dati della connessione"}
-          title={(health.reasons.join("\n") || "Connessione in buone condizioni") +
-            (statsHidden ? "\nClic: mostra i dati della connessione" : "\nClic: nascondi i dati, resta solo il pallino")}
-        ></button>
-      {/snippet}
-      {#if !statsHidden}
-      <div class="toolbar-row stats">
-        {@render healthDot(view)}
-        {#if view.path}
-          <span class="badge path {view.path}" title={pathHint[view.path]}>{pathLabel[view.path]}</span>
-        {/if}
+      <div class="vstats">
+        {#if view.path}<span><span class="vpath {view.path}" title={pathHint[view.path]}>{pathLabel[view.path]}</span></span>{/if}
         {#if view.width}
-          <span class="stat {level(view.rtt, 150, 300)}"
-            title={"Risoluzione, compressione, fotogrammi al secondo e latenza (giallo da 150 ms, rosso da 300 ms)" +
-              (view.hardware === null ? "" : view.hardware
-                ? "\nGPU: il video è compresso dal chip video del computer controllato"
-                : "\nCPU: il video è compresso dal processore del computer controllato (chip video non disponibile)")}>
-            <span class="stat-k">Video</span>
-            <span class="stat-v mono" style="min-width: 34ch">{pad(`${view.width}×${view.height}`, 9)} {view.hardware === null ? "   " : view.hardware ? "GPU" : "CPU"} · {pad(view.fps === null ? "–" : view.fps.toFixed(0), 2)} fps · {pad(view.rtt === null ? "–" : view.rtt.toFixed(0), 4)} ms</span>
-          </span>
+          <span class={level(view.rtt, 150, 300)} title="Latenza: giallo da 150 ms, rosso da 300 ms">Latenza <b>{view.rtt === null ? "–" : `${view.rtt.toFixed(0)} ms`}</b></span>
+          <span><b>{view.fps === null ? "–" : view.fps.toFixed(0)} fps</b></span>
+          <span title={view.hardware === null ? "" : view.hardware
+            ? "GPU: il video è compresso dal chip video del computer controllato"
+            : "CPU: il video è compresso dal processore del computer controllato (chip video non disponibile)"}>
+            <b>{view.width}×{view.height}{view.hardware === null ? "" : view.hardware ? " GPU" : " CPU"}</b></span>
         {/if}
         {#if view.net}
-          <span class="stat" title="Traffico della sessione: ricevuto ↓ / inviato ↑">
-            <span class="stat-k">Rete</span>
-            <span class="stat-v mono" style="min-width: 29ch">↓ {pad(rate(view.net.rx), 11)} · ↑ {pad(rate(view.net.tx), 11)}</span>
-          </span>
+          <span title="Traffico della sessione: ricevuto ↓ / inviato ↑">↓ <b>{rate(view.net.rx)}</b></span>
+          <span>↑ <b>{rate(view.net.tx)}</b></span>
         {/if}
         {#if view.local || view.partner}
-          <span
-            class="stat {worst(
-              level(view.local?.cpu, 50, 80),
-              level(view.partner?.cpu, 50, 80),
-              level(view.local?.ram, 800, 1500),
-              level(view.partner?.ram, 800, 1500),
-            )}"
-            title="Risorse usate dall'app: tu / partner (cattura e codifica avvengono sul partner). Giallo da 50 % di CPU o 800 MB, rosso da 80 % o 1,5 GB">
-            <span class="stat-k">Risorse</span>
-            <span class="stat-v mono" style="min-width: 42ch">Tu {view.local ? `${pad(pct(view.local.cpu), 4)} · ${pad(mb(view.local.ram), 7)}` : pad("–", 14)} · Partner {view.partner ? `${pad(pct(view.partner.cpu), 4)} · ${pad(mb(view.partner.ram), 7)}` : pad("–", 14)}</span>
-          </span>
+          <span class={worst(level(view.local?.cpu, 50, 80), level(view.local?.ram, 800, 1500))}
+            title="Risorse usate dall'app su questo computer">Tu <b>{view.local ? `${pct(view.local.cpu)} · ${mb(view.local.ram)}` : "–"}</b></span>
+          <span class={worst(level(view.partner?.cpu, 50, 80), level(view.partner?.ram, 800, 1500))}
+            title="Risorse usate dall'app sul partner (cattura e codifica avvengono lì)">Partner <b>{view.partner ? `${pct(view.partner.cpu)} · ${mb(view.partner.ram)}` : "–"}</b></span>
         {/if}
         {#if view.limited}
-          <span class="stat {view.limited.kbps < 450 ? 'critical' : 'caution'}"
+          <span class={view.limited.kbps < 450 ? "critical" : "caution"}
             title="Banda insufficiente: il partner ha ridotto qualità e fotogrammi ({view.limited.fps} fps max) e, sotto 0,8 Mbit/s, la risoluzione. Torna al massimo quando la rete migliora.">
-            <span class="stat-k">Qualità ridotta</span>
-            <span class="stat-v mono" style="min-width: 15ch">{pad(rate(view.limited.kbps), 11)}</span>
-          </span>
+            Qualità ridotta <b>{rate(view.limited.kbps)}</b></span>
         {/if}
-        {#if recentResyncs(view) > 0}
-          {@const count = recentResyncs(view)}
-          <span class="stat {level(count, 2, 5)}"
+        {#if resyncCount > 0}
+          <span class={level(resyncCount, 2, 5)}
             title="Volte nell'ultimo minuto in cui l'immagine è stata ricostruita da capo perché si erano persi dati in rete (giallo da 2, rosso da 5)">
-            <span class="stat-k">Resync per minuto</span>
-            <span class="stat-v mono" style="min-width: 3ch">{pad(count, 3)}</span>
-          </span>
+            Resync/min <b>{resyncCount}</b></span>
         {/if}
       </div>
-      {/if}
       {#if view.transfer}
-        <div class="toolbar-row transfer">
+        <div class="vrow transfer">
           <progress max={view.transfer.total || 1} value={view.transfer.done}></progress>
           <span class="mono small">{transferText(view.transfer)}</span>
-          <button class="icon-btn cancel-transfer" onclick={() => view && cancelTransfer(view.session)}
+          <button type="button" class="vib" onclick={() => view && cancelTransfer(view.session)}
             title="Interrompi il trasferimento" aria-label="Interrompi il trasferimento">✕</button>
         </div>
       {/if}
     </div>
+
     <div class="screen" bind:this={screenEl}>
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <canvas
@@ -2151,28 +2324,85 @@
       {#if view.notice}
         <p class="notice">{view.notice}</p>
       {/if}
-      {#if view.showChat}
-        <div class="chat-panel">
-          <div class="chat-head">
-            <span>Chat con <span class="mono">{view.peer}</span></span>
-            <button class="icon-btn" onclick={() => view && toggleChat(view)}>Chiudi</button>
-          </div>
-          <div class="chat-log">
-            {#each view.chat as m}
-              <div class="chat-msg" class:mine={m.mine}>
-                <span class="chat-text">{m.text}</span>
-                <span class="chat-time">{m.time}</span>
-              </div>
-            {/each}
-            {#if view.chat.length === 0}<p class="hint small">Nessun messaggio.</p>{/if}
-          </div>
-          <form class="chat-input" onsubmit={(e) => view && sendChat(view, e)}>
-            <input placeholder="Scrivi un messaggio…" bind:value={chatDraft} maxlength="2000" />
-            <button class="primary" type="submit">Invia</button>
-          </form>
-        </div>
-      {/if}
     </div>
+
+    <!-- The status dot when the bar is hidden; the same shape grows into the panel. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <div class="blob glass" class:shown={!barShown} class:open={panelOpen} class:fading={panelFading}
+      bind:this={blobEl} style:--h="{panelHeight}px" tabindex="0" role="group"
+      aria-label="Stato della connessione e azioni"
+      onmouseenter={openPanel} onmouseleave={closePanel} onfocusin={openPanel}
+      onfocusout={(e) => { if (!blobEl?.contains(e.relatedTarget as Node)) closePanel(); }}>
+      <span class="vdot {health.level}"></span>
+      <div class="blob-body" bind:this={blobBody}>
+        <div class="b-head">
+          <span class="mono strong">{view.peer}</span>
+          {#if view.peerName}<span class="b-name">{view.peerName}</span>{:else}<span class="b-name"></span>{/if}
+          {#if view.path}<span class="vpath {view.path}">{pathLabel[view.path]}</span>{/if}
+        </div>
+        <div class="b-rest">
+          <div class="b-verdict {said.level}">{said.text}</div>
+          <div class="b-grid">
+            <div class="b-cell {level(view.rtt, 150, 300)}"><small>Latenza</small><span>{view.rtt === null ? "–" : `${view.rtt.toFixed(0)} ms`}</span></div>
+            <div class="b-cell {view.limited ? 'caution' : ''}"><small>Fotogrammi</small><span>{view.fps === null ? "–" : `${view.fps.toFixed(0)} fps`}</span></div>
+            <div class="b-cell"><small>Video</small><span>{view.width ? `${view.width}×${view.height}${view.hardware === null ? "" : view.hardware ? " GPU" : " CPU"}` : "–"}</span></div>
+            <div class="b-cell"><small>Ricezione</small><span>{view.net ? rate(view.net.rx) : "–"}</span></div>
+            <div class="b-cell {level(resyncCount, 2, 5)}" title="Volte nell'ultimo minuto in cui l'immagine è stata ricostruita perché si erano persi dati in rete"><small>Resync/min</small><span>{resyncCount}</span></div>
+            <div class="b-cell {worst(level(view.local?.cpu, 50, 80), level(view.partner?.cpu, 50, 80))}"><small>CPU tu/partner</small><span>{view.local ? pct(view.local.cpu) : "–"} / {view.partner ? pct(view.partner.cpu) : "–"}</span></div>
+          </div>
+          <div class="b-acts">
+            <button type="button" class="b-act" onclick={() => view && openViewChat(view)}>
+              {@render chatIcon()}Chat{#if view.unread > 0}<span class="count">{view.unread}</span>{/if}
+            </button>
+            <button type="button" class="b-act" onclick={openFiles}>{@render filesIcon()}Trasferimento file</button>
+            <button type="button" class="b-act restore" onclick={restoreBar}>
+              <svg class="i" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>Ripristina barra
+            </button>
+            <button type="button" class="b-act disc" onclick={disconnect}>{@render powerIcon()}Disconnetti</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="bar-hint glass-note" class:show={barHint && !barShown} role="status">
+      La barra si è nascosta per lasciarti più spazio. <b>Passa sul pallino</b> per ripristinarla.
+    </div>
+
+    {#if !view.ended}
+      <aside class="vchat glass" class:open={view.showChat} class:used={view.chatUsed} aria-label="Chat con il partner">
+        <button type="button" class="chat-tab" class:unread={view.unread > 0} onclick={() => view && openViewChat(view)}
+          aria-label={view.unread > 0 ? `Apri la chat: ${view.unread} messaggi nuovi` : "Apri la chat"}
+          title="Apri la chat" tabindex={view.showChat ? -1 : 0}>
+          {@render chatIcon()}<span class="tab-badge">{view.unread || ""}</span>
+        </button>
+        <div class="vchat-head">
+          <span class="strong">Chat</span>
+          <span class="b-name">{view.peerName ?? view.peer}</span>
+          <button type="button" class="vib" onclick={() => view && hideViewChat(view)}
+            title="Nascondi la chat (resta una linguetta sul bordo)" aria-label="Nascondi la chat">
+            <svg class="i" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6" /></svg>
+          </button>
+        </div>
+        <div class="vchat-log" bind:this={chatLog} aria-live="polite">
+          {#each view.chat as m, i (i)}
+            <div class="vmsg" class:mine={m.mine}>
+              <div class="bubble">{m.text}</div>
+              {#if m.time}<time>{m.time}</time>{/if}
+            </div>
+          {/each}
+          {#if view.chat.length === 0}<p class="vchat-empty">Nessun messaggio. Scrivi al partner: lo vede nella sua finestrella di chat.</p>{/if}
+        </div>
+        <form class="vchat-compose" onsubmit={(e) => view && sendChat(view, e)}>
+          <textarea rows="1" placeholder="Scrivi un messaggio" bind:value={chatDraft} bind:this={chatInput}
+            maxlength="2000" onkeydown={chatKey} aria-label="Messaggio"></textarea>
+          <button type="submit" class="vsend" aria-label="Invia">
+            <svg class="i" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+          </button>
+        </form>
+      </aside>
+      <div class="chat-peek glass-note" class:show={!!view.chatPeek && !view.showChat}>
+        <b>{view.peerName ?? view.peer}</b>{view.chatPeek ?? ""}
+      </div>
+    {/if}
   </div>
 {:else if viewSession === null && chatPopupSession === null}
 <div class="app" class:quick>
@@ -3204,6 +3434,21 @@
     font-size: 15px;
     --switch-off: #cbd5e1;
     --raised: #ffffff;
+    /* Liquid glass of the viewer bar, dot panel and chat (ADR 0067). */
+    --g-tint: rgba(248, 250, 252, 0.8);
+    --g-edge: rgba(255, 255, 255, 0.75);
+    --g-dim: rgba(15, 23, 42, 0.68);
+    --g-hover: rgba(15, 23, 42, 0.07);
+    --g-on: rgba(255, 255, 255, 0.75);
+    --g-recess: rgba(15, 23, 42, 0.06);
+    --g-sep: rgba(15, 23, 42, 0.12);
+    --g-shadow: rgba(15, 23, 42, 0.18);
+    --g-note: rgba(255, 255, 255, 0.85);
+    --d-line: rgba(220, 38, 38, 0.28);
+    --d-bg: rgba(220, 38, 38, 0.1);
+    --d-text: #b91c1c;
+    --ok-text: #15803d;
+    --caution-text: #a16207;
     color: var(--text);
     background: var(--bg);
     color-scheme: light;
@@ -3220,6 +3465,20 @@
       --accent-2: #ffb347;
       --switch-off: #334155;
       --raised: #1f2937;
+      --g-tint: rgba(12, 18, 32, 0.45);
+      --g-edge: rgba(255, 255, 255, 0.16);
+      --g-dim: rgba(229, 231, 235, 0.74);
+      --g-hover: rgba(255, 255, 255, 0.12);
+      --g-on: rgba(255, 255, 255, 0.07);
+      --g-recess: rgba(0, 0, 0, 0.18);
+      --g-sep: rgba(255, 255, 255, 0.12);
+      --g-shadow: rgba(0, 0, 0, 0.28);
+      --g-note: rgba(13, 19, 33, 0.8);
+      --d-line: rgba(248, 113, 113, 0.3);
+      --d-bg: rgba(220, 38, 38, 0.22);
+      --d-text: #fecaca;
+      --ok-text: #4ade80;
+      --caution-text: #facc15;
       color-scheme: dark;
     }
   }
@@ -3233,6 +3492,20 @@
     --accent-2: #ffb347;
     --switch-off: #334155;
     --raised: #1f2937;
+    --g-tint: rgba(12, 18, 32, 0.45);
+    --g-edge: rgba(255, 255, 255, 0.16);
+    --g-dim: rgba(229, 231, 235, 0.74);
+    --g-hover: rgba(255, 255, 255, 0.12);
+    --g-on: rgba(255, 255, 255, 0.07);
+    --g-recess: rgba(0, 0, 0, 0.18);
+    --g-sep: rgba(255, 255, 255, 0.12);
+    --g-shadow: rgba(0, 0, 0, 0.28);
+    --g-note: rgba(13, 19, 33, 0.8);
+    --d-line: rgba(248, 113, 113, 0.3);
+    --d-bg: rgba(220, 38, 38, 0.22);
+    --d-text: #fecaca;
+    --ok-text: #4ade80;
+    --caution-text: #facc15;
     color-scheme: dark;
   }
   :global(body) {
@@ -3594,11 +3867,777 @@
     }
   }
   .viewer {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100vh;
     overflow: hidden;
     background: #000;
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+    --chat-w: 290px;
+  }
+  /* ---- Viewer bar, status dot panel and chat drawer: one liquid glass (ADR 0067) ---- */
+  .glass {
+    background:
+      radial-gradient(70% 160% at 18% -40%, rgba(255, 255, 255, 0.16), transparent 60%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02) 55%, rgba(255, 255, 255, 0.05)),
+      var(--g-tint);
+    border: 1px solid var(--g-edge);
+    color: var(--text);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 10px 30px var(--g-shadow);
+  }
+  .glass-note {
+    background: var(--g-note);
+    border: 1px solid var(--g-sep);
+    color: var(--text);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 6px 18px var(--g-shadow);
+  }
+  .bar-space {
+    flex: none;
+  }
+  .viewer svg.i {
+    width: 15px;
+    height: 15px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    flex: none;
+  }
+  /* Hiding shrinks the bar into the dot's corner: only transform and opacity move. */
+  .vbar {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    top: 8px;
+    z-index: 6;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 7px 10px 7px 9px;
+    border-radius: 18px;
+    font-size: 13px;
+    backdrop-filter: blur(18px) saturate(1.7);
+    -webkit-backdrop-filter: blur(18px) saturate(1.7);
+    transform-origin: 15px 15px;
+    will-change: transform, opacity;
+    transition:
+      transform var(--dur-slow) var(--spring-soft),
+      opacity 0.3s var(--ease-out),
+      right 0.55s var(--ease-in-out);
+  }
+  .vbar.gone {
+    transform: scale(0.03, 0.35);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      transform 0.55s var(--ease-in-out),
+      opacity 0.4s var(--ease-out) 0.12s;
+  }
+  .viewer.chat-open .vbar {
+    right: calc(var(--chat-w) + 14px);
+  }
+  .viewer.chat-open .vbar .lbl {
+    display: none;
+  }
+  .vrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .vdot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex: none;
+    background: var(--ok);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent);
+  }
+  .vdot.caution {
+    background: var(--caution);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--caution) 24%, transparent);
+  }
+  .vdot.critical {
+    background: var(--err);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--err) 24%, transparent);
+  }
+  .vname {
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .vid {
+    color: var(--g-dim);
+    letter-spacing: 0.02em;
+  }
+  .viewer button {
+    font: inherit;
+  }
+  .vib {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 26px;
+    padding: 0;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--g-dim);
+    cursor: pointer;
+    transition:
+      background 0.3s var(--ease-out),
+      color 0.3s var(--ease-out),
+      transform 0.45s var(--spring);
+  }
+  .vib:hover {
+    background: var(--g-hover);
+    color: var(--text);
+  }
+  .vib.on {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+  .vseg {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px;
+    gap: 2px;
+    border-radius: 12px;
+    background: var(--g-recess);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2);
+  }
+  .vseg button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 9px;
+    border-radius: 9px;
+    border: none;
+    background: transparent;
+    color: var(--g-dim);
+    font-size: 12.5px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background 0.3s var(--ease-out),
+      color 0.3s var(--ease-out),
+      transform 0.45s var(--spring);
+  }
+  .vseg button:hover {
+    color: var(--text);
+    background: var(--g-hover);
+  }
+  .vseg button.on {
+    color: var(--text);
+    background: var(--g-on);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  }
+  .vseg button.on svg {
+    color: var(--accent);
+  }
+  .vseg button.unread {
+    color: var(--accent);
+  }
+  .vseg .badge {
+    margin: 0 4px;
+  }
+  .viewer .count {
+    font-size: 10px;
+    font-weight: 700;
+    background: var(--accent);
+    color: var(--accent-text);
+    border-radius: 999px;
+    padding: 0 5px;
+  }
+  .vselect {
+    font: inherit;
+    font-size: 12.5px;
+    padding: 4px 8px;
+    border-radius: 9px;
+    border: 1px solid var(--g-sep);
+    background: var(--g-recess);
+    color: var(--text);
+  }
+  .vdisc {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 11px;
+    border-radius: 9px;
+    font-weight: 600;
+    font-size: 12.5px;
+    cursor: pointer;
+    border: 1px solid var(--d-line);
+    background: var(--d-bg);
+    color: var(--d-text);
+    transition:
+      background 0.35s var(--ease-out),
+      color 0.35s var(--ease-out),
+      border-color 0.35s var(--ease-out),
+      transform 0.45s var(--spring);
+  }
+  .vdisc:hover {
+    background: var(--err);
+    border-color: var(--err);
+    color: #fff;
+  }
+  .vib:active,
+  .vseg button:active,
+  .vdisc:active,
+  .b-act:active,
+  .vsend:active {
+    transform: scale(0.94);
+  }
+  .vstats {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 0;
+    font-size: 11.5px;
+    padding-left: 1px;
+  }
+  .vstats > span {
+    display: inline-flex;
+    gap: 5px;
+    align-items: baseline;
+    padding: 0 10px;
+    border-left: 1px solid var(--g-sep);
+    white-space: nowrap;
+    color: var(--g-dim);
+  }
+  .vstats > span:first-child {
+    border-left: none;
+    padding-left: 0;
+  }
+  .vstats b {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-weight: 500;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .vstats .caution b {
+    color: var(--caution-text);
+  }
+  .vstats .critical b {
+    color: var(--err);
+  }
+  .vpath {
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+    background: color-mix(in srgb, var(--ok) 15%, transparent);
+    color: var(--ok-text);
+  }
+  .vpath.relay {
+    background: color-mix(in srgb, var(--caution) 16%, transparent);
+    color: var(--caution-text);
+  }
+  .vrow.transfer progress {
+    flex: 1;
+    min-width: 120px;
+  }
+  :is(.vib, .vseg button, .vdisc, .b-act, .chat-tab, .vsend):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  /* The dot panel: one shape. Closed, its clip is an 18px circle around the dot (6px in from the
+     corner); open, the same clip grows into the rounded panel. */
+  .blob {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    z-index: 5;
+    box-sizing: border-box;
+    width: 380px;
+    max-width: calc(100vw - 16px);
+    height: var(--h, 220px);
+    border-radius: 18px;
+    outline: none;
+    clip-path: inset(6px calc(100% - 24px) calc(100% - 24px) 6px round 9px);
+    opacity: 0;
+    transform: scale(0.4);
+    transform-origin: 15px 15px;
+    pointer-events: none;
+    transition:
+      clip-path var(--dur) var(--spring),
+      opacity 0.25s var(--ease-out),
+      transform 0.45s var(--spring);
+  }
+  .blob.shown {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+    transition:
+      clip-path 0.42s var(--ease-in-out),
+      opacity 0.25s var(--ease-out) 0.3s,
+      transform 0.45s var(--spring) 0.3s;
+  }
+  .blob.shown.open {
+    clip-path: inset(0 0 0 0 round 18px);
+    backdrop-filter: blur(18px) saturate(1.7);
+    -webkit-backdrop-filter: blur(18px) saturate(1.7);
+    transition: clip-path var(--dur-slow) var(--spring-soft);
+  }
+  .blob.fading {
+    clip-path: inset(0 0 0 0 round 18px);
+    opacity: 0;
+    transform: scale(1.02);
+    pointer-events: none;
+    transition:
+      opacity 0.35s var(--ease-out),
+      transform 0.45s var(--ease-out);
+  }
+  /* (18 - 10) / 2 = 4 from the circle, which starts 6px in, less the 1px border. */
+  .blob > .vdot {
+    position: absolute;
+    left: 9px;
+    top: 9px;
+    box-shadow: 0 0 0 4px var(--g-on);
+  }
+  .blob-body {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 7px 12px 12px 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    font-size: 12.5px;
+    opacity: 0;
+    filter: blur(6px);
+    transform: scale(0.92);
+    transform-origin: 15px 15px;
+    transition:
+      opacity 0.42s var(--ease-in-out),
+      filter 0.42s var(--ease-in-out),
+      transform 0.42s var(--ease-in-out);
+  }
+  .blob.open .blob-body {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+    transition:
+      opacity 0.35s var(--ease-out) 0.08s,
+      filter 0.35s var(--ease-out) 0.08s,
+      transform var(--dur-slow) var(--spring-soft) 0.04s;
+  }
+  .b-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 16px;
+  }
+  .b-name {
+    color: var(--g-dim);
+    font-size: 12px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .b-rest {
+    margin-left: -16px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+  .b-rest > * {
+    opacity: 0;
+    transform: translateY(-4px);
+    transition:
+      opacity 0.42s var(--ease-in-out),
+      transform 0.42s var(--ease-in-out);
+  }
+  .blob.open .b-rest > * {
+    opacity: 1;
+    transform: none;
+    transition:
+      opacity 0.35s var(--ease-out) var(--d, 0.1s),
+      transform 0.5s var(--spring-soft) var(--d, 0.1s);
+  }
+  .b-rest > :nth-child(1) {
+    --d: 0.14s;
+  }
+  .b-rest > :nth-child(2) {
+    --d: 0.19s;
+  }
+  .b-rest > :nth-child(3) {
+    --d: 0.24s;
+  }
+  .b-verdict {
+    color: var(--ok-text);
+  }
+  .b-verdict.caution {
+    color: var(--caution-text);
+  }
+  .b-verdict.critical {
+    color: var(--err);
+  }
+  .b-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 3px;
+    padding: 3px;
+    border-radius: 12px;
+    background: var(--g-recess);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2);
+  }
+  .b-cell {
+    border-radius: 9px;
+    padding: 4px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+  .b-cell small {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--g-dim);
+  }
+  .b-cell span {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-variant-numeric: tabular-nums;
+  }
+  .b-cell.caution {
+    background: color-mix(in srgb, var(--caution) 14%, transparent);
+  }
+  .b-cell.caution span {
+    color: var(--caution-text);
+  }
+  .b-cell.critical {
+    background: color-mix(in srgb, var(--err) 16%, transparent);
+  }
+  .b-cell.critical span {
+    color: var(--err);
+  }
+  .b-acts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 5px;
+  }
+  .b-act {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 9px;
+    border-radius: 9px;
+    border: 1px solid transparent;
+    background: var(--g-on);
+    color: var(--text);
+    font-size: 12.5px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background 0.3s var(--ease-out),
+      color 0.3s var(--ease-out),
+      border-color 0.3s var(--ease-out),
+      transform 0.45s var(--spring);
+  }
+  .b-act:hover {
+    background: var(--g-hover);
+  }
+  .b-act.restore svg {
+    color: var(--accent);
+  }
+  .b-act.disc {
+    border-color: var(--d-line);
+    background: var(--d-bg);
+    color: var(--d-text);
+    font-weight: 600;
+  }
+  .b-act.disc:hover {
+    background: var(--err);
+    border-color: var(--err);
+    color: #fff;
+  }
+  .bar-hint {
+    position: absolute;
+    left: 42px;
+    top: 10px;
+    z-index: 4;
+    max-width: min(320px, calc(100vw - 60px));
+    padding: 7px 11px;
+    border-radius: 12px;
+    font-size: 12.5px;
+    line-height: 1.35;
+    opacity: 0;
+    transform: translateX(-16px) scale(0.9);
+    transform-origin: left center;
+    pointer-events: none;
+    transition:
+      opacity 0.35s var(--ease-out),
+      transform var(--dur-slow) var(--spring-soft);
+  }
+  .bar-hint.show {
+    opacity: 1;
+    transform: none;
+    transition-delay: 0.45s;
+  }
+  .bar-hint b {
+    color: var(--accent);
+  }
+
+  /* Chat drawer anchored to the right edge; hides by sliding out, its tab stays on the edge. */
+  .vchat {
+    position: absolute;
+    top: 8px;
+    bottom: 8px;
+    right: 0;
+    width: var(--chat-w);
+    z-index: 7;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    border-radius: 18px 0 0 18px;
+    border-right: none;
+    font-size: 13px;
+    backdrop-filter: blur(18px) saturate(1.7);
+    -webkit-backdrop-filter: blur(18px) saturate(1.7);
+    transform: translateX(100%);
+    will-change: transform;
+    transition: transform var(--dur-slow) var(--spring-soft);
+  }
+  .vchat.open {
+    transform: none;
+  }
+  .vchat-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 10px 8px 14px;
+    border-bottom: 1px solid var(--g-sep);
+  }
+  .vchat-log {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 10px 6px 12px;
+    scrollbar-width: thin;
+  }
+  .vchat-empty {
+    margin: auto 8px;
+    text-align: center;
+    color: var(--g-dim);
+    font-size: 12px;
+  }
+  .vmsg {
+    max-width: 84%;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    animation: vmsg-in 0.55s var(--spring-soft) both;
+  }
+  .vmsg .bubble {
+    padding: 6px 10px;
+    border-radius: 14px 14px 14px 5px;
+    line-height: 1.35;
+    background: var(--g-on);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    user-select: text;
+  }
+  .vmsg time {
+    font-size: 10px;
+    color: var(--g-dim);
+    padding: 0 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .vmsg.mine {
+    align-self: flex-end;
+    align-items: flex-end;
+  }
+  .vmsg.mine .bubble {
+    border-radius: 14px 14px 5px 14px;
+    background: var(--accent);
+    color: var(--accent-text);
+  }
+  @keyframes vmsg-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  .vchat-compose {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 6px;
+    align-items: flex-end;
+    padding: 8px 10px 10px 12px;
+  }
+  .vchat-compose textarea {
+    flex: 1;
+    min-width: 0;
+    resize: none;
+    height: 36px;
+    max-height: 120px;
+    width: auto;
+    box-sizing: border-box;
+    font: inherit;
+    line-height: 1.35;
+    padding: 8px 11px;
+    border-radius: 12px;
+    border: 1px solid var(--g-sep);
+    background: var(--g-recess);
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.25s var(--ease-out);
+  }
+  .vchat-compose textarea::placeholder {
+    color: var(--g-dim);
+  }
+  .vchat-compose textarea:focus {
+    border-color: var(--accent);
+  }
+  .vsend {
+    width: 36px;
+    height: 36px;
+    border-radius: 12px;
+    border: none;
+    background: var(--accent);
+    color: var(--accent-text);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    flex: none;
+    transition: transform 0.45s var(--spring);
+  }
+  .chat-tab {
+    position: absolute;
+    left: -27px;
+    top: 50%;
+    width: 27px;
+    height: 64px;
+    margin-top: -32px;
+    box-sizing: border-box;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border-radius: 12px 0 0 12px;
+    border: 1px solid var(--g-edge);
+    border-right: none;
+    color: var(--g-dim);
+    background:
+      linear-gradient(90deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03)),
+      var(--g-tint);
+    backdrop-filter: blur(18px) saturate(1.7);
+    -webkit-backdrop-filter: blur(18px) saturate(1.7);
+    box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.2), -6px 0 18px var(--g-shadow);
+    cursor: pointer;
+    opacity: 0;
+    transform: translateX(10px);
+    pointer-events: none;
+    transition:
+      opacity 0.3s var(--ease-out),
+      transform 0.5s var(--spring-soft),
+      color 0.3s var(--ease-out),
+      background 0.3s var(--ease-out);
+  }
+  .vchat.used:not(.open) .chat-tab {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+    transition-delay: 0.15s, 0.15s, 0s, 0s;
+  }
+  .chat-tab:hover {
+    color: var(--text);
+  }
+  .tab-badge {
+    position: absolute;
+    top: -7px;
+    left: -6px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    box-sizing: border-box;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    display: grid;
+    place-items: center;
+    background: var(--text);
+    color: var(--bg);
+    transform: scale(0);
+    transition: transform 0.5s var(--spring);
+  }
+  /* New messages while hidden: the tab fills with the accent colour and breathes. */
+  .chat-tab.unread {
+    color: var(--accent-text);
+    background: var(--accent);
+    border-color: var(--accent);
+    animation: tab-breathe 2.2s ease-in-out infinite;
+  }
+  .chat-tab.unread .tab-badge {
+    transform: scale(1);
+  }
+  @keyframes tab-breathe {
+    0%,
+    100% {
+      box-shadow: -6px 0 18px var(--g-shadow), 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+    }
+    50% {
+      box-shadow: -6px 0 18px var(--g-shadow), 0 0 0 7px color-mix(in srgb, var(--accent) 0%, transparent);
+    }
+  }
+  .chat-peek {
+    position: absolute;
+    right: 36px;
+    top: 50%;
+    margin-top: -22px;
+    max-width: 240px;
+    z-index: 6;
+    pointer-events: none;
+    padding: 7px 11px;
+    border-radius: 14px 14px 5px 14px;
+    font-size: 12.5px;
+    line-height: 1.35;
+    opacity: 0;
+    transform: translateX(14px) scale(0.92);
+    transform-origin: right center;
+    transition:
+      opacity 0.3s var(--ease-out),
+      transform var(--dur-slow) var(--spring-soft);
+  }
+  .chat-peek b {
+    display: block;
+    font-size: 11px;
+    color: var(--g-dim);
+    margin-bottom: 1px;
+  }
+  .chat-peek.show {
+    opacity: 1;
+    transform: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .viewer * {
+      transition: none !important;
+      animation: none !important;
+    }
   }
   .toolbar {
     display: flex;
@@ -3607,9 +4646,6 @@
     padding: 6px 12px;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
-  }
-  .toolbar .peer {
-    font-size: 15px;
   }
   .toolbar-row {
     display: flex;
@@ -3621,9 +4657,6 @@
   .name-input {
     max-width: 320px;
   }
-  .toolbar .peer-name {
-    font-size: 15px;
-  }
   /* Overall connection state, always shown: green, yellow (attention), red (critical). */
   .health {
     width: 10px;
@@ -3631,16 +4664,6 @@
     border-radius: 50%;
     flex: none;
     background: var(--ok);
-  }
-  /* A button: a click hides or shows the connection data next to it. */
-  .toolbar button.health {
-    padding: 0;
-    border: none;
-    cursor: pointer;
-  }
-  .toolbar button.health:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
   }
   .health.caution {
     background: var(--caution);
@@ -3679,13 +4702,6 @@
     border-color: var(--err);
     box-shadow: 0 0 0 1px var(--err);
   }
-  .stat.critical .stat-v {
-    color: var(--err);
-  }
-  .toolbar button {
-    padding: 5px 12px;
-    font-size: 13px;
-  }
   .screen {
     flex: 1;
     min-height: 0;
@@ -3706,11 +4722,6 @@
   }
   .screen canvas.controlling {
     cursor: default;
-  }
-  .toolbar button.active {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--accent-text);
   }
   .displays {
     font: inherit;
@@ -4557,11 +5568,6 @@
   .popup-chat .chat-log {
     flex: 1;
   }
-  .toolbar-row.transfer progress,
-  .banner-progress {
-    width: 180px;
-    accent-color: var(--accent);
-  }
   .cancel-transfer {
     padding: 1px 8px;
     line-height: 1.2;
@@ -4570,16 +5576,9 @@
     width: 90px;
     accent-color: var(--accent);
   }
-  /* New chat message while the chat is closed: the button pulses. */
-  button.blink {
-    animation: blink 1s ease-in-out infinite;
-  }
-  @keyframes blink {
-    50% {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: var(--accent-text);
-    }
+  .banner-progress {
+    width: 180px;
+    accent-color: var(--accent);
   }
   .chat-panel {
     position: absolute;
@@ -4667,6 +5666,11 @@
   }
   .overlay {
     position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    max-width: 80%;
+    text-align: center;
     color: #cbd5e1;
     margin: 0;
   }
