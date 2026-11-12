@@ -27,6 +27,11 @@ pannello aperto, stesso vetro per barra e pannello, tema chiaro e scuro.
   messaggio del partner la apre senza prendere la tastiera; se l'utente l'ha nascosta, i messaggi accendono la
   linguetta (arancione che pulsa, numero) e mostrano per 4,5 s l'inizio del messaggio. Con la chat aperta la
   barra si ferma prima e mostra solo le icone. Invio spedisce, Maiusc+Invio va a capo.
+- **Linguetta spostabile:** si trascina in alto o in basso (o frecce su/giù con la tastiera); l'altezza è
+  ricordata (`chatTabY`) e il fumetto dei messaggi la segue. Un trascinamento non apre la chat.
+- **Chat fissata:** una puntina nell'intestazione la tiene aperta (anche nelle sessioni successive, `chatPinned`)
+  e lo schermo del partner si stringe nello spazio a sinistra: la tela e quindi il mouse seguono la nuova area,
+  e "Risoluzione adattata" chiede la nuova dimensione.
 - **Animazioni:** molle come `linear()` calcolate all'avvio (con ripiego `cubic-bezier`); si animano solo
   `transform`, `opacity` e il `clip-path` del pannello (senza sfocatura di sfondo finché è chiuso: Chrome non la
   ritaglia). `prefers-reduced-motion` le spegne.

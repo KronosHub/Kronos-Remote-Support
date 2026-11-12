@@ -9,7 +9,8 @@ Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**
   la freccia accanto all'ID). Passando sul pallino si apre un pannello con la qualità della connessione, Chat,
   Trasferimento file, **Ripristina barra** e Disconnetti. Con la **puntina** la barra resta sempre in alto.
 - **Chat a lato**: si apre sul bordo destro e si nasconde lasciando una linguetta, che si accende quando arrivano
-  messaggi nuovi.
+  messaggi nuovi e si può trascinare in alto o in basso. Con la **puntina** la chat resta aperta e lo schermo del
+  computer controllato si stringe accanto a lei.
 - **Appunti condivisi accesi** a ogni connessione: si spengono dal pulsante **Appunti** nella barra. Passa solo
   ciò che copi durante la sessione, e il computer controllato può sempre vietarli dalle Preferenze.
 - **Accesso non presidiato** in una riga ordinata con l'etichetta **Attivo** o **Spento**; Cambia password e

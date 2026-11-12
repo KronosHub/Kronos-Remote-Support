@@ -1467,9 +1467,9 @@
       reconnecting: false,
       silent: false,
       chat: [],
-      showChat: false,
+      showChat: chatPinned,
       unread: 0,
-      chatUsed: false,
+      chatUsed: chatPinned,
       chatDismissed: false,
       chatPeek: null,
     };
@@ -1902,7 +1902,16 @@
     return { level: l, text: (l === "critical" ? "Connessione in difficoltà: " : "Connessione rallentata: ") + first.toLowerCase() };
   }
 
-  // Chat drawer on the right edge.
+  // Chat drawer on the right edge. Pinned, it stays open and the partner's screen fits the space left of it.
+  let chatPinned = $state(readFlag("chatPinned"));
+  function toggleChatPin() {
+    chatPinned = !chatPinned;
+    try {
+      if (chatPinned) localStorage.setItem("chatPinned", "1");
+      else localStorage.removeItem("chatPinned");
+    } catch {}
+    if (chatPinned && view) openViewChat(view, false);
+  }
   let chatLog = $state<HTMLDivElement | null>(null);
   let chatInput = $state<HTMLTextAreaElement | null>(null);
   let peekTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1922,6 +1931,7 @@
     if (focus) tick().then(() => chatInput?.focus());
   }
   function hideViewChat(v: View) {
+    if (chatPinned) return;
     v.showChat = false;
     v.chatDismissed = true;
     chatDraft = "";
@@ -1942,6 +1952,59 @@
       if (view) view.chatPeek = null;
     }, 4500);
   }
+  /** Height of the chat tab on the right edge, 0 (top) – 1 (bottom); dragged by the user, remembered. */
+  let chatTabY = $state(
+    (() => {
+      try {
+        const value = Number(localStorage.getItem("chatTabY"));
+        return localStorage.getItem("chatTabY") !== null && Number.isFinite(value) ? value : 0.5;
+      } catch {
+        return 0.5;
+      }
+    })(),
+  );
+  const TAB_MIN = 0.08;
+  const TAB_MAX = 0.92;
+  let tabDrag: { startY: number; start: number; height: number; moved: boolean } | null = null;
+  let tabDragged = false;
+  function saveTabY() {
+    try {
+      localStorage.setItem("chatTabY", chatTabY.toFixed(3));
+    } catch {}
+  }
+  function tabDown(e: PointerEvent) {
+    const tab = e.currentTarget as HTMLElement;
+    tabDrag = { startY: e.clientY, start: chatTabY, height: tab.parentElement?.clientHeight || 1, moved: false };
+    tab.setPointerCapture(e.pointerId);
+  }
+  function tabMove(e: PointerEvent) {
+    if (!tabDrag) return;
+    const dy = e.clientY - tabDrag.startY;
+    // A few pixels of slack: a click with a shaky hand still opens the chat.
+    if (Math.abs(dy) > 4) tabDrag.moved = true;
+    if (tabDrag.moved) chatTabY = Math.min(TAB_MAX, Math.max(TAB_MIN, tabDrag.start + dy / tabDrag.height));
+  }
+  function tabUp() {
+    if (!tabDrag) return;
+    tabDragged = tabDrag.moved;
+    tabDrag = null;
+    if (tabDragged) saveTabY();
+  }
+  function tabClick() {
+    // The click that ends a drag does not open the chat.
+    if (tabDragged) {
+      tabDragged = false;
+      return;
+    }
+    if (view) openViewChat(view);
+  }
+  function tabKey(e: KeyboardEvent) {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault();
+    chatTabY = Math.min(TAB_MAX, Math.max(TAB_MIN, chatTabY + (e.key === "ArrowUp" ? -0.05 : 0.05)));
+    saveTabY();
+  }
+
   function chatKey(e: KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -2142,7 +2205,7 @@
   {@const health = connectionLevel(view)}
   {@const said = verdict(view)}
   {@const resyncCount = recentResyncs(view)}
-  <div class="viewer" class:chat-open={view.showChat && !view.ended}>
+  <div class="viewer" class:chat-open={view.showChat && !view.ended} class:chat-pinned={chatPinned && view.showChat && !view.ended}>
     {#snippet chatIcon()}
       <svg class="i" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z" /></svg>
     {/snippet}
@@ -2199,7 +2262,7 @@
               {/if}
             {/if}
             <button type="button" class="chat-btn" class:on={view.showChat} class:unread={view.unread > 0}
-              onclick={() => view && (view.showChat ? hideViewChat(view) : openViewChat(view))} title="Scrivi al partner">
+              onclick={() => view && (view.showChat && !chatPinned ? hideViewChat(view) : openViewChat(view))} title="Scrivi al partner">
               {@render chatIcon()}<span class="lbl">Chat</span>{#if view.unread > 0}<span class="count">{view.unread}</span>{/if}
             </button>
             {#if view.clipboard !== null}
@@ -2369,18 +2432,27 @@
 
     {#if !view.ended}
       <aside class="vchat glass" class:open={view.showChat} class:used={view.chatUsed} aria-label="Chat con il partner">
-        <button type="button" class="chat-tab" class:unread={view.unread > 0} onclick={() => view && openViewChat(view)}
+        <button type="button" class="chat-tab" class:unread={view.unread > 0} style:top="{chatTabY * 100}%"
+          onclick={tabClick} onpointerdown={tabDown} onpointermove={tabMove} onpointerup={tabUp} onpointercancel={tabUp}
+          onkeydown={tabKey}
           aria-label={view.unread > 0 ? `Apri la chat: ${view.unread} messaggi nuovi` : "Apri la chat"}
-          title="Apri la chat" tabindex={view.showChat ? -1 : 0}>
+          title="Clic: apri la chat. Trascina in alto o in basso per spostare la linguetta" tabindex={view.showChat ? -1 : 0}>
           {@render chatIcon()}<span class="tab-badge">{view.unread || ""}</span>
         </button>
         <div class="vchat-head">
           <span class="strong">Chat</span>
           <span class="b-name">{view.peerName ?? view.peer}</span>
-          <button type="button" class="vib" onclick={() => view && hideViewChat(view)}
-            title="Nascondi la chat (resta una linguetta sul bordo)" aria-label="Nascondi la chat">
-            <svg class="i" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6" /></svg>
+          <button type="button" class="vib" class:on={chatPinned} aria-pressed={chatPinned} onclick={toggleChatPin}
+            title={chatPinned ? "Chat fissata: resta aperta e lo schermo del partner usa lo spazio a sinistra. Clic per sbloccarla" : "Fissa la chat: resta aperta e lo schermo del partner si stringe accanto a lei"}
+            aria-label="Fissa la chat">
+            <svg class="i" viewBox="0 0 24 24"><path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z" /><path d="M12 14v6" /></svg>
           </button>
+          {#if !chatPinned}
+            <button type="button" class="vib" onclick={() => view && hideViewChat(view)}
+              title="Nascondi la chat (resta una linguetta sul bordo)" aria-label="Nascondi la chat">
+              <svg class="i" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6" /></svg>
+            </button>
+          {/if}
         </div>
         <div class="vchat-log" bind:this={chatLog} aria-live="polite">
           {#each view.chat as m, i (i)}
@@ -2399,7 +2471,7 @@
           </button>
         </form>
       </aside>
-      <div class="chat-peek glass-note" class:show={!!view.chatPeek && !view.showChat}>
+      <div class="chat-peek glass-note" class:show={!!view.chatPeek && !view.showChat} style:top="calc(8px + {chatTabY} * (100% - 16px))">
         <b>{view.peerName ?? view.peer}</b>{view.chatPeek ?? ""}
       </div>
     {/if}
@@ -3944,6 +4016,10 @@
   .viewer.chat-open .vbar .lbl {
     display: none;
   }
+  /* Pinned chat: the picture (and the mouse mapping, which follows the canvas) fits the space left of it. */
+  .viewer.chat-pinned .screen {
+    margin-right: calc(var(--chat-w) + 8px);
+  }
   .vrow {
     display: flex;
     align-items: center;
@@ -4534,6 +4610,7 @@
     width: 27px;
     height: 64px;
     margin-top: -32px;
+    touch-action: none;
     box-sizing: border-box;
     padding: 0;
     display: grid;
