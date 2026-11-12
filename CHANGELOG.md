@@ -2,6 +2,10 @@
 
 Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**, quando la versione è disponibile.
 
+## 2.2.4 — 2026-11-12
+- **Spazi del Mac**: restano le frecce per passare da un'app a tutto schermo all'altra; tolto Mission Control, che
+  dal computer che controlla non si apriva.
+
 ## 2.2.3 — 2026-11-12
 - **Spazi del Mac**: nella barra (e nel pannello del pallino) i pulsanti **‹ Spazi ›** passano da un'app a tutto
   schermo all'altra e aprono Mission Control sul Mac che controlli, cosa che dalla tua tastiera non si poteva
