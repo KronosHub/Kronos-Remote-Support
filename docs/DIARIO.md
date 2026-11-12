@@ -771,3 +771,9 @@
   centrato di 1 px per il bordo, sfocatura non ritagliata dal `clip-path` in Chrome, chiusura in due tempi per
   un ritardo ereditato). Implementato nell'app (ADR 0067); controllato con screenshot di Chrome headless solo
   sulle pagine di esempio, non nell'app.
+- Chat: linguetta trascinabile (`chatTabY`), chat fissata (`chatPinned`) che restringe lo schermo; le proporzioni e
+  il mouse erano già corretti (immagine adattata e centrata, coordinate calcolate sull'immagine).
+- Finestra di controllo provata in Chrome headless con Tauri simulato (`__TAURI_INTERNALS__` finto, eventi
+  `service` inviati a mano): trovati e corretti il campo della chat ristretto da `field-sizing`, il vetro chiaro
+  grigio sul nero, "In attesa…" sotto la barra, il pannello vuoto con le animazioni ridotte.
+- 2.2.1 pubblicata (checks verdi, release al primo colpo, Linux senza blocchi apt).
