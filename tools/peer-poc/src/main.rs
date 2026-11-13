@@ -356,6 +356,7 @@ async fn serve(
             HostEvent::ControlFailing(e) => println!("Remote control failing: {e}"),
             HostEvent::Chat(text) => println!("Chat from viewer: {text}"),
             HostEvent::Clipboard(message) => println!("Clipboard: {message}"),
+            HostEvent::Resolution(mode) => println!("Resolution set by the viewer: {mode:?}"),
             HostEvent::Quality { kbps, fps, .. } => println!("Quality: {kbps} kbit/s, {fps} fps"),
             HostEvent::Ended(reason) => println!("Stream ended: {reason}"),
         },
@@ -572,6 +573,10 @@ async fn view(
             ViewerEvent::ScreenUnavailable(e) => println!("Host has no screen yet: {e}"),
             ViewerEvent::AudioUnavailable(e) => println!("Sound unavailable: {e}"),
             ViewerEvent::ResolutionAdjustable => println!("Host can match its resolution"),
+            ViewerEvent::DisplayModes { modes, current, .. } => {
+                println!("Host offers {} resolutions, now {current:?}", modes.len())
+            }
+            ViewerEvent::RestoringResolution => println!("Restoring the host's resolution"),
             ViewerEvent::PartnerUpdating => println!("Host is quitting to update"),
             ViewerEvent::PartnerReconnect => println!("Host asks to connect again"),
             ViewerEvent::ConnectionLost => println!("Connection lost"),
