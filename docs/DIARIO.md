@@ -799,3 +799,5 @@
   ricordata, ripristino prima del `Bye` (al massimo 3 s), file per il ripristino dopo un crash, menu nella barra,
   banner sull'host. Elenco letto dal vero su questo Mac (5K); il cambio non provato qui per non toccare lo
   schermo dell'utente.
+- Primo giro di `checks` rosso: `tools/peer-poc` non gestiva i nuovi eventi (non compilato in locale); corretto. Un
+  fallimento occasionale di `file_manager` in locale, ripetuto verde. 2.3.0 pubblicata (release al primo colpo).
