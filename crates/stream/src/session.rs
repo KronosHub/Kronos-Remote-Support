@@ -184,6 +184,8 @@ pub enum HostEvent {
     InputBlocked(bool),
     /// A clipboard file transfer moved on.
     Transfer(crate::files::TransferProgress),
+    /// The viewer set the shared screen to this mode (`None`: back to the user's own).
+    Resolution(Option<protocol::ScreenMode>),
     Ended(String),
 }
 
@@ -203,6 +205,8 @@ pub enum HostCommand {
         reason: String,
         reconnect: bool,
     },
+    /// The person at this computer wants its own resolution back now.
+    RestoreResolution,
 }
 
 /// Host: streams until the viewer leaves, the channel closes or `Stop` arrives.
@@ -293,6 +297,8 @@ pub async fn serve_host(
             sink.set_area(area(handle.bounds));
         }
         send_displays(&channel, &config, handle.display_id).await;
+        let allowed = may_set_resolution(&config, &screen_keeper);
+        send_modes(&channel, handle.display_id, allowed, None).await;
     }
     let usage_task = tokio::spawn(report_usage(channel.clone()));
 
@@ -408,6 +414,8 @@ pub async fn serve_host(
                         }
                         send(&channel, &stream_started(handle)).await;
                         send_displays(&channel, &config, handle.display_id).await;
+                        let allowed = may_set_resolution(&config, &screen_keeper);
+                        send_modes(&channel, handle.display_id, allowed, None).await;
                         on_event(HostEvent::Started { width: handle.width, height: handle.height });
                     }
                     Err(e) => {
@@ -540,15 +548,48 @@ pub async fn serve_host(
                     let Some(display) = handle.as_ref().map(|h| h.display_id) else { continue };
                     let max = if high_resolution { config.max_size } else { (1920, 1080) };
                     let want = capture::resolution::Request { width, height, scale };
-                    if display_resize.request(display, want, max).await.is_some() && restart_at.is_none() {
+                    let had = display_resize.changed().is_some();
+                    let changed = display_resize.request(display, want, max).await.is_some()
+                        || (had && display_resize.changed().is_none());
+                    if changed && restart_at.is_none() {
                         // The capture starts again at the new size (macOS applies the mode
                         // a moment later; Windows' capture would also notice by itself).
                         restart_at = Some(tokio::time::Instant::now() + RESIZE_SETTLE);
                     }
                 }
+                Some(ControlMsg::SetResolution { width, height, scale }) => {
+                    let Some(display) = handle.as_ref().map(|h| h.display_id) else { continue };
+                    let allowed = may_set_resolution(&config, &screen_keeper);
+                    let mode = capture::resolution::Mode { width, height, scale: scale.max(1), refresh: 0.0 };
+                    let restore = width == 0 || height == 0;
+                    // The user's own mode, known only while changed: said once restored too.
+                    let user = crate::resize::user_mode(display);
+                    let mut shown = None;
+                    if allowed {
+                        let changed = if restore {
+                            display_resize.release().await
+                        } else {
+                            display_resize.set_mode(display, mode).await.is_some()
+                        };
+                        tracing::info!(width, height, scale, changed, "viewer set the resolution");
+                        if changed {
+                            // macOS applies the mode a moment later: say the chosen one.
+                            shown = if restore { user } else { Some(mode) };
+                            let now = (!restore).then(|| screen_mode(&mode));
+                            on_event(HostEvent::Resolution(now));
+                            if restart_at.is_none() {
+                                restart_at = Some(tokio::time::Instant::now() + RESIZE_SETTLE);
+                            }
+                        }
+                    }
+                    // The answer the viewer waits for (also when nothing changed).
+                    send_modes(&channel, display, allowed, shown).await;
+                }
                 Some(ControlMsg::SelectDisplay { id }) if handle.as_ref().is_some_and(|h| h.display_id != id) => {
                     // The screen left keeps its own resolution again.
-                    display_resize.release().await;
+                    if display_resize.release().await {
+                        on_event(HostEvent::Resolution(None));
+                    }
                     let Some(handle) = handle.as_mut() else { continue };
                     match switch_display(&config, &video, handle, id).await {
                         Ok(()) => {
@@ -559,6 +600,8 @@ pub async fn serve_host(
                             }
                             send(&channel, &stream_started(handle)).await;
                             send_displays(&channel, &config, handle.display_id).await;
+                            let allowed = may_set_resolution(&config, &screen_keeper);
+                            send_modes(&channel, handle.display_id, allowed, None).await;
                             on_event(HostEvent::Started { width: handle.width, height: handle.height });
                         }
                         Err(e) => tracing::warn!("cannot switch to display {id}: {e:#}"),
@@ -582,6 +625,21 @@ pub async fn serve_host(
                     send(&channel, &ControlMsg::Chat { text }).await;
                 }
                 Some(HostCommand::PartnerLeft) => break "il partner si è disconnesso".to_owned(),
+                Some(HostCommand::RestoreResolution) => {
+                    let user = display_resize.changed().and_then(crate::resize::user_mode);
+                    let restored = display_resize.release().await;
+                    if restored {
+                        tracing::info!("resolution restored from this computer");
+                        on_event(HostEvent::Resolution(None));
+                        if restart_at.is_none() {
+                            restart_at = Some(tokio::time::Instant::now() + RESIZE_SETTLE);
+                        }
+                    }
+                    if let Some(display) = handle.as_ref().map(|h| h.display_id) {
+                        let allowed = may_set_resolution(&config, &screen_keeper);
+                        send_modes(&channel, display, allowed, user.filter(|_| restored)).await;
+                    }
+                }
                 Some(HostCommand::End { reason, reconnect }) => {
                     send_goodbye(&channel, &reason, false, reconnect).await;
                     break reason;
@@ -699,6 +757,66 @@ async fn send_displays(channel: &Arc<dyn DataChannel>, config: &StreamConfig, cu
         },
     )
     .await;
+}
+
+/// Whether the viewer may pick the shared screen's resolution (ADR 0069): with remote control
+/// allowed, on a system that can change it, unless the preferences fix the size of the
+/// virtual screen shared.
+fn may_set_resolution(config: &StreamConfig, keeper: &Option<VirtualScreen>) -> bool {
+    config.allow_control
+        && capture::resolution::SUPPORTED
+        && matches!(config.source, crate::Source::Screen { .. })
+        && !fixed_size(config, keeper)
+}
+
+fn screen_mode(m: &capture::resolution::Mode) -> protocol::ScreenMode {
+    protocol::ScreenMode {
+        width: m.width,
+        height: m.height,
+        scale: m.scale.max(1),
+    }
+}
+
+/// Tells the viewer which resolutions it may pick for `display` (none when not `allowed`, or
+/// for all the monitors at once), with `current` as the mode it has unless given.
+async fn send_modes(
+    channel: &Arc<dyn DataChannel>,
+    display: u32,
+    allowed: bool,
+    current: Option<capture::resolution::Mode>,
+) {
+    let read = if allowed && display != capture::ALL_DISPLAYS {
+        tokio::task::spawn_blocking(move || capture::resolution::modes(display))
+            .await
+            .ok()
+            .and_then(|r| r.map_err(|e| tracing::debug!("display modes: {e}")).ok())
+    } else {
+        None
+    };
+    let zero = protocol::ScreenMode {
+        width: 0,
+        height: 0,
+        scale: 1,
+    };
+    let msg = match read {
+        Some((modes, now)) => {
+            let now = current.unwrap_or(now);
+            let user = crate::resize::user_mode(display).unwrap_or(now);
+            ControlMsg::DisplayModes {
+                display,
+                modes: modes.iter().map(screen_mode).collect(),
+                current: screen_mode(&now),
+                user: screen_mode(&user),
+            }
+        }
+        None => ControlMsg::DisplayModes {
+            display,
+            modes: Vec::new(),
+            current: zero,
+            user: zero,
+        },
+    };
+    send(channel, &msg).await;
 }
 
 /// Restarts capture on another monitor. The old stream stops first so the two encoders
@@ -962,6 +1080,15 @@ pub enum ViewerEvent {
     },
     /// The host may set its screen to this window's size (`ViewerCommand::MatchResolution`).
     ResolutionAdjustable,
+    /// The resolutions the host's shared screen offers (empty: it may not be changed), the
+    /// one it has and its user's own (ADR 0069).
+    DisplayModes {
+        modes: Vec<protocol::ScreenMode>,
+        current: protocol::ScreenMode,
+        user: protocol::ScreenMode,
+    },
+    /// Leaving: the host's resolution is being set back before the session ends.
+    RestoringResolution,
     /// The host is quitting to install an update (the session ends next).
     PartnerUpdating,
     /// The host asked to be connected to again (its user logged on): see `Bye`.
@@ -1010,7 +1137,66 @@ pub enum ViewerCommand {
         height: u32,
         scale: f32,
     },
+    /// Set the host's screen to one of the modes it offered (0×0: its user's own again).
+    SetResolution {
+        width: u32,
+        height: u32,
+        scale: u32,
+    },
     Stop,
+}
+
+/// Longest wait, when leaving, for the host to say its resolution is back.
+const RESTORE_WAIT: Duration = Duration::from_secs(3);
+
+/// Leaving a session where the host's screen has another resolution than its user's: asks
+/// for it back and waits (at most `RESTORE_WAIT`) for the answer, so the change is undone
+/// before the goodbye. The host also restores it by itself when the session ends; this way
+/// the person there gets it back first, and the viewer sees it happen. False if the host
+/// left meanwhile.
+async fn restore_before_leaving(
+    channel: &Arc<dyn DataChannel>,
+    on_event: &mut impl FnMut(ViewerEvent),
+) -> bool {
+    on_event(ViewerEvent::RestoringResolution);
+    send(
+        channel,
+        &ControlMsg::SetResolution {
+            width: 0,
+            height: 0,
+            scale: 1,
+        },
+    )
+    .await;
+    let answer = tokio::time::timeout(RESTORE_WAIT, async {
+        loop {
+            match recv(channel).await {
+                Some(ControlMsg::DisplayModes {
+                    modes,
+                    current,
+                    user,
+                    ..
+                }) => {
+                    on_event(ViewerEvent::DisplayModes {
+                        modes,
+                        current,
+                        user,
+                    });
+                    return true;
+                }
+                Some(ControlMsg::Bye { .. }) | None => return false,
+                Some(_) => {}
+            }
+        }
+    })
+    .await;
+    match answer {
+        Ok(open) => open,
+        Err(_) => {
+            tracing::warn!("host did not confirm its resolution within {RESTORE_WAIT:?}");
+            true
+        }
+    }
 }
 
 /// Viewer: receives the host's screen until either side ends the session.
@@ -1061,6 +1247,8 @@ pub async fn run_viewer(
     let mut last_heard = Instant::now();
     let mut liveness = tokio::time::interval(LIVENESS_CHECK);
     let mut silent = false;
+    // The host's screen is not at its user's resolution (`DisplayModes`).
+    let mut host_changed = false;
     let reason = loop {
         if want_keyframe
             && last_keyframe_request.is_none_or(|t| t.elapsed() >= MIN_KEYFRAME_REQUEST_GAP)
@@ -1140,6 +1328,11 @@ pub async fn run_viewer(
                         on_event(ViewerEvent::ScreenUnavailable(message));
                     }
                     Some(ControlMsg::ResolutionAdjustable) => on_event(ViewerEvent::ResolutionAdjustable),
+                    Some(ControlMsg::DisplayModes { modes, current, user, .. }) => {
+                        // Changed by us (or another viewer): set back before leaving.
+                        host_changed = !modes.is_empty() && current != user;
+                        on_event(ViewerEvent::DisplayModes { modes, current, user });
+                    }
                     Some(ControlMsg::Bye {
                         reason,
                         updating,
@@ -1184,6 +1377,9 @@ pub async fn run_viewer(
                 Some(ViewerCommand::MatchResolution { width, height, scale }) => {
                     send(&channel, &ControlMsg::MatchResolution { width, height, scale }).await;
                 }
+                Some(ViewerCommand::SetResolution { width, height, scale }) => {
+                    send(&channel, &ControlMsg::SetResolution { width, height, scale }).await;
+                }
                 Some(ViewerCommand::Volume(volume)) => sound.set_volume(volume),
                 Some(ViewerCommand::CancelTransfer) => {
                     clipboard.cancel_transfer(&channel, true).await;
@@ -1201,6 +1397,9 @@ pub async fn run_viewer(
                     break "connessione con il partner persa".to_owned();
                 }
                 Some(ViewerCommand::Stop) | None => {
+                    if host_changed && !restore_before_leaving(&channel, &mut on_event).await {
+                        break "disconnesso".to_owned();
+                    }
                     send_bye(&channel, "il partner si è disconnesso").await;
                     break "disconnesso".to_owned();
                 }

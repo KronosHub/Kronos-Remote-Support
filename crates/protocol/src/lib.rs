@@ -130,6 +130,23 @@ pub enum ControlMsg {
         height: u32,
         scale: f32,
     },
+    /// Host → viewer: the resolutions the shared screen offers, the one it has and the one its
+    /// user chose (the same when nobody changed it). Sent when sharing starts, after a change
+    /// of monitor and in answer to every `SetResolution`; `modes` is empty when the viewer
+    /// may not change it (ADR 0069). Older viewers ignore it.
+    DisplayModes {
+        display: u32,
+        modes: Vec<ScreenMode>,
+        current: ScreenMode,
+        user: ScreenMode,
+    },
+    /// Viewer → host: set the shared screen to this mode of `DisplayModes`; 0×0 brings the
+    /// user's own resolution back. The host answers with `DisplayModes`. Older hosts ignore it.
+    SetResolution {
+        width: u32,
+        height: u32,
+        scale: u32,
+    },
     /// Host → viewer: whether the host's own input is blocked now (after a request, or when
     /// the person at the host released it with Esc ×3); `message` explains a failure.
     InputBlocked {
@@ -157,6 +174,15 @@ pub struct DisplayInfo {
     pub area_width: u32,
     #[serde(default)]
     pub area_height: u32,
+}
+
+/// A display mode: `width`×`height` pixels, `scale` of them per point (2 for the HiDPI
+/// modes of macOS, otherwise 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenMode {
+    pub width: u32,
+    pub height: u32,
+    pub scale: u32,
 }
 
 /// A user input event, independent of the viewer's OS and screen size.
@@ -334,6 +360,32 @@ mod tests {
             os: Some("macos".into()),
         };
         assert_eq!(ControlMsg::from_json(new.to_json().as_bytes()), Some(new));
+    }
+
+    #[test]
+    fn display_modes_wire_format() {
+        let mode = |width, height, scale| ScreenMode {
+            width,
+            height,
+            scale,
+        };
+        let msg = ControlMsg::DisplayModes {
+            display: 2,
+            modes: vec![mode(3840, 2160, 1), mode(2560, 1440, 2)],
+            current: mode(1920, 1080, 1),
+            user: mode(3840, 2160, 1),
+        };
+        assert_eq!(ControlMsg::from_json(msg.to_json().as_bytes()), Some(msg));
+        let set = ControlMsg::SetResolution {
+            width: 1920,
+            height: 1080,
+            scale: 1,
+        };
+        assert_eq!(
+            set.to_json(),
+            r#"{"t":"set_resolution","width":1920,"height":1080,"scale":1}"#
+        );
+        assert_eq!(ControlMsg::from_json(set.to_json().as_bytes()), Some(set));
     }
 
     #[test]

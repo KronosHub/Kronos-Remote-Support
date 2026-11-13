@@ -251,6 +251,23 @@ pub enum UiEvent {
     ViewResolutionAdjustable {
         session: SessionId,
     },
+    /// The resolutions we may pick for the partner's screen (empty: none), the one it has and
+    /// its user's own (ADR 0069).
+    ViewDisplayModes {
+        session: SessionId,
+        modes: Vec<protocol::ScreenMode>,
+        current: protocol::ScreenMode,
+        user: protocol::ScreenMode,
+    },
+    /// Disconnecting: the partner's resolution is being set back first.
+    ViewRestoringResolution {
+        session: SessionId,
+    },
+    /// The partner set our shared screen to `mode` (`None`: back to our own resolution).
+    HostingResolution {
+        session: SessionId,
+        mode: Option<protocol::ScreenMode>,
+    },
     HostingEnded {
         session: SessionId,
         peer: String,
@@ -657,6 +674,10 @@ impl Service {
     /// `data_dir` keeps the device key (so the id never changes) and the small JSON files.
     pub fn start(app: AppHandle, data_dir: PathBuf) -> anyhow::Result<Self> {
         std::fs::create_dir_all(&data_dir)?;
+        // A resolution a crashed run left changed comes back first (ADR 0069).
+        let marker = data_dir.join("resolution-changed");
+        stream::restore_after_crash(&marker);
+        stream::set_resolution_marker(marker);
         let device_key = load_or_create_key(&data_dir.join("device.key"))?;
         let store = Store::new(Some(data_dir));
         let personal = store.personal_secret();
@@ -1101,6 +1122,23 @@ impl Service {
                 height,
                 scale,
             });
+        }
+    }
+
+    pub fn set_resolution(&self, session: SessionId, width: u32, height: u32, scale: u32) {
+        if let Some(viewer) = self.shared.viewers.lock().unwrap().get(&session) {
+            let _ = viewer.commands.send(ViewerCommand::SetResolution {
+                width,
+                height,
+                scale,
+            });
+        }
+    }
+
+    /// The person at this computer takes its own resolution back from a session we share.
+    pub fn restore_resolution(&self, session: SessionId) {
+        if let Some(host) = self.shared.hosting.lock().unwrap().get(&session) {
+            let _ = host.commands.send(HostCommand::RestoreResolution);
         }
     }
 
@@ -2602,6 +2640,19 @@ async fn serve_partner(
             HostEvent::Clipboard(message) => {
                 log(app, "info", format!("appunti con {who}: {message}"))
             }
+            HostEvent::Resolution(mode) => {
+                let message = match &mode {
+                    Some(m) => format!(
+                        "{who} ha portato lo schermo a {}×{}{} (torna com'era alla fine della sessione)",
+                        m.width / m.scale.max(1),
+                        m.height / m.scale.max(1),
+                        if m.scale > 1 { " HiDPI" } else { "" }
+                    ),
+                    None => "risoluzione dello schermo ripristinata".to_owned(),
+                };
+                log(app, "info", message);
+                emit(app, UiEvent::HostingResolution { session, mode });
+            }
             HostEvent::Ended(reason) => log(
                 app,
                 "info",
@@ -2933,6 +2984,23 @@ async fn view_partner(
             ViewerEvent::Transfer(p) => shared.view_event(app, session, transfer_event(session, p)),
             ViewerEvent::ResolutionAdjustable => {
                 shared.view_event(app, session, UiEvent::ViewResolutionAdjustable { session })
+            }
+            ViewerEvent::DisplayModes {
+                modes,
+                current,
+                user,
+            } => shared.view_event(
+                app,
+                session,
+                UiEvent::ViewDisplayModes {
+                    session,
+                    modes,
+                    current,
+                    user,
+                },
+            ),
+            ViewerEvent::RestoringResolution => {
+                shared.view_event(app, session, UiEvent::ViewRestoringResolution { session })
             }
             ViewerEvent::InputBlocked { blocked, message } => {
                 shared.view_event(app, session, UiEvent::ViewInputBlocked { session, blocked });

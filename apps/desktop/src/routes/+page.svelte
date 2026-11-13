@@ -43,6 +43,9 @@
     | { kind: "view_input_blocked"; session: number; blocked: boolean }
     | { kind: "view_silent"; session: number; silent: boolean }
     | { kind: "view_resolution_adjustable"; session: number }
+    | { kind: "view_display_modes"; session: number; modes: ScreenMode[]; current: ScreenMode; user: ScreenMode }
+    | { kind: "view_restoring_resolution"; session: number }
+    | { kind: "hosting_resolution"; session: number; mode: ScreenMode | null }
     | { kind: "hosting_input_blocked"; session: number; blocked: boolean }
     | { kind: "view_notice"; session: number; message: string }
     | { kind: "view_chat"; session: number; text: string }
@@ -106,6 +109,13 @@
     inputBlocked: boolean;
     /** The partner may set its screen to this window's size ("solo da remoto", ADR 0061). */
     resizable: boolean;
+    /** Resolutions we may pick for the partner's screen (fewer than 2: no menu; ADR 0069). */
+    modes: ScreenMode[];
+    /** The mode the partner's screen has, and its user's own. */
+    modeCurrent: ScreenMode | null;
+    modeUser: ScreenMode | null;
+    /** Disconnecting: waiting for the partner's resolution to be set back. */
+    restoring: boolean;
     /** Name the partner set in their app, if any. */
     peerName: string | null;
     transfer: Transfer | null;
@@ -157,7 +167,17 @@
     /** The partner blocked this computer's own mouse and keyboard. */
     blocked: boolean;
     transfer: Transfer | null;
+    /** The partner set this computer's screen to another resolution (ADR 0069). */
+    resolution: ScreenMode | null;
   };
+  /** A display mode: pixels, and how many of them per point (2: HiDPI on macOS). */
+  type ScreenMode = { width: number; height: number; scale: number };
+  const sameMode = (a: ScreenMode | null, b: ScreenMode | null) =>
+    !!a && !!b && a.width === b.width && a.height === b.height && a.scale === b.scale;
+  const modeKey = (m: ScreenMode) => `${m.width}x${m.height}@${m.scale}`;
+  /** As the user knows it: points (what decides how big things look), HiDPI if sharper. */
+  const modeLabel = (m: ScreenMode) =>
+    `${Math.round(m.width / Math.max(1, m.scale))}×${Math.round(m.height / Math.max(1, m.scale))}${m.scale > 1 ? " HiDPI" : ""}`;
   /** `x`, `y`: top-left in the partner's desktop (0 from hosts before 2.2.3). */
   type DisplayInfo = {
     id: number;
@@ -710,6 +730,25 @@
     return () => clearTimeout(timer);
   });
 
+  /** Sets the partner's screen to a mode of its list ("user": back to its own; ADR 0069). */
+  function pickResolution(key: string) {
+    const v = view;
+    if (!v) return;
+    const mode = key === "user" ? null : v.modes.find((m) => modeKey(m) === key);
+    if (key !== "user" && !mode) return;
+    // "Risoluzione adattata" would undo the choice at the next window resize.
+    if (zoom === "remote") {
+      askedResolution = null;
+      setZoom("fit");
+    }
+    invoke("set_resolution", {
+      session: v.session,
+      width: mode?.width ?? 0,
+      height: mode?.height ?? 0,
+      scale: mode?.scale ?? 1,
+    });
+  }
+
   function setZoom(value: Zoom) {
     zoom = value;
     try {
@@ -937,6 +976,22 @@
       case "view_resolution_adjustable":
         if (view?.session === event.session) view.resizable = true;
         break;
+      case "view_display_modes":
+        if (view?.session === event.session) {
+          view.modes = event.modes;
+          view.modeCurrent = event.modes.length ? event.current : null;
+          view.modeUser = event.modes.length ? event.user : null;
+        }
+        break;
+      case "view_restoring_resolution":
+        if (view?.session === event.session) {
+          view.restoring = true;
+          showNotice("Ripristino della risoluzione del partner…");
+        }
+        break;
+      case "hosting_resolution":
+        hosting = hosting.map((h) => (h.session === event.session ? { ...h, resolution: event.mode } : h));
+        break;
       case "hosting_input_blocked":
         hosting = hosting.map((h) => (h.session === event.session ? { ...h, blocked: event.blocked } : h));
         break;
@@ -952,7 +1007,7 @@
       case "hosting_started":
         hosting = [
           ...hosting,
-          { session: event.session, peer: event.peer, path: null, chat: [], showChat: false, unread: 0, blocked: false, transfer: null },
+          { session: event.session, peer: event.peer, path: null, chat: [], showChat: false, unread: 0, blocked: false, transfer: null, resolution: null },
         ];
         break;
       case "host_chat_sent": {
@@ -1470,6 +1525,10 @@
       audio: false,
       inputBlocked: false,
       resizable: false,
+      modes: [],
+      modeCurrent: null,
+      modeUser: null,
+      restoring: false,
       peerName: null,
       transfer: null,
       path: null,
@@ -2211,7 +2270,16 @@
 
   /** Ends the session (if still running) and closes this window. */
   async function disconnect() {
-    if (view && !view.ended) await invoke("close_view", { session: view.session });
+    if (view && !view.ended) {
+      const changed = view.modeCurrent !== null && !sameMode(view.modeCurrent, view.modeUser);
+      await invoke("close_view", { session: view.session });
+      // The partner's resolution comes back before the session closes (ADR 0069): the window
+      // stays until it has (the backend waits at most 3 s, then says goodbye anyway).
+      if (changed) {
+        const until = Date.now() + 5000;
+        while (view && !view.ended && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+      }
+    }
     if (view?.reconnecting) await invoke("cancel_connect");
     try {
       await getCurrentWindow().close();
@@ -2488,7 +2556,27 @@
           <option value="native">Pixel reali</option>
           {#if view.resizable}<option value="remote">Risoluzione adattata</option>{/if}
         </select>
-        <button type="button" class="vdisc" onclick={disconnect}>{@render powerIcon()}{view.ended ? "Chiudi" : "Disconnetti"}</button>
+        {#if view.modes.length > 1 && view.modeUser}
+          {@const user = view.modeUser}
+          <select class="vselect" class:on={!sameMode(view.modeCurrent, user)}
+            value={view.modeCurrent && !sameMode(view.modeCurrent, user) ? modeKey(view.modeCurrent) : "user"}
+            onchange={(e) => pickResolution(e.currentTarget.value)}
+            title="Risoluzione dello schermo del partner: più bassa, tutto appare più grande. Chi è davanti al computer vede il cambio e può annullarlo; alla disconnessione torna com'era prima di chiudere la sessione"
+            aria-label="Risoluzione dello schermo del partner">
+            <option value="user">Risoluzione del partner ({modeLabel(user)})</option>
+            {#each view.modes.filter((m) => m.scale === 1 && !sameMode(m, user)) as m (modeKey(m))}
+              <option value={modeKey(m)}>{modeLabel(m)}</option>
+            {/each}
+            {#if view.modes.some((m) => m.scale > 1 && !sameMode(m, user))}
+              <optgroup label="HiDPI: più nitide, più pixel da trasmettere">
+                {#each view.modes.filter((m) => m.scale > 1 && !sameMode(m, user)) as m (modeKey(m))}
+                  <option value={modeKey(m)}>{modeLabel(m)}</option>
+                {/each}
+              </optgroup>
+            {/if}
+          </select>
+        {/if}
+        <button type="button" class="vdisc" onclick={disconnect} disabled={view.restoring && !view.ended}>{@render powerIcon()}{view.ended ? "Chiudi" : view.restoring ? "Ripristino…" : "Disconnetti"}</button>
       </div>
       <div class="vstats">
         {#if view.path}<span><span class="vpath {view.path}" title={pathHint[view.path]}>{pathLabel[view.path]}</span></span>{/if}
@@ -2736,6 +2824,13 @@
         <span class="badge warn" title="Chi ti controlla ha bloccato mouse e tastiera di questo computer">
           Mouse e tastiera bloccati · premi Esc tre volte per riprenderli
         </span>
+      {/if}
+      {#if h.resolution}
+        <span class="badge warn" title="Chi ti controlla ha cambiato la risoluzione di questo schermo: torna com'era alla fine della sessione">
+          Risoluzione cambiata in {modeLabel(h.resolution)}
+        </span>
+        <button class="icon-btn" onclick={() => invoke("restore_resolution", { session: h.session })}
+          title="Rimetti subito la tua risoluzione">Ripristina</button>
       {/if}
       <span class="spacer"></span>
       <button class="icon-btn" onclick={() => openHostChat(h.session)} title="Scrivi a chi ti controlla">
@@ -4368,6 +4463,11 @@
     border: 1px solid var(--g-sep);
     background: var(--g-recess);
     color: var(--text);
+  }
+  /* The partner's screen is at a resolution we picked. */
+  .vselect.on {
+    border-color: var(--accent);
+    color: var(--accent);
   }
   .vdisc {
     display: inline-flex;

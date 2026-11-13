@@ -9,6 +9,7 @@ pub mod files;
 pub mod fs;
 pub mod rate;
 mod resize;
+pub use resize::{restore_after_crash, set_marker as set_resolution_marker};
 pub mod session;
 mod sharing;
 mod sound;

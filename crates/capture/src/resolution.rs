@@ -1,7 +1,7 @@
-//! Changing the resolution of a shared screen to suit the viewer's window (ADR 0061).
+//! Changing the resolution of a shared screen: to suit the viewer's window on computers used
+//! only remotely (ADR 0061), or to the mode the viewer picks from [`modes`] (ADR 0069).
 //!
-//! Only for computers used remotely ("solo da remoto"): the person at a monitor would see
-//! the resolution change. The change is temporary: Windows keeps the registry settings
+//! The change is temporary: Windows keeps the registry settings
 //! (`CDS_FULLSCREEN`), macOS reverts it when the app quits (`kCGConfigureForAppOnly`), and
 //! [`restore`] brings the saved resolution back at the end of the session.
 
@@ -73,6 +73,43 @@ pub fn set(display_id: u32, want: Request) -> Result<Option<(u32, u32)>> {
 /// Brings the display back to its own resolution.
 pub fn restore(display_id: u32) -> Result<()> {
     platform::restore(display_id)
+}
+
+/// Brings every display back to the user's settings (after a crash left one changed).
+pub fn restore_all() -> Result<()> {
+    platform::restore_all()
+}
+
+/// Smallest mode worth offering, in points: below it the desktop no longer fits.
+const MIN_POINTS: (u32, u32) = (1024, 600);
+
+/// The modes to offer a viewer: one per size and pixels per point, none smaller than
+/// [`MIN_POINTS`], the largest first (HiDPI after the plain mode of the same size).
+pub fn offered(modes: &[Mode]) -> Vec<Mode> {
+    let mut list: Vec<Mode> = Vec::new();
+    for m in modes {
+        let scale = m.scale.max(1);
+        let points = (m.width / scale, m.height / scale);
+        if points.0 < MIN_POINTS.0 || points.1 < MIN_POINTS.1 {
+            continue;
+        }
+        if !list
+            .iter()
+            .any(|o| (o.width, o.height, o.scale) == (m.width, m.height, m.scale))
+        {
+            list.push(*m);
+        }
+    }
+    let points =
+        |m: &Mode| u64::from(m.width / m.scale.max(1)) * u64::from(m.height / m.scale.max(1));
+    list.sort_by(|a, b| points(b).cmp(&points(a)).then(a.scale.cmp(&b.scale)));
+    list
+}
+
+/// The modes [`offered`] for the display and the one it has now.
+pub fn modes(display_id: u32) -> Result<(Vec<Mode>, Mode)> {
+    let (all, current) = platform::modes(display_id)?;
+    Ok((offered(&all), current))
 }
 
 #[cfg(target_os = "windows")]
@@ -147,6 +184,31 @@ mod platform {
             )));
         }
         Ok(Some((chosen.width, chosen.height)))
+    }
+
+    pub fn modes(display_id: u32) -> Result<(Vec<Mode>, Mode)> {
+        let device = crate::windows::device_name(display_id)?;
+        let current = mode_at(&device, ENUM_CURRENT_SETTINGS)
+            .ok_or_else(|| CaptureError::Backend("risoluzione attuale non leggibile".into()))?;
+        let modes = (0..)
+            .map_while(|i| mode_at(&device, ENUM_DISPLAY_SETTINGS_MODE(i)))
+            .filter(|m| m.dmBitsPerPel == 32)
+            .map(|m| describe(&m))
+            .collect();
+        Ok((modes, describe(&current)))
+    }
+
+    pub fn restore_all() -> Result<()> {
+        // No device and no mode: every display back to the registry settings.
+        let status =
+            unsafe { ChangeDisplaySettingsExW(PCWSTR::null(), None, None, CDS_TYPE(0), None) };
+        if status != DISP_CHANGE_SUCCESSFUL {
+            return Err(CaptureError::Backend(format!(
+                "risoluzioni non ripristinate (codice {})",
+                status.0
+            )));
+        }
+        Ok(())
     }
 
     pub fn restore(display_id: u32) -> Result<()> {
@@ -230,18 +292,10 @@ mod platform {
         }
     }
 
-    pub fn set(display_id: u32, want: Request) -> Result<Option<(u32, u32)>> {
+    /// The display's modes usable for the desktop, HiDPI ones included, as an array to
+    /// release with `CFRelease` and its handles.
+    unsafe fn mode_list(display_id: u32) -> Result<(CFTypeRef, Vec<CFTypeRef>)> {
         unsafe {
-            let current = CGDisplayCopyDisplayMode(display_id);
-            if current.is_null() {
-                return Err(CaptureError::DisplayNotFound(display_id));
-            }
-            let current_mode = describe(current);
-            let current_points = (
-                CGDisplayModeGetWidth(current),
-                CGDisplayModeGetHeight(current),
-            );
-            CFRelease(current);
             // With the HiDPI modes too ("duplicate low resolution" ones).
             let key = kCGDisplayShowDuplicateLowResolutionModes;
             let value = kCFBooleanTrue;
@@ -262,10 +316,47 @@ mod platform {
                     "modalità dello schermo non leggibili".into(),
                 ));
             }
-            let handles: Vec<CFTypeRef> = (0..CFArrayGetCount(list))
+            let handles = (0..CFArrayGetCount(list))
                 .map(|i| CFArrayGetValueAtIndex(list, i))
                 .filter(|&m| CGDisplayModeIsUsableForDesktopGUI(m))
                 .collect();
+            Ok((list, handles))
+        }
+    }
+
+    pub fn modes(display_id: u32) -> Result<(Vec<Mode>, Mode)> {
+        unsafe {
+            let current = CGDisplayCopyDisplayMode(display_id);
+            if current.is_null() {
+                return Err(CaptureError::DisplayNotFound(display_id));
+            }
+            let current_mode = describe(current);
+            CFRelease(current);
+            let (list, handles) = mode_list(display_id)?;
+            let modes = handles.iter().map(|&m| describe(m)).collect();
+            CFRelease(list);
+            Ok((modes, current_mode))
+        }
+    }
+
+    pub fn restore_all() -> Result<()> {
+        unsafe { CGRestorePermanentDisplayConfiguration() };
+        Ok(())
+    }
+
+    pub fn set(display_id: u32, want: Request) -> Result<Option<(u32, u32)>> {
+        unsafe {
+            let current = CGDisplayCopyDisplayMode(display_id);
+            if current.is_null() {
+                return Err(CaptureError::DisplayNotFound(display_id));
+            }
+            let current_mode = describe(current);
+            let current_points = (
+                CGDisplayModeGetWidth(current),
+                CGDisplayModeGetHeight(current),
+            );
+            CFRelease(current);
+            let (list, handles) = mode_list(display_id)?;
             let modes: Vec<Mode> = handles.iter().map(|&m| describe(m)).collect();
             let result = match choose(&modes, want, current_mode) {
                 Some(chosen)
@@ -328,6 +419,16 @@ mod platform {
 
     pub fn restore(_display_id: u32) -> Result<()> {
         Ok(())
+    }
+
+    pub fn restore_all() -> Result<()> {
+        Ok(())
+    }
+
+    pub fn modes(_display_id: u32) -> Result<(Vec<super::Mode>, super::Mode)> {
+        Err(CaptureError::Backend(
+            "non disponibile su questo sistema".into(),
+        ))
     }
 }
 
@@ -401,6 +502,58 @@ mod tests {
             scale: 1.0,
         };
         assert_eq!(choose(&modes, plain, CURRENT), Some(mode(2880, 1800, 1)));
+    }
+
+    #[test]
+    fn offered_modes_one_per_size_largest_first() {
+        let fast = Mode {
+            refresh: 144.0,
+            ..mode(1920, 1080, 1)
+        };
+        let modes = [
+            mode(800, 600, 1),
+            mode(1920, 1080, 1),
+            fast,
+            mode(3840, 2160, 2),
+            mode(3840, 2160, 1),
+            mode(2048, 1280, 2),
+            mode(2560, 1440, 1),
+        ];
+        let list: Vec<(u32, u32, u32)> = offered(&modes)
+            .iter()
+            .map(|m| (m.width, m.height, m.scale))
+            .collect();
+        assert_eq!(
+            list,
+            [
+                (3840, 2160, 1),
+                (2560, 1440, 1),
+                (1920, 1080, 1),
+                (3840, 2160, 2),
+                (2048, 1280, 2),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_offered_mode_is_chosen_exactly() {
+        let modes = [
+            mode(3840, 2160, 1),
+            mode(1920, 1080, 1),
+            mode(3840, 2160, 2),
+        ];
+        let hidpi = Request {
+            width: 3840,
+            height: 2160,
+            scale: 2.0,
+        };
+        assert_eq!(choose(&modes, hidpi, CURRENT), Some(mode(3840, 2160, 2)));
+        let plain = Request {
+            width: 1920,
+            height: 1080,
+            scale: 1.0,
+        };
+        assert_eq!(choose(&modes, plain, CURRENT), Some(mode(1920, 1080, 1)));
     }
 
     #[test]

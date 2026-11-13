@@ -665,6 +665,16 @@ fn match_resolution(
 }
 
 #[tauri::command]
+fn set_resolution(service: State<'_, Service>, session: u64, width: u32, height: u32, scale: u32) {
+    service.set_resolution(session, width, height, scale);
+}
+
+#[tauri::command]
+fn restore_resolution(service: State<'_, Service>, session: u64) {
+    service.restore_resolution(session);
+}
+
+#[tauri::command]
 fn cancel_transfer(service: State<'_, Service>, session: u64) {
     service.cancel_transfer(session);
 }
@@ -1132,6 +1142,8 @@ pub fn run() {
             cancel_transfer,
             set_block_input,
             match_resolution,
+            set_resolution,
+            restore_resolution,
             display_name,
             set_display_name,
             remote_only,
