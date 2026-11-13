@@ -2,6 +2,17 @@
 
 Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**, quando la versione è disponibile.
 
+## 2.3.0 — 2026-11-13
+- **Risoluzione del partner**: nella barra della sessione un nuovo menu cambia la risoluzione dello schermo del
+  computer che controlli. Con una risoluzione più bassa tutto appare più grande, utile con i monitor 4K e 5K visti
+  da un portatile. Le modalità HiDPI del Mac sono in un gruppo a parte.
+- Alla disconnessione la risoluzione torna com'era **prima** che la sessione si chiuda ("Ripristino…" sul
+  pulsante). Se la connessione cade, il computer controllato la ripristina da solo; se l'app si chiude di colpo,
+  la ripristina al riavvio.
+- Sul computer controllato il banner dice "Risoluzione cambiata in …", con **Ripristina** per tornare subito alla
+  propria.
+- Serve la 2.3.0 su entrambi i computer.
+
 ## 2.2.4 — 2026-11-12
 - **Spazi del Mac**: restano le frecce per passare da un'app a tutto schermo all'altra; tolto Mission Control, che
   dal computer che controlla non si apriva.

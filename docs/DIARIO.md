@@ -789,3 +789,13 @@
   (pixel contro punti): aggiunte le dimensioni in punti. Corretto il nome nelle Preferenze (form in colonna).
 - 2.2.3 pubblicata. Prova dell'utente: Mission Control non funziona dall'app; tolto dall'interfaccia.
 - 2.2.4 pubblicata (Spazi senza Mission Control).
+
+## 2026-11-13 — 2.3.0: risoluzione del partner
+- Richiesta: da un portatile, gli schermi ad alta risoluzione si vedono minuscoli; scegliere la risoluzione del
+  computer controllato, anche senza HiDPI, ripristinata prima di disconnettersi. La base c'era (ADR 0061, solo
+  "solo da remoto" e adattata alla finestra). Pagina di prova interattiva con menu, avviso sull'host e sequenza
+  di disconnessione; per chi è davanti al computer scelta l'opzione 1 (sempre, con avviso e Ripristina).
+- Implementato (ADR 0069): messaggi `DisplayModes`/`SetResolution`, elenco filtrato, risoluzione dell'utente
+  ricordata, ripristino prima del `Bye` (al massimo 3 s), file per il ripristino dopo un crash, menu nella barra,
+  banner sull'host. Elenco letto dal vero su questo Mac (5K); il cambio non provato qui per non toccare lo
+  schermo dell'utente.
