@@ -806,3 +806,4 @@
 - Prova dell'utente: decine di voci, e 1920×1080 normale e HiDPI danno lo stesso risultato. Ora una voce per
   dimensione in punti (la normale; HiDPI solo se unica) e solo le dimensioni comuni; il 5K di questo Mac passa da
   19 a 5 voci.
+- 2.3.1 pubblicata (controlli e release al primo colpo).
