@@ -83,27 +83,68 @@ pub fn restore_all() -> Result<()> {
 /// Smallest mode worth offering, in points: below it the desktop no longer fits.
 const MIN_POINTS: (u32, u32) = (1024, 600);
 
-/// The modes to offer a viewer: one per size and pixels per point, none smaller than
-/// [`MIN_POINTS`], the largest first (HiDPI after the plain mode of the same size).
+/// Sizes people know, in points (what decides how big things look): monitors, laptops and
+/// TVs. A viewer is offered these; a display with too few of them gets a spread instead.
+const COMMON_POINTS: [(u32, u32); 15] = [
+    (3840, 2160),
+    (3440, 1440),
+    (2560, 1600),
+    (2560, 1440),
+    (2560, 1080),
+    (1920, 1200),
+    (1920, 1080),
+    (1680, 1050),
+    (1600, 900),
+    (1440, 900),
+    (1366, 768),
+    (1280, 1024),
+    (1280, 800),
+    (1280, 720),
+    (1024, 768),
+];
+
+/// Most modes offered when a display has too few common sizes.
+const MAX_SPREAD: usize = 6;
+
+/// The modes to offer a viewer (ADR 0069): one per size in points, none smaller than
+/// [`MIN_POINTS`], the largest first. Of a size that exists both plain and HiDPI only the
+/// plain mode: on the viewer's screen they look the same, and HiDPI costs four times the
+/// pixels. Only the common sizes ([`COMMON_POINTS`]) when the display has at least two of
+/// them, otherwise at most [`MAX_SPREAD`] spread from the largest to the smallest.
 pub fn offered(modes: &[Mode]) -> Vec<Mode> {
+    let points = |m: &Mode| (m.width / m.scale.max(1), m.height / m.scale.max(1));
     let mut list: Vec<Mode> = Vec::new();
     for m in modes {
-        let scale = m.scale.max(1);
-        let points = (m.width / scale, m.height / scale);
-        if points.0 < MIN_POINTS.0 || points.1 < MIN_POINTS.1 {
+        let size = points(m);
+        if size.0 < MIN_POINTS.0 || size.1 < MIN_POINTS.1 {
             continue;
         }
-        if !list
-            .iter()
-            .any(|o| (o.width, o.height, o.scale) == (m.width, m.height, m.scale))
-        {
-            list.push(*m);
+        match list.iter_mut().find(|o| points(o) == size) {
+            Some(o) if m.scale.max(1) < o.scale.max(1) => *o = *m,
+            Some(_) => {}
+            None => list.push(*m),
         }
     }
-    let points =
-        |m: &Mode| u64::from(m.width / m.scale.max(1)) * u64::from(m.height / m.scale.max(1));
-    list.sort_by(|a, b| points(b).cmp(&points(a)).then(a.scale.cmp(&b.scale)));
-    list
+    let area = |m: &Mode| {
+        let (w, h) = points(m);
+        u64::from(w) * u64::from(h)
+    };
+    list.sort_by_key(|m| std::cmp::Reverse(area(m)));
+    let common: Vec<Mode> = list
+        .iter()
+        .copied()
+        .filter(|m| COMMON_POINTS.contains(&points(m)))
+        .collect();
+    if common.len() >= 2 {
+        return common;
+    }
+    if list.len() <= MAX_SPREAD {
+        return list;
+    }
+    let last = list.len() - 1;
+    (0..MAX_SPREAD)
+        .map(|i| list[i * last / (MAX_SPREAD - 1)])
+        .collect()
 }
 
 /// The modes [`offered`] for the display and the one it has now.
@@ -523,16 +564,30 @@ mod tests {
             .iter()
             .map(|m| (m.width, m.height, m.scale))
             .collect();
-        assert_eq!(
-            list,
-            [
-                (3840, 2160, 1),
-                (2560, 1440, 1),
-                (1920, 1080, 1),
-                (3840, 2160, 2),
-                (2048, 1280, 2),
-            ]
-        );
+        assert_eq!(list, [(3840, 2160, 1), (2560, 1440, 1), (1920, 1080, 1)]);
+    }
+
+    #[test]
+    fn hidpi_only_sizes_are_kept_and_odd_sizes_spread() {
+        // A size only HiDPI has stays; a common size is offered plain, not twice.
+        let list = offered(&[
+            mode(7680, 4320, 2),
+            mode(5120, 2880, 2),
+            mode(2560, 1440, 1),
+            mode(1728, 972, 1),
+        ]);
+        let list: Vec<(u32, u32, u32)> =
+            list.iter().map(|m| (m.width, m.height, m.scale)).collect();
+        assert_eq!(list, [(7680, 4320, 2), (2560, 1440, 1)]);
+
+        // A laptop panel with no common size: at most MAX_SPREAD, largest and smallest kept.
+        let odd: Vec<Mode> = (0..20)
+            .map(|i| mode(1100 + i * 40, 700 + i * 25, 1))
+            .collect();
+        let list = offered(&odd);
+        assert_eq!(list.len(), MAX_SPREAD);
+        assert_eq!(list.first().map(|m| m.width), Some(1100 + 19 * 40));
+        assert_eq!(list.last().map(|m| m.width), Some(1100));
     }
 
     #[test]

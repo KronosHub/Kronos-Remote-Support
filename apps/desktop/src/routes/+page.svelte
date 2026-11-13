@@ -175,9 +175,9 @@
   const sameMode = (a: ScreenMode | null, b: ScreenMode | null) =>
     !!a && !!b && a.width === b.width && a.height === b.height && a.scale === b.scale;
   const modeKey = (m: ScreenMode) => `${m.width}x${m.height}@${m.scale}`;
-  /** As the user knows it: points (what decides how big things look), HiDPI if sharper. */
+  /** As the user knows it: points, what decides how big things look (HiDPI or not looks the same here). */
   const modeLabel = (m: ScreenMode) =>
-    `${Math.round(m.width / Math.max(1, m.scale))}×${Math.round(m.height / Math.max(1, m.scale))}${m.scale > 1 ? " HiDPI" : ""}`;
+    `${Math.round(m.width / Math.max(1, m.scale))}×${Math.round(m.height / Math.max(1, m.scale))}`;
   /** `x`, `y`: top-left in the partner's desktop (0 from hosts before 2.2.3). */
   type DisplayInfo = {
     id: number;
@@ -2564,16 +2564,9 @@
             title="Risoluzione dello schermo del partner: più bassa, tutto appare più grande. Chi è davanti al computer vede il cambio e può annullarlo; alla disconnessione torna com'era prima di chiudere la sessione"
             aria-label="Risoluzione dello schermo del partner">
             <option value="user">Risoluzione del partner ({modeLabel(user)})</option>
-            {#each view.modes.filter((m) => m.scale === 1 && !sameMode(m, user)) as m (modeKey(m))}
+            {#each view.modes.filter((m) => modeLabel(m) !== modeLabel(user)) as m (modeKey(m))}
               <option value={modeKey(m)}>{modeLabel(m)}</option>
             {/each}
-            {#if view.modes.some((m) => m.scale > 1 && !sameMode(m, user))}
-              <optgroup label="HiDPI: più nitide, più pixel da trasmettere">
-                {#each view.modes.filter((m) => m.scale > 1 && !sameMode(m, user)) as m (modeKey(m))}
-                  <option value={modeKey(m)}>{modeLabel(m)}</option>
-                {/each}
-              </optgroup>
-            {/if}
           </select>
         {/if}
         <button type="button" class="vdisc" onclick={disconnect} disabled={view.restoring && !view.ended}>{@render powerIcon()}{view.ended ? "Chiudi" : view.restoring ? "Ripristino…" : "Disconnetti"}</button>

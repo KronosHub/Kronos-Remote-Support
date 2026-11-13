@@ -2,6 +2,12 @@
 
 Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**, quando la versione è disponibile.
 
+## 2.3.1 — 2026-11-13
+- **Risoluzione del partner**: il menu propone solo le risoluzioni più comuni (3840×2160, 2560×1440, 1920×1080,
+  1600×900, …) invece di decine di voci. Niente più doppioni normale/HiDPI: sul tuo schermo erano identici, e
+  la versione normale trasmette molti meno pixel.
+- Serve la 2.3.1 sul computer controllato (è lui a preparare l'elenco).
+
 ## 2.3.0 — 2026-11-13
 - **Risoluzione del partner**: nella barra della sessione un nuovo menu cambia la risoluzione dello schermo del
   computer che controlli. Con una risoluzione più bassa tutto appare più grande, utile con i monitor 4K e 5K visti

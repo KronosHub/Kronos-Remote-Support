@@ -16,10 +16,13 @@ davanti al computer controllato; scelta la 1: **sempre permesso, con avviso e "R
     `SetResolution`. `modes` vuoto = non si può cambiare (niente controllo remoto, Linux, "Tutti gli schermi",
     schermo virtuale a dimensione fissa delle Preferenze);
   - viewer → host `SetResolution { width, height, scale }`; 0×0 = la risoluzione dell'utente.
-- **Elenco** (`capture::resolution::modes`/`offered`): una voce per dimensione e scala, non sotto 1024×600 punti,
-  dalla più grande. Sul Mac anche le HiDPI; Windows non ne ha (scala sempre 1). La scelta passa per `choose`,
-  che con una modalità dell'elenco la trova esatta; nessun limite allo stream (i pixel in più si riducono prima
-  della codifica).
+- **Elenco** (`capture::resolution::modes`/`offered`): una voce per dimensione in punti, non sotto 1024×600,
+  dalla più grande. Di una dimensione che esiste normale e HiDPI resta la normale (sullo schermo di chi controlla
+  sono identiche, l'HiDPI costa quattro volte i pixel); l'HiDPI resta solo se è l'unica. Solo le dimensioni comuni
+  (`COMMON_POINTS`: 3840×2160, 2560×1440, 1920×1080, 1600×900, 1280×720, …) se lo schermo ne ha almeno due,
+  altrimenti al massimo 6 distribuite dalla più grande alla più piccola. Il menu non distingue più le HiDPI. La
+  scelta passa per `choose`, che con una modalità dell'elenco la trova esatta; nessun limite allo stream (i pixel
+  in più si riducono prima della codifica).
 - **Permesso**: basta il controllo remoto consentito; non serve "solo da remoto". Chi è al computer controllato
   vede nel banner "Risoluzione cambiata in …" con **Ripristina** (`HostCommand::RestoreResolution`), e una riga
   in Attività.

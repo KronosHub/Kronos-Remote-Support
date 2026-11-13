@@ -801,3 +801,8 @@
   schermo dell'utente.
 - Primo giro di `checks` rosso: `tools/peer-poc` non gestiva i nuovi eventi (non compilato in locale); corretto. Un
   fallimento occasionale di `file_manager` in locale, ripetuto verde. 2.3.0 pubblicata (release al primo colpo).
+
+## 2026-11-13 — 2.3.1: menu Risoluzione ridotto
+- Prova dell'utente: decine di voci, e 1920×1080 normale e HiDPI danno lo stesso risultato. Ora una voce per
+  dimensione in punti (la normale; HiDPI solo se unica) e solo le dimensioni comuni; il 5K di questo Mac passa da
+  19 a 5 voci.
