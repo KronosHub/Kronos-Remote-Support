@@ -6,6 +6,8 @@
 
 pub mod block;
 mod keymap;
+#[cfg(target_os = "windows")]
+mod sas;
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -266,6 +268,12 @@ impl Replayer {
                 } else {
                     self.keys_down.remove(code);
                 }
+            }
+            #[cfg(target_os = "windows")]
+            InputEvent::SecureAttention => sas::send()?,
+            #[cfg(not(target_os = "windows"))]
+            InputEvent::SecureAttention => {
+                anyhow::bail!("Ctrl+Alt+Canc esiste solo su Windows")
             }
         }
         Ok(())

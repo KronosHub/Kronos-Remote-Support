@@ -154,6 +154,11 @@ pub enum ControlMsg {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
+    /// Host → viewer: a `SecureAttention` (Ctrl+Alt+Del) could not be sent; `message` says why.
+    /// Older viewers ignore it.
+    SecureAttentionFailed {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -209,6 +214,10 @@ pub enum InputEvent {
         code: String,
         down: bool,
     },
+    /// Ctrl+Alt+Del (Windows' secure attention sequence). The OS never accepts it as plain
+    /// keys: a Windows host asks the system for it, which only its SYSTEM agent may do.
+    /// Older hosts drop the whole message.
+    SecureAttention,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -321,6 +330,13 @@ mod tests {
         assert_eq!(
             ControlMsg::from_json(click.to_json().as_bytes()),
             Some(click)
+        );
+        let sas = ControlMsg::Input {
+            event: InputEvent::SecureAttention,
+        };
+        assert_eq!(
+            sas.to_json(),
+            r#"{"t":"input","event":{"k":"secure_attention"}}"#
         );
     }
 

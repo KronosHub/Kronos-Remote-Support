@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use protocol::ControlMsg;
+use protocol::{ControlMsg, InputEvent};
 use tokio::sync::mpsc;
 use transport::video::{Assembled, SharedPacketStats, VideoFrame, VideoReceiver, VideoSender};
 use transport::{DataChannel, DataChannelEvent, TrackRemote};
@@ -67,6 +67,15 @@ impl HostInput {
             Self::Local(sink) => sink.send(event),
             #[cfg(windows)]
             Self::Agent(sink) => sink.send(event),
+        }
+    }
+
+    /// Whether events reach the SYSTEM agent, the only one allowed to send Ctrl+Alt+Del.
+    fn is_agent(&self) -> bool {
+        match self {
+            Self::Local(_) => false,
+            #[cfg(windows)]
+            Self::Agent(_) => true,
         }
     }
 
@@ -534,6 +543,27 @@ pub async fn serve_host(
                         tracing::info!(kbps, fps, received, lost, rtt_ms, "adaptive quality");
                         send(&channel, &ControlMsg::Quality { kbps, fps, limited }).await;
                         on_event(HostEvent::Quality { kbps, fps, limited });
+                    }
+                }
+                Some(ControlMsg::Input { event: InputEvent::SecureAttention }) => {
+                    let failure = match &input {
+                        Some(sink) if sink.is_agent() => {
+                            awake.user_active();
+                            sink.send(InputEvent::SecureAttention);
+                            None
+                        }
+                        Some(_) if cfg!(windows) => Some(
+                            "Ctrl+Alt+Canc richiede il servizio di Kronos sul computer controllato: \
+                             attiva \"Controllo finestre di amministratore (UAC)\" o l'accesso non \
+                             presidiato nelle sue Preferenze"
+                                .to_string(),
+                        ),
+                        Some(_) => Some("Ctrl+Alt+Canc esiste solo su Windows".to_string()),
+                        None => None,
+                    };
+                    if let Some(message) = failure {
+                        tracing::info!("Ctrl+Alt+Del refused: {message}");
+                        send(&channel, &ControlMsg::SecureAttentionFailed { message }).await;
                     }
                 }
                 Some(ControlMsg::Input { event }) => {
@@ -1100,6 +1130,8 @@ pub enum ViewerEvent {
     Silent(bool),
     /// The host's sound cannot be played (here or on the host); the button goes off.
     AudioUnavailable(String),
+    /// The host could not send Ctrl+Alt+Del; why.
+    SecureAttentionFailed(String),
     /// A clipboard file transfer moved on.
     Transfer(crate::files::TransferProgress),
     /// Whether the host's own mouse and keyboard are blocked, and why not if it failed.
@@ -1307,6 +1339,9 @@ pub async fn run_viewer(
                     Some(ControlMsg::Chat { text }) => on_event(ViewerEvent::Chat(text)),
                     Some(ControlMsg::InputBlocked { blocked, message }) => {
                         on_event(ViewerEvent::InputBlocked { blocked, message });
+                    }
+                    Some(ControlMsg::SecureAttentionFailed { message }) => {
+                        on_event(ViewerEvent::SecureAttentionFailed(message));
                     }
                     Some(ControlMsg::AudioUnavailable { message }) => {
                         let _ = sound.set_enabled(false).await;

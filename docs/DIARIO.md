@@ -807,3 +807,12 @@
   dimensione in punti (la normale; HiDPI solo se unica) e solo le dimensioni comuni; il 5K di questo Mac passa da
   19 a 5 voci.
 - 2.3.1 pubblicata (controlli e release al primo colpo).
+
+## 2026-11-16 — Ctrl+Alt+Canc, etichette della barra, proposte di icona
+- Ctrl+Alt+Canc verso Windows: evento `secure_attention`, `SendSAS` dall'agente SYSTEM con la policy
+  `SoftwareSASGeneration` accesa e poi ripristinata; senza servizio il partner risponde perché no (ADR 0070).
+  `input` compilato e clippy pulito per `x86_64-pc-windows-msvc`; da provare sulla VM.
+- Etichette dei pulsanti della barra: la regola `.viewer.chat-open .vbar .lbl` le toglieva sempre con la chat aperta
+  (chat fissata = sempre solo icone su quel computer). Ora `barCompact` le toglie solo se la prima riga va a capo.
+- Icona: 4 proposte, varianti della C e della C4 nel canvas Design; scelta C4.4 con bordo arancio molto sottile,
+  misure rigenerate con `tauri icon` (ADR 0071).

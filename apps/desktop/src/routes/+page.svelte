@@ -153,7 +153,8 @@
     | { k: "mouse_move"; x: number; y: number }
     | { k: "mouse_button"; button: string; down: boolean }
     | { k: "wheel"; dx: number; dy: number }
-    | { k: "key"; code: string; down: boolean };
+    | { k: "key"; code: string; down: boolean }
+    | { k: "secure_attention" };
   type ChatMsg = { mine: boolean; text: string; time: string };
   /** A clipboard file transfer under way (progress bar). */
   type Transfer = { sending: boolean; done: number; total: number; rate: number };
@@ -1832,6 +1833,35 @@
   let blobEl = $state<HTMLDivElement | null>(null);
   let blobBody = $state<HTMLDivElement | null>(null);
   let barHeight = $state(0);
+  let barWidth = $state(0);
+  let barRowEl = $state<HTMLDivElement | null>(null);
+  /** Button labels hidden because the first row would wrap with them (narrow window, chat open). */
+  let barCompact = $state(false);
+  /** Bar width at which the labels stopped fitting: they come back only when it grows past it. */
+  let barWrapWidth = 0;
+  function rowWraps(row: HTMLElement) {
+    const kids = [...row.children].filter((k) => {
+      const position = getComputedStyle(k).position;
+      return position !== "absolute" && position !== "fixed";
+    });
+    if (kids.length < 2) return false;
+    const first = kids[0].getBoundingClientRect();
+    return kids.some((k) => k.getBoundingClientRect().top >= first.bottom - 2);
+  }
+  $effect(() => {
+    const width = barWidth;
+    void barHeight; // a wrap (e.g. a button appearing) changes the height, not the width
+    const row = barRowEl;
+    if (!row || !width) return;
+    if (!barCompact) {
+      if (rowWraps(row)) {
+        barCompact = true;
+        barWrapWidth = width;
+      }
+    } else if (width > barWrapWidth + 24) {
+      barCompact = false; // checked again with the labels back
+    }
+  });
   let panelHeight = $state(220);
   let barHover = false;
   let barTimer: ReturnType<typeof setTimeout> | undefined;
@@ -2195,6 +2225,16 @@
     spaceToastTimer = setTimeout(() => (spaceToast = null), 1300);
   }
 
+  /** Ctrl+Alt+Del on a Windows partner: sent as its own event, since Windows ignores it as keys
+   * (the partner's SYSTEM agent asks the system for it; without it the partner answers why not). */
+  function sendCtrlAltDel() {
+    if (!view || view.os !== "windows" || !view.control) return;
+    sendInput({ k: "secure_attention" });
+    spaceToast = { text: "Inviato al partner", keys: "Ctrl Alt Canc" };
+    clearTimeout(spaceToastTimer);
+    spaceToastTimer = setTimeout(() => (spaceToast = null), 1300);
+  }
+
   /** Monitors on the map (without "all of them"), scaled into a box of `w`×`h`. Hosts before
    * 2.2.3 send no positions: then they are drawn side by side. */
   const ALL_DISPLAYS = 4294967295;
@@ -2441,16 +2481,20 @@
         {/if}
       </div>
     {/snippet}
+    {#snippet cadIcon()}
+      <svg class="i" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2" /><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" /></svg>
+    {/snippet}
     {#snippet powerIcon()}
       <svg class="i" viewBox="0 0 24 24"><path d="M12 3v9" /><path d="M6.3 7.3a8 8 0 1 0 11.4 0" /></svg>
     {/snippet}
     <!-- While the bar is out (pinned or not) the picture starts below it: that strip of the partner's
          screen (menu bar, tabs) matters. When the bar retracts into the dot, the picture takes it back. -->
     <div class="bar-space" style:height="{barShown ? barHeight + 8 : 0}px"></div>
-    <div class="vbar glass" class:gone={!barShown} bind:this={barEl} bind:clientHeight={barHeight}
+    <div class="vbar glass" class:gone={!barShown} class:compact={barCompact} bind:this={barEl}
+      bind:clientHeight={barHeight} bind:clientWidth={barWidth}
       onmouseenter={() => (barHover = true)} onmouseleave={() => (barHover = false)}
       role="toolbar" aria-label="Barra della sessione" tabindex="-1">
-      <div class="vrow">
+      <div class="vrow" bind:this={barRowEl}>
         <span class="vdot {health.level}" title={health.reasons.join("\n") || "Connessione in buone condizioni"}></span>
         {#if view.peerName}<span class="vname" title="Nome impostato dal partner">{view.peerName}</span>{/if}
         <span class="vid mono">{view.peer}</span>
@@ -2527,6 +2571,15 @@
                 title={`${SPACE_TEXT[view.os].next[0]} (${SPACE_TEXT[view.os].next[1]} sul computer del partner)`}
                 aria-label={SPACE_TEXT[view.os].next[0]}>
                 <svg class="i" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6" /></svg>
+              </button>
+            </div>
+          {/if}
+          {#if view.os === "windows"}
+            <div class="vseg">
+              <button type="button" disabled={!view.control} onclick={sendCtrlAltDel}
+                title="Invia Ctrl+Alt+Canc al partner: schermata di sicurezza o di accesso di Windows (richiede il servizio di Kronos sul partner: controllo UAC o accesso non presidiato)"
+                aria-label="Invia Ctrl+Alt+Canc">
+                {@render cadIcon()}<span class="lbl">Ctrl+Alt+Canc</span>
               </button>
             </div>
           {/if}
@@ -2686,6 +2739,9 @@
             <button type="button" class="b-act restore" onclick={restoreBar}>
               <svg class="i" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>Ripristina barra
             </button>
+            {#if view.os === "windows"}
+              <button type="button" class="b-act" disabled={!view.control} onclick={sendCtrlAltDel}>{@render cadIcon()}Ctrl+Alt+Canc</button>
+            {/if}
             <button type="button" class="b-act disc" onclick={disconnect}>{@render powerIcon()}Disconnetti</button>
           </div>
           {#if view.os && SPACE_KEYS[view.os]}
@@ -4332,7 +4388,8 @@
   .viewer.chat-open .vbar {
     right: calc(var(--chat-w) + 14px);
   }
-  .viewer.chat-open .vbar .lbl {
+  /* Icons only when the labels do not fit on one row (narrow window, chat open). */
+  .vbar.compact .lbl {
     display: none;
   }
   /* Pinned chat: the picture (and the mouse mapping, which follows the canvas) fits the space left of it. */

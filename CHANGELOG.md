@@ -2,6 +2,15 @@
 
 Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**, quando la versione è disponibile.
 
+## 2.3.2 — 2026-11-16
+- **Ctrl+Alt+Canc**: con un computer Windows nella barra della sessione c'è il pulsante per inviare
+  Ctrl+Alt+Canc (schermata di sicurezza, sblocco della schermata di blocco). Funziona se sul computer controllato è
+  attivo il controllo delle finestre di amministratore (UAC) o l'accesso non presidiato; altrimenti un avviso
+  spiega cosa manca. Serve la 2.3.2 sul computer controllato.
+- **Barra della sessione**: le scritte accanto alle icone si nascondono solo quando non c'è spazio, non più
+  ogni volta che la chat è aperta.
+- **Nuova icona** dell'app, più semplice e leggibile anche in piccolo.
+
 ## 2.3.1 — 2026-11-13
 - **Risoluzione del partner**: il menu propone solo le risoluzioni più comuni (3840×2160, 2560×1440, 1920×1080,
   1600×900, …) invece di decine di voci. Niente più doppioni normale/HiDPI: sul tuo schermo erano identici, e

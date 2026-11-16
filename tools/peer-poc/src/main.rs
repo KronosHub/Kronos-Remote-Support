@@ -572,6 +572,7 @@ async fn view(
             ViewerEvent::ControlUnavailable(e) => println!("Host cannot be controlled: {e}"),
             ViewerEvent::ScreenUnavailable(e) => println!("Host has no screen yet: {e}"),
             ViewerEvent::AudioUnavailable(e) => println!("Sound unavailable: {e}"),
+            ViewerEvent::SecureAttentionFailed(e) => println!("Ctrl+Alt+Del not sent: {e}"),
             ViewerEvent::ResolutionAdjustable => println!("Host can match its resolution"),
             ViewerEvent::DisplayModes { modes, current, .. } => {
                 println!("Host offers {} resolutions, now {current:?}", modes.len())

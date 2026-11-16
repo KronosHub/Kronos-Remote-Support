@@ -3009,6 +3009,10 @@ async fn view_partner(
                     shared.view_event(app, session, UiEvent::ViewNotice { session, message });
                 }
             }
+            ViewerEvent::SecureAttentionFailed(message) => {
+                log(app, "warn", format!("Ctrl+Alt+Canc non inviato: {message}"));
+                shared.view_event(app, session, UiEvent::ViewNotice { session, message });
+            }
             ViewerEvent::AudioUnavailable(message) => {
                 log(app, "warn", format!("audio non disponibile: {message}"));
                 shared.view_event(
