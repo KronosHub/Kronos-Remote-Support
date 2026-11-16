@@ -4923,9 +4923,10 @@
     display: inline-flex;
     position: relative;
   }
-  .keys-pop {
+  /* Two classes: `.screens-pop` comes later in this file with the same specificity and
+     would win (width capped to the anchor, which is only the button). */
+  .screens-pop.keys-pop {
     width: 210px;
-    /* The screens menu caps its width to the bar; this anchor is only the button. */
     max-width: none;
     padding: 6px;
     left: 0;
@@ -4933,6 +4934,7 @@
     transform-origin: top left;
   }
   .keys-pop .sp-list button {
+    white-space: nowrap;
     grid-template-columns: 22px 1fr;
   }
   .keys-pop .sp-list button:disabled {
