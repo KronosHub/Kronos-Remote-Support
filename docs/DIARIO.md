@@ -816,3 +816,5 @@
   (chat fissata = sempre solo icone su quel computer). Ora `barCompact` le toglie solo se la prima riga va a capo.
 - Icona: 4 proposte, varianti della C e della C4 nel canvas Design; scelta C4.4 con bordo arancio molto sottile,
   misure rigenerate con `tauri icon` (ADR 0071).
+- Pubblicata la 2.3.2 (release in CI tutta verde, `latest.json` con 11 piattaforme). L'app ha visto l'aggiornamento
+  qualche minuto dopo la pubblicazione (cache di GitHub su `releases/latest/download`).
