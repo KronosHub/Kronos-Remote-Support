@@ -25,6 +25,10 @@ const PRIMARY: u32 = 1;
 const GDI_INTERVAL: Duration = Duration::from_millis(100);
 /// How often a failed duplication is tried again while GDI stands in.
 const DXGI_RETRY: Duration = Duration::from_secs(2);
+/// After a desktop switch, GDI copies for this long: the secure desktop is still black when
+/// it becomes the input desktop and LogonUI draws it a moment later, which the new
+/// duplication does not always report.
+const PRIMER_WINDOW: Duration = Duration::from_millis(1500);
 
 /// Copies `bounds` (virtual-desktop pixels) of the calling thread's desktop with GDI into
 /// `out` as top-down BGRA.
@@ -107,21 +111,28 @@ fn placement(monitor: &Monitor) -> (Rect, bool) {
     )
 }
 
-fn describe(index: usize, monitor: &Monitor) -> Result<Display> {
+fn describe(index: usize, monitor: &Monitor) -> Display {
     let (bounds, primary) = placement(monitor);
-    Ok(Display {
+    // The mode query can fail for one monitor (seen on a laptop with a second screen): its
+    // rectangle (physical pixels, the app is per-monitor DPI aware) is a good size then.
+    let size = monitor
+        .width()
+        .and_then(|w| Ok((w, monitor.height()?)))
+        .inspect_err(|e| tracing::warn!(index, "monitor mode unknown, using its rectangle: {e}"))
+        .unwrap_or((bounds.width as u32, bounds.height as u32));
+    Display {
         id: index as u32,
         name: monitor
             .name()
             .ok()
             .filter(|n| !n.trim().is_empty())
             .unwrap_or_else(|| format!("Schermo {}", index + 1)),
-        width: monitor.width().map_err(backend)?,
-        height: monitor.height().map_err(backend)?,
+        width: size.0,
+        height: size.1,
         scale: 1.0,
         primary,
         bounds,
-    })
+    }
 }
 
 /// GDI name of the display (`\\.\DISPLAY1`), NUL-terminated, for the display mode calls.
@@ -155,7 +166,7 @@ pub fn displays() -> Result<Vec<Display>> {
         .iter()
         .enumerate()
         .map(|(i, m)| describe(i, m))
-        .collect::<Result<_>>()?;
+        .collect();
     list.sort_by_key(|d| (!d.primary, d.bounds.x as i64));
     Ok(list)
 }
@@ -166,9 +177,10 @@ fn select(display_id: Option<u32>) -> Result<(Monitor, Display)> {
     let found = monitors
         .into_iter()
         .enumerate()
-        .map(|(i, m)| describe(i, &m).map(|d| (m, d)))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
+        .map(|(i, m)| {
+            let d = describe(i, &m);
+            (m, d)
+        })
         .find(|(_, d)| match display_id {
             Some(id) => d.id == id,
             None => d.primary,
@@ -185,9 +197,9 @@ pub struct WinCapturer {
     display: Display,
     output: (u32, u32),
     scratch: Vec<u8>,
-    /// The next frame is a GDI copy: the desktop just changed and the new duplication
-    /// stays silent until something on screen changes.
-    primer: bool,
+    /// GDI copies until then: the desktop just changed and the new duplication stays silent
+    /// until something on screen changes (`PRIMER_WINDOW`).
+    primer: Option<Instant>,
     last_gdi: Option<Instant>,
     last_dxgi_try: Instant,
     /// A GDI failure was logged since the last desktop change.
@@ -226,7 +238,7 @@ impl WinCapturer {
             display: chosen,
             output,
             scratch: Vec::new(),
-            primer: false,
+            primer: None,
             last_gdi: None,
             last_dxgi_try: Instant::now(),
             gdi_failed: false,
@@ -322,12 +334,14 @@ impl Capturer for WinCapturer {
             };
             self.last_dxgi_try = Instant::now();
             self.gdi_failed = false;
-            self.primer = true;
+            self.primer = Some(Instant::now() + PRIMER_WINDOW);
             self.last_gdi = None;
         }
-        if self.primer {
-            self.primer = false;
-            return self.gdi_frame(timeout);
+        if let Some(until) = self.primer {
+            if Instant::now() < until {
+                return self.gdi_frame(timeout);
+            }
+            self.primer = None;
         }
         if self.duplication.is_none() {
             return self.gdi_frame(timeout);

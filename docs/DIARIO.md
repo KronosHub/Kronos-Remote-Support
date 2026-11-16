@@ -841,3 +841,12 @@
 - Ritardo di ~1 s solo con host Windows: code piene tra agente, pipe e cattura condivisa. Slot con l'ultimo
   fotogramma e agente che cattura solo dopo `FrameDone` (ADR 0073). Da misurare sulla VM.
 - Pubblicata la 2.3.5 (release in CI tutta verde, `latest.json` con 11 piattaforme).
+
+## 2026-11-16 — 2.3.6: memoria condivisa per i fotogrammi dell'agente
+- Prova della 2.3.5: ritardo minore ma visibile e ~5 fps sulla VM; notebook Windows a 30 fps ma senza il secondo
+  schermo; Ctrl+Alt+Canc nero la prima volta. Tendina della tastiera ancora stretta: `.screens-pop` veniva dopo
+  `.keys-pop` con la stessa specificità.
+- Misure sulla VM con esempi cross-compilati: cattura ~50 ms, riduzione ~31 ms, pipe 30–90 ms per fotogramma
+  (mio legge a 4 KB). Memoria condivisa: 30 → 73 fps sul percorso agente → app (ADR 0075).
+- Secondo schermo: probabile errore di `Monitor::width/height` su un monitor, che svuotava tutto l'elenco; ora si usa
+  il rettangolo del monitor. Non verificato su un PC con due schermi.

@@ -34,7 +34,7 @@ use windows_sys::Win32::System::Threading::{
     WaitForSingleObject,
 };
 
-use crate::server::{Backend, System, serve};
+use crate::server::{Backend, System, serve_peer};
 
 /// Only SYSTEM and interactively logged-on users may open the pipe (protected DACL).
 const PIPE_SDDL: &str = "D:P(A;;GA;;;SY)(A;;GRGW;;;IU)";
@@ -246,17 +246,18 @@ fn is_allowed(path: &Path, allowed: &[PathBuf]) -> bool {
 
 /// The agent only serves the app it was installed for (or its own executable), in its own
 /// session.
-fn client_allowed(pipe: &NamedPipeServer, allowed: &[PathBuf], session: u32) -> bool {
+/// Returns the client's process id when it is allowed.
+fn client_allowed(pipe: &NamedPipeServer, allowed: &[PathBuf], session: u32) -> Option<u32> {
     let mut pid = 0u32;
     if unsafe { GetNamedPipeClientProcessId(pipe.as_raw_handle() as HANDLE, &mut pid) } == 0 {
-        return false;
+        return None;
     }
     let path_ok = image_path(pid).is_some_and(|p| is_allowed(&p, allowed));
     let session_ok = session_of(pid) == Some(session);
     if !(path_ok && session_ok) {
         tracing::warn!(pid, path_ok, session_ok, "agent: refused a pipe client");
     }
-    path_ok && session_ok
+    (path_ok && session_ok).then_some(pid)
 }
 
 /// The app only talks to a pipe created by a privileged process (owner SYSTEM or
@@ -376,8 +377,8 @@ pub fn run_agent(product: &str, app: Option<&Path>) -> Result<()> {
             server.connect().await?;
             let connected = server;
             server = create_pipe(&name, false)?;
-            if client_allowed(&connected, &allowed, session) {
-                tokio::spawn(serve(connected, backend.clone()));
+            if let Some(pid) = client_allowed(&connected, &allowed, session) {
+                tokio::spawn(serve_peer(connected, backend.clone(), Some(pid)));
             }
         }
     })
@@ -777,7 +778,7 @@ pub fn uninstall_service(name: &str) -> Result<()> {
 
 /// Bumped whenever the service or the pre-login host change: an app finding an older
 /// revision installed offers to reinstall the service, which refreshes its protected copy.
-pub const SERVICE_REVISION: u32 = 7;
+pub const SERVICE_REVISION: u32 = 8;
 /// First revision whose agent sends Ctrl+Alt+Del from session 0 (ADR 0070). Before 5 the
 /// agent drops the pipe on the unknown event (no more remote control for the session); 5
 /// calls `SendSAS` from the user's session, which Windows ignores.
@@ -1410,4 +1411,135 @@ pub fn prepare_system_host() {
 pub fn session_ending() -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SHUTTINGDOWN};
     unsafe { GetSystemMetrics(SM_SHUTTINGDOWN) != 0 }
+}
+
+// ---- Frames through shared memory (ADR 0075) -------------------------------------------
+
+use windows_sys::Win32::Foundation::{DuplicateHandle, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::System::Memory::{
+    CreateFileMappingW, FILE_MAP_ALL_ACCESS, FILE_MAP_READ, MEMORY_MAPPED_VIEW_ADDRESS,
+    MapViewOfFile, PAGE_READWRITE, UnmapViewOfFile,
+};
+use windows_sys::Win32::System::Threading::PROCESS_DUP_HANDLE;
+
+/// Agent side: an unnamed section the agent writes each frame into. The app gets a
+/// read-only handle to it, duplicated straight into its process (no name to squat or open).
+pub struct SharedFrames {
+    mapping: HANDLE,
+    view: MEMORY_MAPPED_VIEW_ADDRESS,
+    len: usize,
+}
+
+// The view is only written from the capture thread that owns this value.
+unsafe impl Send for SharedFrames {}
+
+impl SharedFrames {
+    pub fn create(len: usize) -> std::io::Result<Self> {
+        let size = len as u64;
+        let mapping = unsafe {
+            CreateFileMappingW(
+                INVALID_HANDLE_VALUE,
+                std::ptr::null(),
+                PAGE_READWRITE,
+                (size >> 32) as u32,
+                size as u32,
+                std::ptr::null(),
+            )
+        };
+        if mapping.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let view = unsafe { MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, len) };
+        if view.Value.is_null() {
+            let e = std::io::Error::last_os_error();
+            unsafe { CloseHandle(mapping) };
+            return Err(e);
+        }
+        Ok(Self { mapping, view, len })
+    }
+
+    /// A read-only handle to the section, valid in process `pid`.
+    pub fn share_with(&self, pid: u32) -> std::io::Result<u64> {
+        let process = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, pid) };
+        if process.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut handle: HANDLE = std::ptr::null_mut();
+        let ok = unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                self.mapping,
+                process,
+                &mut handle,
+                FILE_MAP_READ,
+                0,
+                0,
+            )
+        };
+        let e = std::io::Error::last_os_error();
+        unsafe { CloseHandle(process) };
+        if ok == 0 {
+            return Err(e);
+        }
+        Ok(handle as u64)
+    }
+
+    /// Copies `data` in; `false` if it does not fit.
+    pub fn write(&mut self, data: &[u8]) -> bool {
+        if data.len() > self.len {
+            return false;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), self.view.Value.cast::<u8>(), data.len())
+        };
+        true
+    }
+}
+
+impl Drop for SharedFrames {
+    fn drop(&mut self) {
+        unsafe {
+            UnmapViewOfFile(self.view);
+            CloseHandle(self.mapping);
+        }
+    }
+}
+
+/// App side: the section shared by the agent, mapped read-only.
+pub struct SharedFramesView {
+    mapping: HANDLE,
+    view: MEMORY_MAPPED_VIEW_ADDRESS,
+    len: usize,
+}
+
+unsafe impl Send for SharedFramesView {}
+
+impl SharedFramesView {
+    /// Maps `handle` (from `Reply::CaptureStarted.shared`), taking ownership of it.
+    pub fn open(handle: u64, len: usize) -> std::io::Result<Self> {
+        let mapping = handle as HANDLE;
+        let view = unsafe { MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, len) };
+        if view.Value.is_null() {
+            let e = std::io::Error::last_os_error();
+            unsafe { CloseHandle(mapping) };
+            return Err(e);
+        }
+        Ok(Self { mapping, view, len })
+    }
+
+    /// A copy of the first `len` bytes; `None` if the section is smaller.
+    pub fn read(&self, len: usize) -> Option<Vec<u8>> {
+        (len <= self.len).then(|| {
+            unsafe { std::slice::from_raw_parts(self.view.Value.cast::<u8>(), len) }.to_vec()
+        })
+    }
+}
+
+impl Drop for SharedFramesView {
+    fn drop(&mut self) {
+        unsafe {
+            UnmapViewOfFile(self.view);
+            CloseHandle(self.mapping);
+        }
+    }
 }

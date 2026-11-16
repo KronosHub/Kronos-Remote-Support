@@ -54,3 +54,8 @@ desktop (`follow_input_desktop`), `WinCapturer` riapre la duplicazione e manda s
 (`BitBlt`, `primer`); se la duplicazione non si apre resta su GDI (ogni 100 ms) e ritenta DXGI ogni 2 s. Verificato
 sulla VM con l'esempio `crates/agent/examples/secure_desktop.rs` (menu Ctrl+Alt+Canc catturato per intero).
 `SERVICE_REVISION` 7; `SECURE_ATTENTION_REVISION` resta 6.
+
+## Aggiornamento 2.3.6
+Sul notebook la prima volta la schermata restava nera fino a un clic: il fotogramma GDI subito dopo il cambio di
+desktop arrivava prima che LogonUI disegnasse. Ora, dopo un cambio di desktop, la cattura copia con GDI ogni 100 ms
+per 1,5 s (`PRIMER_WINDOW`) e poi torna a DXGI.

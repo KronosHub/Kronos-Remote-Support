@@ -39,6 +39,11 @@ pub enum Request {
         /// encoder is slower than the screen. Older agents ignore it (and send freely).
         #[serde(default)]
         paced: bool,
+        /// Pixels through shared memory instead of the pipe (Windows, paced captures only):
+        /// the pipe reads 4 KB at a time, ~90 ms for a 2560x1440 frame on a slow PC.
+        /// Older agents ignore it.
+        #[serde(default)]
+        shared_memory: bool,
     },
     /// The app took the last frame: the agent may send the next (paced captures only).
     FrameDone,
@@ -69,6 +74,15 @@ pub enum Reply {
         /// app then sends no `FrameDone` they would not understand.
         #[serde(default)]
         paced: bool,
+        /// Handle, valid in the app's process, of a read-only section of `width * height * 4`
+        /// bytes holding each [`Reply::SharedFrame`] (`StartCapture.shared_memory`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shared: Option<u64>,
+    },
+    /// A frame is in the shared section; it stays there until the app sends `FrameDone`.
+    SharedFrame {
+        width: u32,
+        height: u32,
     },
     InputStarted,
     Error {

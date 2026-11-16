@@ -23,6 +23,23 @@ fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
         .build()
 }
 
+#[cfg(windows)]
+use crate::windows::SharedFramesView;
+
+/// Stand-in where there is no agent: the agent never offers shared memory.
+#[cfg(not(windows))]
+struct SharedFramesView;
+
+#[cfg(not(windows))]
+impl SharedFramesView {
+    fn open(_handle: u64, _len: usize) -> std::io::Result<Self> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+    fn read(&self, _len: usize) -> Option<Vec<u8>> {
+        None
+    }
+}
+
 struct Started {
     size: (u32, u32),
     display_id: u32,
@@ -53,6 +70,7 @@ impl AgentCapturer {
             max_fps: config.max_fps,
             show_cursor: config.show_cursor,
             paced: true,
+            shared_memory: cfg!(windows),
         };
         let (started_tx, started_rx) = std_mpsc::channel::<Result<Started, String>>();
         let (done_tx, mut done_rx) = mpsc::unbounded_channel::<()>();
@@ -82,6 +100,7 @@ impl AgentCapturer {
                         return fail(e.to_string());
                     }
                     let mut started = Some(started_tx);
+                    let mut shared: Option<SharedFramesView> = None;
                     loop {
                         let message = tokio::select! {
                             _ = &mut stop_rx => break,
@@ -108,7 +127,18 @@ impl AgentCapturer {
                                 display_id,
                                 bounds: (x, y, w, h),
                                 paced,
+                                shared: handle,
                             }))) => {
+                                if let Some(handle) = handle {
+                                    let len = width as usize * height as usize * 4;
+                                    match SharedFramesView::open(handle, len) {
+                                        Ok(view) => shared = Some(view),
+                                        Err(e) => {
+                                            report(format!("agent shared memory: {e}"));
+                                            break;
+                                        }
+                                    }
+                                }
                                 if let Some(tx) = started.take() {
                                     let _ = tx.send(Ok(Started {
                                         paced,
@@ -126,6 +156,23 @@ impl AgentCapturer {
                             Ok(Some(Wire::Json(Reply::Error { message }))) => {
                                 report(message);
                                 break;
+                            }
+                            Ok(Some(Wire::Json(Reply::SharedFrame { width, height }))) => {
+                                let len = width as usize * height as usize * 4;
+                                let Some(data) = shared.as_ref().and_then(|v| v.read(len)) else {
+                                    report("agent frame outside the shared memory".into());
+                                    break;
+                                };
+                                let frame = Frame {
+                                    width,
+                                    height,
+                                    data: data.into(),
+                                    captured_at: Instant::now(),
+                                    native: None,
+                                };
+                                if frames_tx.send(Ok(frame)).is_err() {
+                                    break;
+                                }
                             }
                             Ok(Some(Wire::Json(_))) => {}
                             Ok(Some(Wire::Frame {

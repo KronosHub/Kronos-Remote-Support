@@ -72,8 +72,36 @@ impl Credit {
     }
 }
 
+#[cfg(windows)]
+use crate::windows::SharedFrames;
+
+/// Stand-in where there is no agent: shared memory is never offered.
+#[cfg(not(windows))]
+struct SharedFrames;
+
+#[cfg(not(windows))]
+impl SharedFrames {
+    fn create(_len: usize) -> std::io::Result<Self> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+    fn share_with(&self, _pid: u32) -> std::io::Result<u64> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+    fn write(&mut self, _data: &[u8]) -> bool {
+        false
+    }
+}
+
 /// Serves one app connection until it closes.
 pub async fn serve<S>(stream: S, backend: Arc<dyn Backend>)
+where
+    S: AsyncRead + AsyncWrite + Send + 'static,
+{
+    serve_peer(stream, backend, None).await
+}
+
+/// Like [`serve`]; `peer` is the app's process id, needed to share frames through memory.
+pub async fn serve_peer<S>(stream: S, backend: Arc<dyn Backend>, peer: Option<u32>)
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
@@ -120,6 +148,7 @@ where
                 max_fps,
                 show_cursor,
                 paced,
+                shared_memory,
             } => {
                 if let Some(stop) = capture_stop.take() {
                     stop.store(true, Ordering::Relaxed);
@@ -144,6 +173,8 @@ where
                     config,
                     stop,
                     credit.clone(),
+                    // Only paced: the app reads the section until its `FrameDone`.
+                    peer.filter(|_| shared_memory && paced),
                     out_tx.clone(),
                 );
             }
@@ -211,6 +242,7 @@ fn spawn_capture(
     config: CaptureConfig,
     stop: Arc<AtomicBool>,
     credit: Option<Arc<Credit>>,
+    share_with: Option<u32>,
     out: mpsc::Sender<Wire<Reply>>,
 ) {
     let spawned = std::thread::Builder::new()
@@ -227,12 +259,23 @@ fn spawn_capture(
             };
             let (width, height) = capturer.output_size();
             let b = capturer.bounds();
+            let mut shared = share_with.and_then(|pid| {
+                let len = width as usize * height as usize * 4;
+                let opened = SharedFrames::create(len)
+                    .and_then(|memory| memory.share_with(pid).map(|handle| (memory, handle)));
+                opened
+                    .inspect_err(|e| {
+                        tracing::warn!("frames through the pipe, no shared memory: {e}")
+                    })
+                    .ok()
+            });
             let started = Reply::CaptureStarted {
                 width,
                 height,
                 display_id: capturer.display_id(),
                 bounds: (b.x, b.y, b.width, b.height),
                 paced: credit.is_some(),
+                shared: shared.as_ref().map(|(_, handle)| *handle),
             };
             if out.blocking_send(Wire::Json(started)).is_err() {
                 return;
@@ -250,12 +293,23 @@ fn spawn_capture(
                         if let Some(credit) = &credit {
                             credit.take();
                         }
-                        let message = Wire::Frame {
-                            width: frame.width,
-                            height: frame.height,
-                            // Only this loop holds the frame: no copy.
-                            data: std::sync::Arc::try_unwrap(frame.data)
-                                .unwrap_or_else(|shared| (*shared).clone()),
+                        // Safe to overwrite: paced, the app is done with the last one.
+                        let in_shared = shared
+                            .as_mut()
+                            .is_some_and(|(memory, _)| memory.write(&frame.data));
+                        let message = if in_shared {
+                            Wire::Json(Reply::SharedFrame {
+                                width: frame.width,
+                                height: frame.height,
+                            })
+                        } else {
+                            Wire::Frame {
+                                width: frame.width,
+                                height: frame.height,
+                                // Only this loop holds the frame: no copy.
+                                data: std::sync::Arc::try_unwrap(frame.data)
+                                    .unwrap_or_else(|shared| (*shared).clone()),
+                            }
                         };
                         if out.blocking_send(message).is_err() {
                             break;

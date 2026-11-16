@@ -762,6 +762,10 @@ async fn send_displays(channel: &Arc<dyn DataChannel>, config: &StreamConfig, cu
             bounds: capture::Rect::default(),
         }],
     };
+    tracing::info!(
+        displays = ?displays.iter().map(|d| (d.id, d.width, d.height, d.primary)).collect::<Vec<_>>(),
+        "displays offered"
+    );
     // More than one monitor: also offer all of them at once.
     let all = (displays.len() > 1).then(|| {
         let (_, (width, height), _) = capture::composite::layout(&displays, None);

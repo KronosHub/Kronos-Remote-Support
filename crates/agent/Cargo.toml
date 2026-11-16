@@ -33,8 +33,12 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Registry",
+    "Win32_System_Memory",
 ] }
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "macros"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Graphics_Gdi"] }
