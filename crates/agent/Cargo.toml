@@ -36,4 +36,5 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
+tracing-subscriber.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "macros"] }

@@ -794,6 +794,32 @@
     levels.includes("critical") ? "critical" : levels.includes("caution") ? "caution" : "";
   const RESYNC_WINDOW_MS = 60_000;
 
+  /** Signal bars (0-4) for the latency, with the same thresholds as its colour. */
+  const signalBars = (rtt: number | null) =>
+    rtt === null ? 0 : rtt < 80 ? 4 : rtt < 150 ? 3 : rtt < 300 ? 2 : 1;
+  /** Highest frame rate the partner sends: 60 encoding in hardware, 30 in software (ADR 0072). */
+  const fpsScale = (hardware: boolean | null) => (hardware === false ? 30 : 60);
+  /** Colour of the fps bar by its share of `scale`: green when full, through yellow and
+   * orange, red near 0 (the stops are on a 0-60 scale). */
+  const FPS_STOPS: [number, number, number, number][] = [
+    [0, 4, 72, 56],
+    [15, 28, 85, 54],
+    [30, 45, 80, 52],
+    [45, 80, 60, 50],
+    [60, 130, 55, 50],
+  ];
+  function fpsColor(fps: number, scale: number) {
+    const v = Math.max(0, Math.min(60, (fps / scale) * 60));
+    let i = 0;
+    while (i < FPS_STOPS.length - 2 && v > FPS_STOPS[i + 1][0]) i++;
+    const [a, b] = [FPS_STOPS[i], FPS_STOPS[i + 1]];
+    const t = (v - a[0]) / (b[0] - a[0]);
+    const mix = (k: number) => (a[k] + (b[k] - a[k]) * t).toFixed(0);
+    return `hsl(${mix(1)} ${mix(2)}% ${mix(3)}%)`;
+  }
+  /** Share of a meter, 0-100 (%), for the bandwidth bars (full at the 6 Mbit/s cap). */
+  const meter = (value: number, full: number) => Math.max(0, Math.min(100, (value / full) * 100));
+
   /** Overall state for the dot next to the connection type: the worst of the statistics. */
   function connectionLevel(v: View): { level: "ok" | Level; reasons: string[] } {
     const checks: [Level, string][] = [
@@ -1025,7 +1051,18 @@
         const t = event.finished
           ? null
           : { sending: event.sending, done: event.done, total: event.total, rate: event.bytes_per_sec };
-        if (view?.session === event.session) view.transfer = t;
+        if (view?.session === event.session) {
+          if (t && !view.transfer) {
+            // Short transfers (a small picture on the clipboard) end before the row would show:
+            // it only appears after TRANSFER_ROW_DELAY_MS, so the bar does not jump for them.
+            clearTimeout(transferRowTimer);
+            transferRowTimer = setTimeout(() => (transferRowShown = true), TRANSFER_ROW_DELAY_MS);
+          } else if (!t) {
+            clearTimeout(transferRowTimer);
+            transferRowShown = false;
+          }
+          view.transfer = t;
+        }
         hosting = hosting.map((h) => (h.session === event.session ? { ...h, transfer: t } : h));
         break;
       }
@@ -2284,6 +2321,10 @@
     }));
   }
   let screensOpen = $state(false);
+  /** The viewer's transfer progress row, shown only for transfers lasting a while. */
+  const TRANSFER_ROW_DELAY_MS = 600;
+  let transferRowShown = $state(false);
+  let transferRowTimer: ReturnType<typeof setTimeout> | undefined;
   /** Key combinations menu (Windows partners). */
   let keysOpen = $state(false);
   function pickDisplay(id: number) {
@@ -2659,22 +2700,61 @@
       <div class="vstats">
         {#if view.path}<span><span class="vpath {view.path}" title={pathHint[view.path]}>{pathLabel[view.path]}</span></span>{/if}
         {#if view.width}
-          <span class={level(view.rtt, 150, 300)} title="Latenza: giallo da 150 ms, rosso da 300 ms">Latenza <b>{view.rtt === null ? "–" : `${view.rtt.toFixed(0)} ms`}</b></span>
-          <span><b>{view.fps === null ? "–" : view.fps.toFixed(0)} fps</b></span>
-          <span title={view.hardware === null ? "" : view.hardware
-            ? "GPU: il video è compresso dal chip video del computer controllato"
-            : "CPU: il video è compresso dal processore del computer controllato (chip video non disponibile)"}>
-            <b>{view.width}×{view.height}{view.hardware === null ? "" : view.hardware ? " GPU" : " CPU"}</b></span>
+          {@const bars = signalBars(view.rtt)}
+          <span class="st-lat {level(view.rtt, 150, 300)}" title="Latenza: giallo da 150 ms, rosso da 300 ms">
+            <svg class="st-signal" viewBox="0 0 22 16" role="img" aria-label="Connessione: {bars} tacche su 4">
+              {#each [0, 1, 2, 3] as n (n)}
+                <rect x={n * 6} y={11 - n * 3.6} width="4" height={5 + n * 3.6} rx="1" class:lit={n < bars} />
+              {/each}
+            </svg>
+            <b>{view.rtt === null ? "–" : `${view.rtt.toFixed(0)} ms`}</b>
+          </span>
+          {@const scale = fpsScale(view.hardware)}
+          <span class="st-fps">
+            <span class="st-row" title="Fotogrammi al secondo ricevuti: al massimo {scale} {view.hardware === false ? '(il partner comprime con il processore)' : ''}">
+              <span class="st-meter wide"><i style:width="{meter(view.fps ?? 0, scale)}%" style:background={fpsColor(view.fps ?? 0, scale)}></i></span>
+              <b>{view.fps === null ? "–" : view.fps.toFixed(0)}<small>/{scale} fps</small></b>
+            </span>
+            <span class="st-row st-res">
+              <b>{view.width}×{view.height}</b>
+              {#if view.hardware !== null}
+                <span class="st-enc" class:cpu={!view.hardware}
+                  title={view.hardware
+                    ? "GPU: il video è compresso dal chip grafico del computer controllato"
+                    : "CPU: il video è compresso dal processore del computer controllato (chip grafico non disponibile)"}>{view.hardware ? "GPU" : "CPU"}</span>
+              {/if}
+            </span>
+          </span>
         {/if}
         {#if view.net}
-          <span title="Traffico della sessione: ricevuto ↓ / inviato ↑">↓ <b>{rate(view.net.rx)}</b></span>
-          <span>↑ <b>{rate(view.net.tx)}</b></span>
+          <span class="st-net" title="Traffico della sessione: ricevuto ↓ / inviato ↑ (barre piene a 6 Mbit/s)">
+            <span class="st-grid">
+              <span class="st-grid-row">
+                <span>↓</span>
+                <span class="st-meter"><i class="down" style:width="{meter(view.net.rx, 6000)}%"></i></span>
+                <b>{rate(view.net.rx)}</b>
+              </span>
+              <span class="st-grid-row">
+                <span>↑</span>
+                <span class="st-meter"><i class="up" style:width="{meter(view.net.tx, 6000)}%"></i></span>
+                <b>{rate(view.net.tx)}</b>
+              </span>
+            </span>
+          </span>
         {/if}
         {#if view.local || view.partner}
-          <span class={worst(level(view.local?.cpu, 50, 80), level(view.local?.ram, 800, 1500))}
-            title="Risorse usate dall'app su questo computer">Tu <b>{view.local ? `${pct(view.local.cpu)} · ${mb(view.local.ram)}` : "–"}</b></span>
-          <span class={worst(level(view.partner?.cpu, 50, 80), level(view.partner?.ram, 800, 1500))}
-            title="Risorse usate dall'app sul partner (cattura e codifica avvengono lì)">Partner <b>{view.partner ? `${pct(view.partner.cpu)} · ${mb(view.partner.ram)}` : "–"}</b></span>
+          <span class="st-cpu">
+            <span class="st-grid st-cpu-grid">
+              {#each [["Tu", view.local, "Risorse usate dall'app su questo computer"], ["Partner", view.partner, "Risorse usate dall'app sul partner (cattura e codifica avvengono lì)"]] as const as [who, usage, hint] (who)}
+                <span class="st-grid-row {usage ? worst(level(usage.cpu, 50, 80), level(usage.ram, 800, 1500)) : ''}" title={hint}>
+                  <span>{who}</span>
+                  <span class="st-meter"><i style:width="{usage ? meter(usage.cpu, 100) : 0}%"></i></span>
+                  <b>{usage ? pct(usage.cpu) : "–"}</b>
+                  <b class="st-ram">{usage ? mb(usage.ram) : ""}</b>
+                </span>
+              {/each}
+            </span>
+          </span>
         {/if}
         {#if view.limited}
           <span class={view.limited.kbps < 450 ? "critical" : "caution"}
@@ -2687,7 +2767,7 @@
             Resync/min <b>{resyncCount}</b></span>
         {/if}
       </div>
-      {#if view.transfer}
+      {#if view.transfer && transferRowShown}
         <div class="vrow transfer">
           <progress max={view.transfer.total || 1} value={view.transfer.done}></progress>
           <span class="mono small">{transferText(view.transfer)}</span>
@@ -2756,12 +2836,65 @@
         <div class="b-rest">
           <div class="b-verdict {said.level}">{said.text}</div>
           <div class="b-grid">
-            <div class="b-cell {level(view.rtt, 150, 300)}"><small>Latenza</small><span>{view.rtt === null ? "–" : `${view.rtt.toFixed(0)} ms`}</span></div>
-            <div class="b-cell {view.limited ? 'caution' : ''}"><small>Fotogrammi</small><span>{view.fps === null ? "–" : `${view.fps.toFixed(0)} fps`}</span></div>
-            <div class="b-cell"><small>Video</small><span>{view.width ? `${view.width}×${view.height}${view.hardware === null ? "" : view.hardware ? " GPU" : " CPU"}` : "–"}</span></div>
-            <div class="b-cell"><small>Ricezione</small><span>{view.net ? rate(view.net.rx) : "–"}</span></div>
-            <div class="b-cell {level(resyncCount, 2, 5)}" title="Volte nell'ultimo minuto in cui l'immagine è stata ricostruita perché si erano persi dati in rete"><small>Resync/min</small><span>{resyncCount}</span></div>
-            <div class="b-cell {worst(level(view.local?.cpu, 50, 80), level(view.partner?.cpu, 50, 80))}"><small>CPU tu/partner</small><span>{view.local ? pct(view.local.cpu) : "–"} / {view.partner ? pct(view.partner.cpu) : "–"}</span></div>
+            <div class="b-cell b-lat {level(view.rtt, 150, 300)}" title="Latenza: giallo da 150 ms, rosso da 300 ms">
+              <small>Latenza</small>
+              <span class="b-line">
+                <svg class="st-signal b-signal" viewBox="0 0 22 16" role="img" aria-label="Connessione: {signalBars(view.rtt)} tacche su 4">
+                  {#each [0, 1, 2, 3] as n (n)}
+                    <rect x={n * 6} y={11 - n * 3.6} width="4" height={5 + n * 3.6} rx="1" class:lit={n < signalBars(view.rtt)} />
+                  {/each}
+                </svg>
+                <b class="b-val">{view.rtt === null ? "–" : `${view.rtt.toFixed(0)} ms`}</b>
+              </span>
+              {#if resyncCount > 0}
+                <span class="b-note {level(resyncCount, 2, 5)}" title="Volte nell'ultimo minuto in cui l'immagine è stata ricostruita perché si erano persi dati in rete">Resync {resyncCount}/min</span>
+              {/if}
+            </div>
+            <div class="b-cell b-fps {view.limited ? 'caution' : ''}"
+              title="Fotogrammi al secondo ricevuti: al massimo {fpsScale(view.hardware)}{view.hardware === false ? ' (il partner comprime con il processore)' : ''}">
+              <small>Fotogrammi</small>
+              <svg class="b-arc" viewBox="0 0 76 42" aria-hidden="true">
+                <path class="track" d="M6 38 A32 32 0 0 1 70 38" />
+                {#if (view.fps ?? 0) > 0}
+                  <path d="M6 38 A32 32 0 0 1 70 38" pathLength="100"
+                    stroke-dasharray="{meter(view.fps ?? 0, fpsScale(view.hardware))} 100"
+                    style:stroke={fpsColor(view.fps ?? 0, fpsScale(view.hardware))} />
+                {/if}
+              </svg>
+              <b class="b-val">{view.fps === null ? "–" : view.fps.toFixed(0)}<small>/{fpsScale(view.hardware)} fps</small></b>
+            </div>
+            <div class="b-cell">
+              <small>Video</small>
+              <span class="b-line">
+                <b class="b-val">{view.width ? `${view.width}×${view.height}` : "–"}</b>
+                {#if view.hardware !== null}
+                  <span class="st-enc" class:cpu={!view.hardware}
+                    title={view.hardware
+                      ? "GPU: il video è compresso dal chip grafico del computer controllato"
+                      : "CPU: il video è compresso dal processore del computer controllato (chip grafico non disponibile)"}>{view.hardware ? "GPU" : "CPU"}</span>
+                {/if}
+              </span>
+            </div>
+            <div class="b-cell" title="Traffico della sessione: ricevuto ↓ / inviato ↑ (barre piene a 6 Mbit/s)">
+              <small>Banda</small>
+              <span class="b-rows b-net">
+                <span>↓</span><span class="st-meter"><i class="down" style:width="{view.net ? meter(view.net.rx, 6000) : 0}%"></i></span><b>{view.net ? rate(view.net.rx) : "–"}</b>
+                <span>↑</span><span class="st-meter"><i class="up" style:width="{view.net ? meter(view.net.tx, 6000) : 0}%"></i></span><b>{view.net ? rate(view.net.tx) : "–"}</b>
+              </span>
+            </div>
+            <div class="b-cell wide">
+              <small>Risorse dell'app</small>
+              <span class="b-rows b-cpu">
+                {#each [["Tu", view.local, "Risorse usate dall'app su questo computer"], ["Partner", view.partner, "Risorse usate dall'app sul partner (cattura e codifica avvengono lì)"]] as const as [who, usage, hint] (who)}
+                  <span class="b-row {usage ? worst(level(usage.cpu, 50, 80), level(usage.ram, 800, 1500)) : ''}" title={hint}>
+                    <span>{who}</span>
+                    <span class="st-meter"><i style:width="{usage ? meter(usage.cpu, 100) : 0}%"></i></span>
+                    <b>{usage ? pct(usage.cpu) : "–"}</b>
+                    <span class="b-ram">{usage ? mb(usage.ram) : ""}</span>
+                  </span>
+                {/each}
+              </span>
+            </div>
           </div>
           <div class="b-acts">
             <button type="button" class="b-act" onclick={() => view && openViewChat(view)}>
@@ -4588,6 +4721,8 @@
     align-items: center;
     flex-wrap: wrap;
     gap: 4px 0;
+    /* Two-line blocks (fps, ↓/↑, Tu/Partner): same height before and after they appear. */
+    min-height: 28px;
     font-size: 11.5px;
     padding-left: 1px;
   }
@@ -4609,6 +4744,137 @@
     font-weight: 500;
     color: var(--text);
     font-variant-numeric: tabular-nums;
+  }
+  .vstats > span.st-fps,
+  .vstats > span.st-net,
+  .vstats > span.st-cpu {
+    align-items: center;
+  }
+  .st-lat {
+    align-items: center !important;
+  }
+  .st-signal {
+    width: 18px;
+    height: 13px;
+    flex: none;
+  }
+  .st-signal rect {
+    fill: color-mix(in srgb, var(--text) 18%, transparent);
+  }
+  .st-signal rect.lit {
+    fill: var(--ok);
+  }
+  .st-lat.caution .st-signal rect.lit {
+    fill: var(--caution);
+  }
+  .st-lat.critical .st-signal rect.lit {
+    fill: var(--err);
+  }
+  .vstats > span.st-fps {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  .st-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .st-fps small {
+    color: var(--g-dim);
+    font-size: 10.5px;
+  }
+  .st-res b {
+    font-size: 10.5px;
+    color: var(--g-dim);
+  }
+  /* How the partner encodes: GPU (video chip) blue, CPU (processor) violet; neither is a fault. */
+  .st-enc {
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    line-height: 15px;
+    color: color-mix(in srgb, #4c9be8 72%, var(--text));
+    background: color-mix(in srgb, #58a6ff 16%, transparent);
+    border: 1px solid color-mix(in srgb, #58a6ff 38%, transparent);
+  }
+  .st-enc.cpu {
+    color: color-mix(in srgb, #a77de8 72%, var(--text));
+    background: color-mix(in srgb, #bc8cff 16%, transparent);
+    border-color: color-mix(in srgb, #bc8cff 38%, transparent);
+  }
+  .st-meter {
+    position: relative;
+    display: block;
+    width: 56px;
+    height: 5px;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--text) 14%, transparent);
+    overflow: hidden;
+  }
+  .st-meter.wide {
+    width: 72px;
+    height: 6px;
+  }
+  .st-meter i {
+    position: absolute;
+    inset: 0 auto 0 0;
+    min-width: 3px;
+    border-radius: 3px;
+    background: var(--g-dim);
+  }
+  .st-meter i.down {
+    background: #58a6ff;
+  }
+  .st-meter i.up {
+    background: var(--accent);
+  }
+  /* ↓/↑ and Tu/Partner stacked in columns: the bars start and end at the same place. */
+  .st-grid {
+    display: grid;
+    grid-template-columns: auto 48px auto;
+    column-gap: 6px;
+    row-gap: 2px;
+    align-items: center;
+    font-size: 10.5px;
+  }
+  .st-cpu-grid {
+    grid-template-columns: auto 48px auto auto;
+  }
+  .st-grid-row {
+    display: contents;
+  }
+  /* Fixed widths: numbers changing every second must not resize the row (a wrap would
+     move the picture under the bar). */
+  .st-grid-row b {
+    text-align: right;
+    min-width: 8.5ch;
+  }
+  .st-cpu-grid .st-grid-row b {
+    min-width: 4.5ch;
+  }
+  .st-cpu-grid .st-grid-row b.st-ram {
+    min-width: 6.5ch;
+  }
+  .st-lat b {
+    min-width: 6ch;
+  }
+  .st-fps .st-row b {
+    min-width: 8ch;
+  }
+  .st-grid-row .st-meter {
+    width: 48px;
+  }
+  .st-grid-row b.st-ram {
+    color: var(--g-dim);
+  }
+  .st-grid-row.caution .st-meter i {
+    background: var(--caution);
+  }
+  .st-grid-row.critical .st-meter i {
+    background: var(--err);
   }
   .vstats .caution b {
     color: var(--caution-text);
@@ -4643,8 +4909,7 @@
     opacity: 0.45;
     cursor: default;
   }
-  .screens-anchor,
-  .keys-anchor {
+  .screens-anchor {
     display: contents;
   }
   .keys-btn {
@@ -4653,9 +4918,19 @@
     gap: 4px;
     cursor: pointer;
   }
+  /* Under its button (the screens menu hangs from the bar's right edge instead). */
+  .keys-anchor {
+    display: inline-flex;
+    position: relative;
+  }
   .keys-pop {
     width: 210px;
+    /* The screens menu caps its width to the bar; this anchor is only the button. */
+    max-width: none;
     padding: 6px;
+    left: 0;
+    right: auto;
+    transform-origin: top left;
   }
   .keys-pop .sp-list button {
     grid-template-columns: 22px 1fr;
@@ -5042,7 +5317,7 @@
   }
   .b-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 3px;
     padding: 3px;
     border-radius: 12px;
@@ -5051,42 +5326,156 @@
   }
   .b-cell {
     border-radius: 9px;
-    padding: 4px 8px;
+    padding: 6px 9px;
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 5px;
     min-width: 0;
+    background: color-mix(in srgb, var(--text) 4%, transparent);
   }
-  .b-cell small {
+  .b-cell.wide {
+    grid-column: span 2;
+  }
+  .b-cell > small {
     font-size: 9px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--g-dim);
   }
-  .b-cell span {
+  .b-cell b {
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 12px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    white-space: nowrap;
   }
-  .b-cell.caution {
-    background: color-mix(in srgb, var(--caution) 14%, transparent);
+  .b-val {
+    font-size: 13.5px;
   }
-  .b-cell.caution span {
+  .b-val small {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--g-dim);
+  }
+  .b-line {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+  }
+  .b-signal {
+    width: 20px;
+    height: 15px;
+  }
+  .b-cell.caution > .b-val,
+  .b-cell.caution .b-line .b-val {
     color: var(--caution-text);
   }
-  .b-cell.critical {
-    background: color-mix(in srgb, var(--err) 16%, transparent);
-  }
-  .b-cell.critical span {
+  .b-cell.critical .b-line .b-val {
     color: var(--err);
   }
+  .b-lat.caution .st-signal rect.lit {
+    fill: var(--caution);
+  }
+  .b-lat.critical .st-signal rect.lit {
+    fill: var(--err);
+  }
+  .b-note {
+    font-size: 10.5px;
+    color: var(--g-dim);
+  }
+  .b-note.caution {
+    color: var(--caution-text);
+  }
+  .b-note.critical {
+    color: var(--err);
+  }
+  /* Frames as an arc that empties and changes colour (same scale and colours as the bar's meter). */
+  .b-fps {
+    align-items: center;
+  }
+  .b-fps > small {
+    align-self: flex-start;
+  }
+  .b-arc {
+    width: 64px;
+    height: 36px;
+    margin-bottom: -4px;
+  }
+  .b-arc path {
+    fill: none;
+    stroke-width: 7;
+    stroke-linecap: round;
+    transition: stroke-dasharray 0.4s var(--ease-out), stroke 0.4s var(--ease-out);
+  }
+  .b-arc path.track {
+    stroke: color-mix(in srgb, var(--text) 14%, transparent);
+  }
+  /* ↓/↑ and Tu/Partner in columns, so the bars start and end at the same place. */
+  .b-rows {
+    display: grid;
+    column-gap: 6px;
+    row-gap: 4px;
+    align-items: center;
+    font-size: 11px;
+    color: var(--g-dim);
+  }
+  .b-rows b {
+    color: var(--text);
+    text-align: right;
+  }
+  .b-net {
+    grid-template-columns: 10px minmax(0, 1fr) auto;
+  }
+  .b-net .st-meter,
+  .b-cpu .st-meter {
+    width: auto;
+  }
+  .b-cpu {
+    grid-template-columns: 52px minmax(0, 1fr) 5ch 7ch;
+    column-gap: 8px;
+    font-size: 11.5px;
+  }
+  .b-row {
+    display: contents;
+  }
+  .b-ram {
+    text-align: right;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  .b-row.caution .st-meter i {
+    background: var(--caution);
+  }
+  .b-row.caution b {
+    color: var(--caution-text);
+  }
+  .b-row.critical .st-meter i {
+    background: var(--err);
+  }
+  .b-row.critical b {
+    color: var(--err);
+  }
+  /* Three columns of tiles, icon above the label, as many rows as there are actions. */
   .b-acts {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 5px;
+  }
+  .b-acts .b-act {
+    position: relative;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 52px;
+    padding: 7px 6px;
+    font-size: 11.5px;
+    line-height: 1.2;
+    white-space: normal;
+    text-align: center;
+  }
+  .b-acts .b-act .count {
+    position: absolute;
+    top: 5px;
+    right: 6px;
   }
   .b-act {
     display: inline-flex;

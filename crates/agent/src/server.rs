@@ -1,7 +1,7 @@
 //! Agent side of a connection: runs capture and input on behalf of the app.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use capture::{CaptureConfig, Capturer};
@@ -45,6 +45,33 @@ impl Backend for System {
     }
 }
 
+/// Permission to send the next frame of a paced capture (`StartCapture.paced`).
+#[derive(Default)]
+struct Credit {
+    granted: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl Credit {
+    fn grant(&self) {
+        *self.granted.lock().unwrap() = true;
+        self.changed.notify_one();
+    }
+
+    /// Waits up to `timeout` for the credit; `true` once it is there (it stays until `take`).
+    fn wait(&self, timeout: Duration) -> bool {
+        let granted = self.granted.lock().unwrap();
+        if *granted {
+            return true;
+        }
+        *self.changed.wait_timeout(granted, timeout).unwrap().0
+    }
+
+    fn take(&self) {
+        *self.granted.lock().unwrap() = false;
+    }
+}
+
 /// Serves one app connection until it closes.
 pub async fn serve<S>(stream: S, backend: Arc<dyn Backend>)
 where
@@ -62,6 +89,7 @@ where
     });
 
     let mut capture_stop: Option<Arc<AtomicBool>> = None;
+    let mut credit: Option<Arc<Credit>> = None;
     let mut injector: Option<Box<dyn Injector>> = None;
     loop {
         let request = match read_message::<_, Request>(&mut reader).await {
@@ -91,10 +119,17 @@ where
                 max_size,
                 max_fps,
                 show_cursor,
+                paced,
             } => {
                 if let Some(stop) = capture_stop.take() {
                     stop.store(true, Ordering::Relaxed);
                 }
+                // The first frame needs no FrameDone.
+                credit = paced.then(|| {
+                    let credit = Arc::new(Credit::default());
+                    credit.grant();
+                    credit
+                });
                 let stop = Arc::new(AtomicBool::new(false));
                 capture_stop = Some(stop.clone());
                 let config = CaptureConfig {
@@ -104,7 +139,18 @@ where
                     show_cursor,
                     native: false,
                 };
-                spawn_capture(backend.clone(), config, stop, out_tx.clone());
+                spawn_capture(
+                    backend.clone(),
+                    config,
+                    stop,
+                    credit.clone(),
+                    out_tx.clone(),
+                );
+            }
+            Request::FrameDone => {
+                if let Some(credit) = &credit {
+                    credit.grant();
+                }
             }
             Request::StartInput => {
                 let reply = match backend.start_input() {
@@ -164,6 +210,7 @@ fn spawn_capture(
     backend: Arc<dyn Backend>,
     config: CaptureConfig,
     stop: Arc<AtomicBool>,
+    credit: Option<Arc<Credit>>,
     out: mpsc::Sender<Wire<Reply>>,
 ) {
     let spawned = std::thread::Builder::new()
@@ -185,13 +232,24 @@ fn spawn_capture(
                 height,
                 display_id: capturer.display_id(),
                 bounds: (b.x, b.y, b.width, b.height),
+                paced: credit.is_some(),
             };
             if out.blocking_send(Wire::Json(started)).is_err() {
                 return;
             }
             while !stop.load(Ordering::Relaxed) {
+                // Paced: wait until the app took the previous frame; the capture keeps only
+                // the newest meanwhile, which is the one sent next.
+                if let Some(credit) = &credit
+                    && !credit.wait(Duration::from_millis(100))
+                {
+                    continue;
+                }
                 match capturer.next_frame(Duration::from_millis(100)) {
                     Ok(Some(frame)) => {
+                        if let Some(credit) = &credit {
+                            credit.take();
+                        }
                         let message = Wire::Frame {
                             width: frame.width,
                             height: frame.height,

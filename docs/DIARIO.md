@@ -829,3 +829,14 @@
 - Reattività (ADR 0072): video a 60 fps quando la codifica è hardware (software resta a 30), movimenti del mouse
   inviati subito con 4 ms di distanza minima. Nella 2.3.4 insieme alla correzione di Ctrl+Alt+Canc.
 - Pubblicata la 2.3.4 (release in CI tutta verde, `latest.json` con 11 piattaforme).
+
+## 2026-11-16 — 2.3.5: schermata di sicurezza, ritardo con Windows, statistiche grafiche
+- Ctrl+Alt+Canc con la 2.3.4: il comando arrivava ma si vedeva il desktop fino al primo clic. Prova in locale sulla
+  VM con l'esempio `secure_desktop` (cross-compilato con mingw-w64): la duplicazione DXGI su Winlogon non manda
+  fotogrammi finché nulla cambia. Fotogramma GDI subito dopo il cambio di desktop: menu catturato per intero.
+- Barra delle statistiche: mockup A–D, scelta B rivista (fps a colori su scala 30/60, pastiglia GPU/CPU, CPU
+  allineate). Pannello del pallino: P1 con l'arco dei fotogrammi di P3, azioni su tre colonne (ADR 0074).
+- Sfarfallio della barra ogni secondo: due istanze dell'app (installata e di sviluppo) si rimandavano la stessa
+  immagine degli appunti; hash dell'ultima immagine e riga del trasferimento ritardata. Il vetro resta.
+- Ritardo di ~1 s solo con host Windows: code piene tra agente, pipe e cattura condivisa. Slot con l'ultimo
+  fotogramma e agente che cattura solo dopo `FrameDone` (ADR 0073). Da misurare sulla VM.

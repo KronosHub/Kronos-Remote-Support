@@ -46,3 +46,11 @@ Verificato sulla VM con la 2.3.3: l'agente (SYSTEM nella sessione dell'utente) c
 Ora l'agente non passa l'evento all'iniettore: avvia sé stesso come SYSTEM in sessione 0 con `--send-sas`
 (`launch_in_session`, lo stesso codice con cui il servizio avvia l'agente), che chiama `input::sas::send` ed esce
 con 0 se è andata. `SERVICE_REVISION` e `SECURE_ATTENTION_REVISION` = 6.
+
+## Aggiornamento 2.3.5 — schermata di sicurezza visibile subito
+Con la 2.3.4 il comando arrivava, ma chi controllava continuava a vedere il desktop finché non cliccava. La
+duplicazione DXGI sul desktop Winlogon consegna un fotogramma solo quando qualcosa cambia. Ora, a ogni cambio di
+desktop (`follow_input_desktop`), `WinCapturer` riapre la duplicazione e manda subito un fotogramma copiato con GDI
+(`BitBlt`, `primer`); se la duplicazione non si apre resta su GDI (ogni 100 ms) e ritenta DXGI ogni 2 s. Verificato
+sulla VM con l'esempio `crates/agent/examples/secure_desktop.rs` (menu Ctrl+Alt+Canc catturato per intero).
+`SERVICE_REVISION` 7; `SECURE_ATTENTION_REVISION` resta 6.

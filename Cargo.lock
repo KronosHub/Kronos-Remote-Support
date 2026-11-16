@@ -41,6 +41,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "windesk",
  "windows-service",
  "windows-sys 0.59.0",
@@ -1395,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-remoto"
-version = "2.3.4"
+version = "2.3.5"
 dependencies = [
  "agent",
  "anyhow",

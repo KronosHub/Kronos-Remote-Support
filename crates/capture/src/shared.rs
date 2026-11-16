@@ -4,11 +4,14 @@
 //! process, so two people controlling the same PC failed. Capturing once and handing the
 //! frames to each session (each keeps its own encoder and adaptive quality) also saves CPU
 //! on every platform.
+//!
+//! Each session keeps only the newest frame ("latest wins"): a session whose encoder is
+//! slower than the screen changes encodes the current picture, never a queue of old ones
+//! (a queue of a few frames was a visible delay with slow software encoding).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -35,9 +38,16 @@ impl Key {
     }
 }
 
+/// One session's newest frame, overwritten by the capture thread.
+#[derive(Default)]
+struct Slot {
+    frame: Mutex<Option<Frame>>,
+    ready: Condvar,
+}
+
 /// State shared between the capture thread and the sessions.
 struct Shared {
-    subscribers: Mutex<Vec<SyncSender<Frame>>>,
+    subscribers: Mutex<Vec<Weak<Slot>>>,
     /// Latest frame, handed to sessions that join while the screen is static.
     last: Mutex<Option<Frame>>,
     /// Why the capture stopped, for the sessions.
@@ -98,17 +108,15 @@ fn subscribe_with(
     };
     drop(registry);
 
-    let (tx, rx) = mpsc::sync_channel(2);
-    if let Some(frame) = hub.shared.last.lock().unwrap().clone() {
-        let _ = tx.try_send(frame);
-    }
+    let slot = Arc::new(Slot::default());
+    *slot.frame.lock().unwrap() = hub.shared.last.lock().unwrap().clone();
     let mut subscribers = hub.shared.subscribers.lock().unwrap();
-    // Ended meanwhile: dropping `tx` reports the error to this session at once.
+    // Ended meanwhile: `next_frame` reports the error to this session at once.
     if !hub.shared.ended.load(Ordering::Relaxed) {
-        subscribers.push(tx);
+        subscribers.push(Arc::downgrade(&slot));
     }
     drop(subscribers);
-    Ok(Box::new(Subscriber { hub, frames: rx }))
+    Ok(Box::new(Subscriber { hub, slot }))
 }
 
 fn start_hub(mut capturer: Box<dyn Capturer>) -> Hub {
@@ -133,13 +141,15 @@ fn start_hub(mut capturer: Box<dyn Capturer>) -> Hub {
                     match capturer.next_frame(Duration::from_millis(100)) {
                         Ok(Some(frame)) => {
                             *shared.last.lock().unwrap() = Some(frame.clone());
-                            // A session that falls behind skips frames (it then sends a
-                            // later one; its encoder never sees a gap in its own stream).
-                            shared.subscribers.lock().unwrap().retain(|tx| {
-                                !matches!(
-                                    tx.try_send(frame.clone()),
-                                    Err(TrySendError::Disconnected(_))
-                                )
+                            // A session that falls behind skips frames: the newest replaces
+                            // the one it has not taken yet.
+                            shared.subscribers.lock().unwrap().retain(|slot| {
+                                let Some(slot) = slot.upgrade() else {
+                                    return false;
+                                };
+                                *slot.frame.lock().unwrap() = Some(frame.clone());
+                                slot.ready.notify_one();
+                                true
                             });
                         }
                         Ok(None) => {}
@@ -149,10 +159,13 @@ fn start_hub(mut capturer: Box<dyn Capturer>) -> Hub {
                         }
                     }
                 }
-                // Wakes the sessions up with "disconnected".
+                // Wakes the sessions up: they see the capture ended.
                 let mut subscribers = shared.subscribers.lock().unwrap();
                 shared.ended.store(true, Ordering::Relaxed);
-                subscribers.clear();
+                for slot in subscribers.drain(..).filter_map(|slot| slot.upgrade()) {
+                    let _guard = slot.frame.lock().unwrap();
+                    slot.ready.notify_all();
+                }
             })
             .expect("spawning the capture thread")
     };
@@ -168,7 +181,7 @@ fn start_hub(mut capturer: Box<dyn Capturer>) -> Hub {
 
 struct Subscriber {
     hub: Arc<Hub>,
-    frames: Receiver<Frame>,
+    slot: Arc<Slot>,
 }
 
 impl Capturer for Subscriber {
@@ -185,16 +198,20 @@ impl Capturer for Subscriber {
     }
 
     fn next_frame(&mut self, timeout: Duration) -> crate::Result<Option<Frame>> {
-        match self.frames.recv_timeout(timeout) {
-            Ok(frame) => Ok(Some(frame)),
-            Err(RecvTimeoutError::Timeout) => Ok(None),
-            Err(RecvTimeoutError::Disconnected) => {
-                Err(match self.hub.shared.error.lock().unwrap().clone() {
-                    Some(message) => CaptureError::Backend(message),
-                    None => CaptureError::Stopped,
-                })
-            }
+        let mut frame = self.slot.frame.lock().unwrap();
+        if frame.is_none() && !self.hub.shared.ended.load(Ordering::Relaxed) {
+            frame = self.slot.ready.wait_timeout(frame, timeout).unwrap().0;
         }
+        if let Some(frame) = frame.take() {
+            return Ok(Some(frame));
+        }
+        if self.hub.shared.ended.load(Ordering::Relaxed) {
+            return Err(match self.hub.shared.error.lock().unwrap().clone() {
+                Some(message) => CaptureError::Backend(message),
+                None => CaptureError::Stopped,
+            });
+        }
+        Ok(None)
     }
 }
 

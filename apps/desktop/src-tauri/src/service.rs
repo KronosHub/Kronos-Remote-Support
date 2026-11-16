@@ -410,9 +410,11 @@ struct ViewerCtl {
 /// Viewer events kept for a window that has not attached yet; older ones are dropped.
 const MAX_BACKLOG: usize = 256;
 
-/// Frames the UI may lag behind (~0.5 s at 60 fps) before we stop feeding it. A window
-/// in the background (WebView2 throttles it) would otherwise queue minutes of video.
-const MAX_FRAMES_IN_FLIGHT: u32 = 30;
+/// Frames the UI may lag behind before we stop feeding it and resync with a keyframe:
+/// ~0.2 s at 60 fps, ~0.4 s at 30 (software encoding). More only shows older pictures
+/// (2.3.4 allowed 30: a full second behind at 30 fps). A window in the background
+/// (WebView2 throttles it) would otherwise queue minutes of video.
+const MAX_FRAMES_IN_FLIGHT: u32 = 12;
 /// Lag at which a resyncing UI is considered caught up again.
 const RESUME_FRAMES_IN_FLIGHT: u32 = 3;
 

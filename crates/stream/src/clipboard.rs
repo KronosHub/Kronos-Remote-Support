@@ -64,23 +64,48 @@ fn read(clipboard: &mut arboard::Clipboard, stamp: Option<u64>) -> Content {
     }
 }
 
+/// Fingerprint of a picture's pixels: the same picture always gives the same one.
+fn image_hash(image: &arboard::ImageData<'_>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (image.width, image.height).hash(&mut hasher);
+    image.bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
 impl Content {
-    /// The change to send; a picture is read again and encoded here.
-    fn into_change(self, clipboard: &mut arboard::Clipboard) -> Option<Change> {
+    /// The change to send; a picture is read again and encoded here. A picture whose pixels
+    /// match `last_image` (the last one received or sent) is not sent again: another program
+    /// sharing this clipboard with the same partner (e.g. a second Kronos) would otherwise
+    /// bounce it back and forth forever.
+    fn into_change(
+        self,
+        clipboard: &mut arboard::Clipboard,
+        last_image: &mut Option<u64>,
+    ) -> Option<Change> {
         match self {
             Content::Text(t) => Some(Change::Text(t)),
             Content::Files(f) => Some(Change::Files(f)),
-            Content::Image(_) => match clipboard
-                .get_image()
-                .map_err(anyhow::Error::from)
-                .and_then(encode_png)
-            {
-                Ok(png) => Some(Change::Image(png)),
-                Err(e) => {
-                    tracing::warn!("copied picture not shared: {e:#}");
-                    None
+            Content::Image(_) => {
+                match clipboard
+                    .get_image()
+                    .map_err(anyhow::Error::from)
+                    .and_then(|image| {
+                        let hash = image_hash(&image);
+                        if *last_image == Some(hash) {
+                            return Ok(None);
+                        }
+                        *last_image = Some(hash);
+                        encode_png(image).map(Some)
+                    }) {
+                    Ok(None) => None,
+                    Ok(Some(png)) => Some(Change::Image(png)),
+                    Err(e) => {
+                        tracing::warn!("copied picture not shared: {e:#}");
+                        None
+                    }
                 }
-            },
+            }
             Content::Other => None,
         }
     }
@@ -168,8 +193,9 @@ impl ClipboardSync {
                 let _ = ready_tx.send(true);
                 let mut stamp = change_stamp();
                 let mut last = read(&mut clipboard, stamp);
+                let mut last_image: Option<u64> = None;
                 if include_current
-                    && let Some(change) = last.clone().into_change(&mut clipboard)
+                    && let Some(change) = last.clone().into_change(&mut clipboard, &mut last_image)
                     && changes_tx.send(change).is_err()
                 {
                     return;
@@ -193,7 +219,10 @@ impl ClipboardSync {
                         }
                         Ok(Command::SetImage(png)) => {
                             match decode_png(&png) {
+                                // Already on the clipboard (it went round): leave it be.
+                                Ok(image) if last_image == Some(image_hash(&image)) => continue,
                                 Ok(image) => {
+                                    last_image = Some(image_hash(&image));
                                     if let Err(e) = clipboard.set_image(image) {
                                         tracing::warn!(
                                             "cannot put the picture on the clipboard: {e}"
@@ -215,7 +244,8 @@ impl ClipboardSync {
                             let now = read(&mut clipboard, stamp);
                             if now != last {
                                 last = now.clone();
-                                if let Some(change) = now.into_change(&mut clipboard)
+                                if let Some(change) =
+                                    now.into_change(&mut clipboard, &mut last_image)
                                     && changes_tx.send(change).is_err()
                                 {
                                     break;

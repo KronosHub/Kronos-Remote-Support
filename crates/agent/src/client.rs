@@ -27,12 +27,16 @@ struct Started {
     size: (u32, u32),
     display_id: u32,
     bounds: Rect,
+    /// The agent paces frames and waits for `FrameDone`.
+    paced: bool,
 }
 
 pub struct AgentCapturer {
     started: Started,
     frames: std_mpsc::Receiver<Result<Frame, String>>,
     stop: Option<oneshot::Sender<()>>,
+    /// Paced capture: tells the agent each frame was taken (see `StartCapture.paced`).
+    frame_done: Option<mpsc::UnboundedSender<()>>,
 }
 
 impl AgentCapturer {
@@ -48,8 +52,10 @@ impl AgentCapturer {
             max_size: config.max_size,
             max_fps: config.max_fps,
             show_cursor: config.show_cursor,
+            paced: true,
         };
         let (started_tx, started_rx) = std_mpsc::channel::<Result<Started, String>>();
+        let (done_tx, mut done_rx) = mpsc::unbounded_channel::<()>();
         let (frames_tx, frames) = std_mpsc::sync_channel::<Result<Frame, String>>(2);
         let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
         let backend = |e: std::io::Error| CaptureError::Backend(format!("agent: {e}"));
@@ -79,6 +85,12 @@ impl AgentCapturer {
                     loop {
                         let message = tokio::select! {
                             _ = &mut stop_rx => break,
+                            Some(()) = done_rx.recv() => {
+                                if write_message(&mut writer, &Wire::Json(Request::FrameDone)).await.is_err() {
+                                    break;
+                                }
+                                continue;
+                            }
                             m = read_message::<_, Reply>(&mut reader) => m,
                         };
                         let report = |message: String| match &started {
@@ -95,9 +107,11 @@ impl AgentCapturer {
                                 height,
                                 display_id,
                                 bounds: (x, y, w, h),
+                                paced,
                             }))) => {
                                 if let Some(tx) = started.take() {
                                     let _ = tx.send(Ok(Started {
+                                        paced,
                                         size: (width, height),
                                         display_id,
                                         bounds: Rect {
@@ -149,10 +163,12 @@ impl AgentCapturer {
             Ok(Err(message)) => return Err(CaptureError::Backend(message)),
             Err(_) => return Err(CaptureError::Backend("the agent did not answer".into())),
         };
+        let frame_done = started.paced.then_some(done_tx);
         Ok(Self {
             started,
             frames,
             stop: Some(stop_tx),
+            frame_done,
         })
     }
 }
@@ -172,7 +188,13 @@ impl Capturer for AgentCapturer {
 
     fn next_frame(&mut self, timeout: Duration) -> capture::Result<Option<Frame>> {
         match self.frames.recv_timeout(timeout) {
-            Ok(Ok(frame)) => Ok(Some(frame)),
+            Ok(Ok(frame)) => {
+                // Taken: the agent may send the next one (the newest by then).
+                if let Some(done) = &self.frame_done {
+                    let _ = done.send(());
+                }
+                Ok(Some(frame))
+            }
             Ok(Err(message)) => Err(CaptureError::Backend(message)),
             Err(std_mpsc::RecvTimeoutError::Timeout) => Ok(None),
             Err(std_mpsc::RecvTimeoutError::Disconnected) => Err(CaptureError::Stopped),

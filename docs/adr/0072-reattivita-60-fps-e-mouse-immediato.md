@@ -22,3 +22,7 @@ mouse spediti **una volta per frame di animazione** (`requestAnimationFrame`, fi
 Con codifica hardware circa 1,5 volte la banda a parità di qualità, solo quando la rete lo permette. Su host lenti
 o con encoder software (come la VM ARM in emulazione, ~31 ms a fotogramma) il video non cambia; resta il guadagno
 sul mouse.
+
+## Aggiornamento 2.3.5
+`MAX_FRAMES_IN_FLIGHT` 12: con 30 fotogrammi in volo a 30 fps la coda arrivava a 1 s. Il ritardo di circa 1 s
+visto solo con host Windows veniva però dalle code dell'agente (ADR 0073).

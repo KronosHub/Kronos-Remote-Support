@@ -2,6 +2,18 @@
 
 Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**, quando la versione è disponibile.
 
+## 2.3.5 — 2026-11-16
+- **Ctrl+Alt+Canc** mostra subito la schermata di sicurezza, senza dover cliccare.
+- **Meno ritardo con i computer Windows**: l'immagine è sempre la più recente invece di accumularsi in coda,
+  quindi quello che fai appare prima. Sul computer controllato l'app chiede di aggiornare il servizio (una conferma
+  di amministratore).
+- **Statistiche grafiche** nella barra e nel pannello del pallino: tacche per la latenza, fotogrammi con una barra
+  (un arco nel pannello) che cambia colore con il valore, pastiglia GPU/CPU sotto la risoluzione, barre per banda e
+  CPU.
+- Le azioni del pannello del pallino sono in una griglia a tre colonne.
+- Corretto lo sfarfallio della barra quando due app sullo stesso computer condividono gli appunti.
+- Il menu della tastiera si apre sotto il suo pulsante.
+
 ## 2.3.4 — 2026-11-16
 - **Più reattivo**: con i computer che comprimono il video sul chip grafico l'immagine arriva fino a 60 fotogrammi
   al secondo (prima 30), quindi quello che fai appare prima e scorre più fluido; con la rete lenta torna da sola a

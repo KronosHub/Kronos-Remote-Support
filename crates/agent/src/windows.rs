@@ -427,7 +427,7 @@ pub fn run_send_sas() -> i32 {
 }
 
 /// Starts `exe <args>` as SYSTEM in `session`, on its interactive window station.
-fn launch_in_session(session: u32, exe: &Path, args: &str) -> Result<HANDLE> {
+pub fn launch_in_session(session: u32, exe: &Path, args: &str) -> Result<HANDLE> {
     unsafe {
         let mut own = std::ptr::null_mut();
         if OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS, &mut own) == 0 {
@@ -777,7 +777,7 @@ pub fn uninstall_service(name: &str) -> Result<()> {
 
 /// Bumped whenever the service or the pre-login host change: an app finding an older
 /// revision installed offers to reinstall the service, which refreshes its protected copy.
-pub const SERVICE_REVISION: u32 = 6;
+pub const SERVICE_REVISION: u32 = 7;
 /// First revision whose agent sends Ctrl+Alt+Del from session 0 (ADR 0070). Before 5 the
 /// agent drops the pipe on the unknown event (no more remote control for the session); 5
 /// calls `SendSAS` from the user's session, which Windows ignores.

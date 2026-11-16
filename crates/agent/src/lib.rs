@@ -34,7 +34,14 @@ pub enum Request {
         max_size: Option<(u32, u32)>,
         max_fps: u32,
         show_cursor: bool,
+        /// One frame at a time: after each frame the agent waits for [`Request::FrameDone`]
+        /// and then sends the newest one, so no queue of old frames builds up while the
+        /// encoder is slower than the screen. Older agents ignore it (and send freely).
+        #[serde(default)]
+        paced: bool,
     },
+    /// The app took the last frame: the agent may send the next (paced captures only).
+    FrameDone,
     StartInput,
     Input {
         event: protocol::InputEvent,
@@ -58,6 +65,10 @@ pub enum Reply {
         height: u32,
         display_id: u32,
         bounds: (f64, f64, f64, f64),
+        /// The agent paces frames (`StartCapture.paced`); older agents leave it out, and the
+        /// app then sends no `FrameDone` they would not understand.
+        #[serde(default)]
+        paced: bool,
     },
     InputStarted,
     Error {
