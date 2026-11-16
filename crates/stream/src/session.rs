@@ -42,8 +42,9 @@ const NO_SCREEN_RETRY: Duration = Duration::from_secs(5);
 /// (so remote control reaches UAC prompts and the lock screen).
 enum HostInput {
     Local(input::InputSink),
+    /// `bool`: the agent knows Ctrl+Alt+Del (an older one drops the pipe on it).
     #[cfg(windows)]
-    Agent(agent::client::AgentInput),
+    Agent(agent::client::AgentInput, bool),
 }
 
 impl HostInput {
@@ -54,9 +55,13 @@ impl HostInput {
         if let Some(product) = agent_product
             && agent::windows::agent_available(&product)
         {
-            return Ok(Self::Agent(agent::client::AgentInput::start(
-                move || async move { agent::windows::connect(&product).await },
-            )?));
+            let secure_attention = agent::windows::agent_knows_secure_attention(&product);
+            return Ok(Self::Agent(
+                agent::client::AgentInput::start(move || async move {
+                    agent::windows::connect(&product).await
+                })?,
+                secure_attention,
+            ));
         }
         let _ = agent_product;
         Ok(Self::Local(input::InputSink::start()?))
@@ -66,16 +71,30 @@ impl HostInput {
         match self {
             Self::Local(sink) => sink.send(event),
             #[cfg(windows)]
-            Self::Agent(sink) => sink.send(event),
+            Self::Agent(sink, _) => sink.send(event),
         }
     }
 
-    /// Whether events reach the SYSTEM agent, the only one allowed to send Ctrl+Alt+Del.
-    fn is_agent(&self) -> bool {
+    /// Whether Ctrl+Alt+Del can be sent, or why not: only the SYSTEM agent may, and only
+    /// one recent enough to know the event.
+    fn secure_attention(&self) -> Result<(), String> {
         match self {
-            Self::Local(_) => false,
             #[cfg(windows)]
-            Self::Agent(_) => true,
+            Self::Agent(_, true) => Ok(()),
+            #[cfg(windows)]
+            Self::Agent(_, false) => Err(
+                "il servizio di Kronos sul computer controllato è di una versione precedente: \
+                 aprire Kronos su quel computer e confermare l'aggiornamento del servizio \
+                 (Preferenze, pulsante Aggiorna)"
+                    .to_string(),
+            ),
+            Self::Local(_) if cfg!(windows) => Err(
+                "Ctrl+Alt+Canc richiede il servizio di Kronos sul computer controllato: \
+                 attiva \"Controllo finestre di amministratore (UAC)\" o l'accesso non \
+                 presidiato nelle sue Preferenze"
+                    .to_string(),
+            ),
+            Self::Local(_) => Err("Ctrl+Alt+Canc esiste solo su Windows".to_string()),
         }
     }
 
@@ -83,7 +102,7 @@ impl HostInput {
         match self {
             Self::Local(sink) => sink.set_area(area),
             #[cfg(windows)]
-            Self::Agent(sink) => sink.set_area(area),
+            Self::Agent(sink, _) => sink.set_area(area),
         }
     }
 
@@ -93,7 +112,7 @@ impl HostInput {
         match self {
             Self::Local(sink) => sink.health(),
             #[cfg(windows)]
-            Self::Agent(sink) => input::InputHealth {
+            Self::Agent(sink, _) => input::InputHealth {
                 applied: sink.sent(),
                 failed: 0,
                 last_error: None,
@@ -547,18 +566,14 @@ pub async fn serve_host(
                 }
                 Some(ControlMsg::Input { event: InputEvent::SecureAttention }) => {
                     let failure = match &input {
-                        Some(sink) if sink.is_agent() => {
-                            awake.user_active();
-                            sink.send(InputEvent::SecureAttention);
-                            None
-                        }
-                        Some(_) if cfg!(windows) => Some(
-                            "Ctrl+Alt+Canc richiede il servizio di Kronos sul computer controllato: \
-                             attiva \"Controllo finestre di amministratore (UAC)\" o l'accesso non \
-                             presidiato nelle sue Preferenze"
-                                .to_string(),
-                        ),
-                        Some(_) => Some("Ctrl+Alt+Canc esiste solo su Windows".to_string()),
+                        Some(sink) => match sink.secure_attention() {
+                            Ok(()) => {
+                                awake.user_active();
+                                sink.send(InputEvent::SecureAttention);
+                                None
+                            }
+                            Err(message) => Some(message),
+                        },
                         None => None,
                     };
                     if let Some(message) = failure {

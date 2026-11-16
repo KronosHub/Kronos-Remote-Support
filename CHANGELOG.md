@@ -2,6 +2,13 @@
 
 Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**, quando la versione è disponibile.
 
+## 2.3.3 — 2026-11-16
+- **Ctrl+Alt+Canc** ora funziona: sul computer Windows controllato l'app chiede di aggiornare il suo servizio (una
+  conferma di amministratore), che nella 2.3.2 restava alla versione precedente. Finché non è aggiornato, chi
+  controlla riceve un avviso invece di perdere il controllo di mouse e tastiera.
+- Barra della sessione più pulita: **Controllo**, **Blocca input** e (con Windows) **Ctrl+Alt+Canc** sono nel menu
+  con l'icona della tastiera, che si colora quando il controllo è attivo.
+
 ## 2.3.2 — 2026-11-16
 - **Ctrl+Alt+Canc**: con un computer Windows nella barra della sessione c'è il pulsante per inviare
   Ctrl+Alt+Canc (schermata di sicurezza, sblocco della schermata di blocco). Funziona se sul computer controllato è

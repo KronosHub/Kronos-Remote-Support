@@ -818,3 +818,7 @@
   misure rigenerate con `tauri icon` (ADR 0071).
 - Pubblicata la 2.3.2 (release in CI tutta verde, `latest.json` con 11 piattaforme). L'app ha visto l'aggiornamento
   qualche minuto dopo la pubblicazione (cache di GitHub su `releases/latest/download`).
+- Prova sulla VM: Ctrl+Alt+Canc non partiva. L'agente era `kronos-agent.exe` 2.1.0 (copia protetta del servizio,
+  rinnovata solo a cambio di `SERVICE_REVISION`) e chiudeva la pipe sull'evento sconosciuto. 2.3.3: revisione 5,
+  evento mandato solo ad agenti aggiornati, menu tastiera (Controllo, Blocca input, Ctrl + Alt + Canc) al posto dei
+  pulsanti nella barra, come chiesto dall'utente.

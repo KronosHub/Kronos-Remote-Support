@@ -17,8 +17,16 @@ risponde solo a un processo LocalSystem (o con uiAccess) e solo se la policy `So
 - Host (`stream::session`): l'evento va all'iniettore solo se è l'agente; con l'iniettore locale (app come utente,
   senza servizio) risponde subito `SecureAttentionFailed` con la spiegazione (serve il controllo UAC o l'accesso non
   presidiato). Il viewer la mostra come avviso (`ViewNotice`).
-- Viewer: pulsante **Ctrl+Alt+Canc** nella barra e nel pannello del pallino, solo con partner Windows
-  (`Displays.os`), attivo solo con il controllo acceso.
+- Viewer: menu **Mouse e tastiera** nella barra (icona tastiera con freccia, arancio con il controllo attivo) con
+  Controllo, Blocca input e, solo con partner Windows (`Displays.os`), "Ctrl + Alt + Canc"; Controllo e Blocca input
+  non sono più pulsanti della barra (scelta dell'utente). Ctrl+Alt+Canc anche nel pannello del pallino; attivo solo
+  con il controllo acceso. (2.3.2 aveva un pulsante
+  con scritta nella barra: non piaceva, sostituito dal menu nella 2.3.3.)
+- **Servizio aggiornato (2.3.3)**: l'agente gira dalla copia protetta del servizio, rinnovata solo quando cambia
+  `SERVICE_REVISION`; nella 2.3.2 era rimasto l'agente vecchio (sulla VM la 2.1.0), che non conosce l'evento e alla
+  riga JSON sconosciuta chiude la pipe, togliendo il controllo remoto per il resto della sessione.
+  `SERVICE_REVISION` = 5 (l'app propone di aggiornare il servizio con un UAC) e l'host manda l'evento solo se la
+  revisione installata è almeno `SECURE_ATTENTION_REVISION` (5); altrimenti risponde che il servizio va aggiornato.
 
 ## Alternative scartate
 - Iniettare Ctrl, Alt e Canc come tasti: Windows li ignora per la SAS.

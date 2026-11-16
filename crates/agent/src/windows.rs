@@ -743,8 +743,25 @@ pub fn uninstall_service(name: &str) -> Result<()> {
 
 /// Bumped whenever the service or the pre-login host change: an app finding an older
 /// revision installed offers to reinstall the service, which refreshes its protected copy.
-pub const SERVICE_REVISION: u32 = 4;
+pub const SERVICE_REVISION: u32 = 5;
+/// First revision whose agent knows Ctrl+Alt+Del (ADR 0070): an older agent drops the pipe
+/// on the unknown event, which would end remote control for the session.
+pub const SECURE_ATTENTION_REVISION: u32 = 5;
 const REVISION_FILE: &str = "revision";
+
+/// The service that runs the agent of `product` ("remote" or "quick").
+pub fn service_for(product: &str) -> &'static str {
+    if product == "quick" {
+        "KronosQuickSupportAgent"
+    } else {
+        "KronosRemoteSupportAgent"
+    }
+}
+
+/// Whether the installed agent of `product` can send Ctrl+Alt+Del.
+pub fn agent_knows_secure_attention(product: &str) -> bool {
+    installed_revision(service_for(product)) >= SECURE_ATTENTION_REVISION
+}
 
 /// Files of the user's app data the pre-login host needs: the device key (same id), the
 /// personal password's derived secret and the preferences (cached id, user name).

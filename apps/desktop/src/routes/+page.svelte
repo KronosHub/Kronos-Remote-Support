@@ -2268,6 +2268,8 @@
     }));
   }
   let screensOpen = $state(false);
+  /** Key combinations menu (Windows partners). */
+  let keysOpen = $state(false);
   function pickDisplay(id: number) {
     screensOpen = false;
     selectDisplay(id);
@@ -2519,19 +2521,6 @@
           <div class="vseg">
             {#if view.controlError}
               <span class="badge warn" title={view.controlError}>Solo visione</span>
-            {:else}
-              <button type="button" class:on={view.control} onclick={toggleControl}
-                title={view.control ? "Controllo attivo: mouse e tastiera vanno al partner. Clic per guardare soltanto" : "Solo visione. Clic per inviare mouse e tastiera al partner"}>
-                <svg class="i" viewBox="0 0 24 24"><path d="m4 4 7 16 2-7 7-2z" /></svg><span class="lbl">Controllo</span>
-              </button>
-              {#if view.control}
-                <button type="button" class:on={view.inputBlocked} onclick={toggleBlockInput}
-                  title={view.inputBlocked
-                    ? "Mouse e tastiera del partner bloccati: chi è davanti al suo computer non può usarli (può sbloccarli premendo Esc tre volte). Clic per sbloccarli"
-                    : "Blocca mouse e tastiera del partner, così chi è davanti al suo computer non interferisce"}>
-                  <svg class="i" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg><span class="lbl">Blocca input</span>
-                </button>
-              {/if}
             {/if}
             <button type="button" class="chat-btn" class:on={view.showChat} class:unread={view.unread > 0}
               onclick={() => view && (view.showChat && !chatPinned ? hideViewChat(view) : openViewChat(view))} title="Scrivi al partner">
@@ -2574,20 +2563,47 @@
               </button>
             </div>
           {/if}
-          {#if view.os === "windows"}
-            <div class="vseg">
-              <button type="button" disabled={!view.control} onclick={sendCtrlAltDel}
-                title="Invia Ctrl+Alt+Canc al partner: schermata di sicurezza o di accesso di Windows (richiede il servizio di Kronos sul partner: controllo UAC o accesso non presidiato)"
-                aria-label="Invia Ctrl+Alt+Canc">
-                {@render cadIcon()}<span class="lbl">Ctrl+Alt+Canc</span>
-              </button>
-            </div>
-          {/if}
           {#if view.audio && audioSupported}
             <input class="volume" type="range" min="0" max="100" value={audioVolume}
               oninput={(e) => setVolume(Number(e.currentTarget.value))}
               title="Volume: {audioVolume} %" aria-label="Volume dell'audio del partner" />
           {/if}
+        {/if}
+        {#if !view.ended}
+          <span class="keys-anchor">
+            <button type="button" class="vselect keys-btn" class:on={view.control} aria-haspopup="menu" aria-expanded={keysOpen}
+              onclick={() => (keysOpen = !keysOpen)}
+              title={view.control ? "Mouse e tastiera: controllo attivo" : "Mouse e tastiera: solo visione"}
+              aria-label="Mouse e tastiera">
+              {@render cadIcon()}
+              <svg class="i" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
+            </button>
+            {#if keysOpen}
+              <div class="screens-pop keys-pop" role="menu" aria-label="Mouse e tastiera">
+                <div class="sp-list">
+                  <button type="button" role="menuitemcheckbox" aria-checked={view.control} class:cur={view.control}
+                    disabled={!!view.controlError} onclick={toggleControl}
+                    title={view.controlError ?? (view.control ? "Mouse e tastiera vanno al partner. Clic per guardare soltanto" : "Solo visione. Clic per inviare mouse e tastiera al partner")}>
+                    <svg class="i" viewBox="0 0 24 24"><path d="m4 4 7 16 2-7 7-2z" /></svg><span>Controllo</span>
+                  </button>
+                  <button type="button" role="menuitemcheckbox" aria-checked={view.inputBlocked} class:cur={view.inputBlocked}
+                    disabled={!view.control} onclick={toggleBlockInput}
+                    title={view.inputBlocked
+                      ? "Mouse e tastiera del partner bloccati: chi è davanti al suo computer non può usarli (può sbloccarli premendo Esc tre volte). Clic per sbloccarli"
+                      : "Blocca mouse e tastiera del partner, così chi è davanti al suo computer non interferisce"}>
+                    <svg class="i" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg><span>Blocca input</span>
+                  </button>
+                  {#if view.os === "windows"}
+                    <button type="button" role="menuitem" disabled={!view.control}
+                      onclick={() => { keysOpen = false; sendCtrlAltDel(); }}
+                      title="Schermata di sicurezza o di accesso di Windows. Richiede il servizio di Kronos sul partner (controllo UAC o accesso non presidiato)">
+                      {@render cadIcon()}<span>Ctrl + Alt + Canc</span>
+                    </button>
+                  {/if}
+                </div>
+              </div>
+            {/if}
+          </span>
         {/if}
         {#if view.displays.length > 1}
           {@const shown = view.displays.find((d) => d.id === view?.currentDisplay)}
@@ -3835,10 +3851,12 @@
   onpointerdown={(e) => {
     if (unattendedMenu && !(e.target as Element).closest?.(".menu-anchor")) unattendedMenu = false;
     if (screensOpen && !(e.target as Element).closest?.(".screens-anchor")) screensOpen = false;
+    if (keysOpen && !(e.target as Element).closest?.(".keys-anchor")) keysOpen = false;
   }}
   onkeydown={(e) => {
     if (unattendedMenu && e.key === "Escape") unattendedMenu = false;
     if (screensOpen && e.key === "Escape") screensOpen = false;
+    if (keysOpen && e.key === "Escape") keysOpen = false;
   }}
 />
 
@@ -4609,8 +4627,29 @@
     opacity: 0.45;
     cursor: default;
   }
-  .screens-anchor {
+  .screens-anchor,
+  .keys-anchor {
     display: contents;
+  }
+  .keys-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+  }
+  .keys-pop {
+    width: 210px;
+    padding: 6px;
+  }
+  .keys-pop .sp-list button {
+    grid-template-columns: 22px 1fr;
+  }
+  .keys-pop .sp-list button:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .keys-btn.on {
+    color: var(--accent);
   }
   .screens-btn {
     display: inline-flex;
