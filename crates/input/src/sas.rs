@@ -1,7 +1,8 @@
 //! Ctrl+Alt+Del on Windows: the secure attention sequence (SAS).
 //!
 //! Injected keys never produce it; `SendSAS` from `sas.dll` asks Winlogon for it. Windows only
-//! honours that from a LocalSystem process (our agent, ADR 0033) and only while the
+//! honours that from a LocalSystem process in session 0 (the agent's `--send-sas` helper, ADR
+//! 0070; from the user's session the call is silently ignored) and only while the
 //! `SoftwareSASGeneration` policy allows services, so the policy is switched on for the call
 //! and put back as it was right after.
 

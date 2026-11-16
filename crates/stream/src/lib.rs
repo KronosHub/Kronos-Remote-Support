@@ -79,12 +79,13 @@ impl Default for StreamConfig {
             // Sharp text on large and Retina screens; slow links and slow machines step
             // down from here (`rate::scale_for`, `HEAVY_ENCODE`).
             max_size: (2560, 1600),
-            fps: 30,
+            // 60 with a hardware encoder; software encoders stay at `SOFTWARE_MAX_FPS`.
+            fps: 60,
             // Cap; the actual limit follows the picture size (`rate::max_bitrate_for`).
             bitrate_bps: 6_000_000,
-            // A full picture every 60 s at most: losses ask for one at once anyway, and the
-            // bits go to the picture instead.
-            keyframe_interval: 1800,
+            // A full picture every 60 s at most (at 60 fps): losses ask for one at once
+            // anyway, and the bits go to the picture instead.
+            keyframe_interval: 3600,
             allow_control: true,
             allow_clipboard: true,
             agent_product: None,
@@ -184,7 +185,20 @@ impl Drop for StreamHandle {
     }
 }
 
-/// Average encoding time above this share of the frame interval: the machine struggles
+/// Frame rate cap of software encoders: 60 fps would double the host's CPU for them, and
+/// their rate control would give each frame half the bits.
+const SOFTWARE_MAX_FPS: u32 = 30;
+
+/// Highest frame rate for `encoder` under `max_fps` (the stream's setting).
+fn encoder_max_fps(encoder: &dyn VideoEncoder, max_fps: u32) -> u32 {
+    if encoder.is_hardware() {
+        max_fps
+    } else {
+        max_fps.min(SOFTWARE_MAX_FPS)
+    }
+}
+
+/// Average encoding time above this share of the frame interval (at `SOFTWARE_MAX_FPS`): the machine struggles
 /// with a large screen, so it is held to [`rate::FULL_HD_PIXELS`] for the rest of the session.
 const HEAVY_ENCODE: f64 = 0.6;
 /// Frames encoded before judging the encoding time (the first ones include warm-up).
@@ -219,7 +233,13 @@ fn open_source(config: &StreamConfig) -> Result<Box<dyn Capturer>> {
         Source::Screen { display_id } => {
             let cfg = CaptureConfig {
                 display_id,
-                max_fps: config.fps,
+                // X11 polls the whole screen each time and its hosts encode in software:
+                // 30 fps is all that would be sent anyway.
+                max_fps: if cfg!(target_os = "linux") {
+                    config.fps.min(SOFTWARE_MAX_FPS)
+                } else {
+                    config.fps
+                },
                 // All monitors side by side: allow up to the encoder limit so each stays legible.
                 max_size: Some(if display_id == Some(capture::ALL_DISPLAYS) {
                     (codec::MAX_WIDTH, codec::MAX_HEIGHT)
@@ -346,10 +366,14 @@ fn encode_loop(
         };
         // Once the hardware refused, stay on software for this stream.
         let hardware = config.hardware_encoding && !hardware_failed.get();
-        let (encoder, failure) = codec::new_encoder(&settings, hardware)?;
+        let (mut encoder, failure) = codec::new_encoder(&settings, hardware)?;
         if let Some(e) = failure {
             hardware_failed.set(true);
             tracing::warn!("hardware encoder unavailable, using software: {e}");
+        }
+        let fps = encoder_max_fps(&*encoder, config.fps);
+        if fps != settings.fps {
+            encoder.set_rate(settings.bitrate_bps, fps);
         }
         encoding_in_hardware.store(encoder.is_hardware(), Ordering::Relaxed);
         tracing::info!(encoder = encoder.name(), size = ?(width, height), "video encoder ready");
@@ -399,13 +423,13 @@ fn encode_loop(
     let mut pending: Option<Frame> = None;
     let mut last_encoded: Option<Instant> = None;
     let mut applied_bitrate = config.bitrate_bps;
-    let mut interval = Duration::from_secs(1) / config.fps.max(1);
+    let mut interval = Duration::from_secs(1) / encoder_max_fps(&*encoder, config.fps).max(1);
 
     while !stop.load(Ordering::Relaxed) {
         let target = bitrate.load(Ordering::Relaxed);
         if target != applied_bitrate {
             applied_bitrate = target;
-            let fps = rate::fps_for(target, config.fps);
+            let fps = rate::fps_for(target, encoder_max_fps(&*encoder, config.fps));
             encoder.set_rate(target, fps);
             interval = Duration::from_secs(1) / fps;
         }
@@ -431,8 +455,10 @@ fn encode_loop(
             match new_encoder(encoded_size) {
                 Ok(mut resized) => {
                     tracing::info!(scale = wanted, size = ?encoded_size, "resolution changed");
-                    let fps = rate::fps_for(applied_bitrate, config.fps);
+                    let fps =
+                        rate::fps_for(applied_bitrate, encoder_max_fps(&*resized, config.fps));
                     resized.set_rate(applied_bitrate, fps);
+                    interval = Duration::from_secs(1) / fps;
                     // A new encoder starts with a keyframe carrying the new size.
                     encoder = resized;
                     scale = wanted;
@@ -528,7 +554,7 @@ fn encode_loop(
         let took = work_started.elapsed();
         encode_avg = Some(encode_avg.map_or(took, |avg| avg.mul_f64(0.9) + took.mul_f64(0.1)));
         encoded_frames = encoded_frames.saturating_add(1);
-        let full_rate = Duration::from_secs(1) / config.fps.max(1);
+        let full_rate = Duration::from_secs(1) / SOFTWARE_MAX_FPS;
         if cpu_cap == 100
             && !encoder.is_hardware()
             && encoded_frames >= HEAVY_SAMPLE

@@ -118,6 +118,17 @@ where
                 };
                 let _ = out_tx.send(Wire::Json(reply)).await;
             }
+            Request::Input {
+                event: protocol::InputEvent::SecureAttention,
+            } => {
+                // Not through the injector: Windows wants it from session 0 (ADR 0070).
+                #[cfg(windows)]
+                tokio::task::spawn_blocking(|| {
+                    if let Err(e) = crate::windows::send_secure_attention() {
+                        tracing::warn!("Ctrl+Alt+Del: {e:#}");
+                    }
+                });
+            }
             Request::Input { event } => {
                 if let Some(sink) = &injector {
                     sink.send(event);

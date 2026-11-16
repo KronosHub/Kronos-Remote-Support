@@ -38,3 +38,11 @@ risponde solo a un processo LocalSystem (o con uiAccess) e solo se la policy `So
 ## Da verificare
 Sulla VM: SAS dal desktop, dalla schermata di blocco e con l'UAC aperto; che la policy torni come prima. Se `SendSAS`
 rifiutasse un processo SYSTEM non servizio, spostare la chiamata nel servizio.
+
+## Aggiornamento 2.3.4 — chiamata dalla sessione 0
+Verificato sulla VM con la 2.3.3: l'agente (SYSTEM nella sessione dell'utente) chiamava `SendSAS` e registrava
+"Ctrl+Alt+Del sent", ma Windows la ignorava. La stessa chiamata fatta da SYSTEM in **sessione 0** (prova con
+`prlctl exec` e PowerShell) ha avviato `LogonUI.exe` nella sessione 1, cioè la schermata Ctrl+Alt+Canc.
+Ora l'agente non passa l'evento all'iniettore: avvia sé stesso come SYSTEM in sessione 0 con `--send-sas`
+(`launch_in_session`, lo stesso codice con cui il servizio avvia l'agente), che chiama `input::sas::send` ed esce
+con 0 se è andata. `SERVICE_REVISION` e `SECURE_ATTENTION_REVISION` = 6.

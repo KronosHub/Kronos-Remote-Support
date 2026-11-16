@@ -2,6 +2,14 @@
 
 Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**, quando la versione è disponibile.
 
+## 2.3.4 — 2026-11-16
+- **Più reattivo**: con i computer che comprimono il video sul chip grafico l'immagine arriva fino a 60 fotogrammi
+  al secondo (prima 30), quindi quello che fai appare prima e scorre più fluido; con la rete lenta torna da sola a
+  meno. I movimenti del mouse partono subito, senza aspettare il fotogramma successivo. Serve la 2.3.4 su entrambi
+  i computer.
+- **Ctrl+Alt+Canc** verso Windows: corretto l'invio, che Windows ignorava. Sul computer controllato l'app chiede
+  di nuovo di aggiornare il servizio (una conferma di amministratore).
+
 ## 2.3.3 — 2026-11-16
 - **Ctrl+Alt+Canc** ora funziona: sul computer Windows controllato l'app chiede di aggiornare il suo servizio (una
   conferma di amministratore), che nella 2.3.2 restava alla versione precedente. Finché non è aggiornato, chi

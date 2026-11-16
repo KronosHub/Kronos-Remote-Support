@@ -1682,6 +1682,9 @@
   const buttonsDown = new Set<string>();
   let pendingMove: { x: number; y: number } | null = null;
   let moveScheduled = false;
+  /** Least gap between two pointer moves sent (ms): sent at once, never more than ~250 a second. */
+  const MOVE_GAP_MS = 4;
+  let lastMoveAt = 0;
   let wheelAccum = { x: 0, y: 0 };
 
   function sendInput(event: InputEvent) {
@@ -1741,12 +1744,25 @@
     syncModifiers(e);
     pendingMove = normalized(e);
     if (moveScheduled) return;
+    // At once (no wait for the next animation frame); a burst within MOVE_GAP_MS keeps
+    // only its last position, sent when the gap is over.
+    const wait = MOVE_GAP_MS - (performance.now() - lastMoveAt);
+    if (wait <= 0) {
+      flushMove();
+      return;
+    }
     moveScheduled = true;
-    requestAnimationFrame(() => {
+    setTimeout(() => {
       moveScheduled = false;
-      if (pendingMove) sendInput({ k: "mouse_move", ...pendingMove });
-      pendingMove = null;
-    });
+      flushMove();
+    }, wait);
+  }
+
+  function flushMove() {
+    if (!pendingMove) return;
+    sendInput({ k: "mouse_move", ...pendingMove });
+    pendingMove = null;
+    lastMoveAt = performance.now();
   }
 
   function onMouseButton(e: MouseEvent, down: boolean) {

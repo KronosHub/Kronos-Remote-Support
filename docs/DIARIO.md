@@ -823,3 +823,8 @@
   evento mandato solo ad agenti aggiornati, menu tastiera (Controllo, Blocca input, Ctrl + Alt + Canc) al posto dei
   pulsanti nella barra, come chiesto dall'utente.
 - Pubblicata la 2.3.3 (release in CI tutta verde, `latest.json` con 11 piattaforme).
+- Con la 2.3.3 e il servizio aggiornato: l'agente registrava "Ctrl+Alt+Del sent" ma non succedeva nulla, e dopo
+  l'invio la sessione diventava lenta. Prova sulla VM: `SendSAS` da SYSTEM in sessione 0 avvia `LogonUI.exe`, dalla
+  sessione 1 no. 2.3.4: helper `--send-sas` lanciato in sessione 0 dall'agente.
+- Reattività (ADR 0072): video a 60 fps quando la codifica è hardware (software resta a 30), movimenti del mouse
+  inviati subito con 4 ms di distanza minima. Nella 2.3.4 insieme alla correzione di Ctrl+Alt+Canc.

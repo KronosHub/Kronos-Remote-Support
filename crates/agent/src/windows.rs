@@ -29,7 +29,7 @@ use windows_sys::Win32::System::RemoteDesktop::{
 };
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, GetCurrentProcess,
-    GetCurrentProcessId, OpenProcess, OpenProcessToken, PROCESS_INFORMATION,
+    GetCurrentProcessId, GetExitCodeProcess, OpenProcess, OpenProcessToken, PROCESS_INFORMATION,
     PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW, STARTUPINFOW, TerminateProcess,
     WaitForSingleObject,
 };
@@ -392,6 +392,40 @@ pub fn launch_agent(session: u32, exe: &Path, product: &str, app: &Path) -> Resu
     )
 }
 
+/// Argument of the short-lived helper that sends Ctrl+Alt+Del from session 0.
+pub const SEND_SAS_ARG: &str = "--send-sas";
+
+/// Ctrl+Alt+Del (ADR 0070). Windows ignores `SendSAS` from the agent, a SYSTEM process in
+/// the user's session, and honours it in session 0, where services run: start this
+/// executable there with [`SEND_SAS_ARG`] and wait for its verdict.
+pub fn send_secure_attention() -> Result<()> {
+    let exe = std::env::current_exe()?;
+    let process = launch_in_session(0, &exe, SEND_SAS_ARG)?;
+    let mut code = 1u32;
+    let finished = unsafe {
+        let done = WaitForSingleObject(process, 10_000) == WAIT_OBJECT_0
+            && GetExitCodeProcess(process, &mut code) != 0;
+        CloseHandle(process);
+        done
+    };
+    match (finished, code) {
+        (true, 0) => Ok(()),
+        (true, code) => bail!("{SEND_SAS_ARG} failed (exit code {code}), see its log"),
+        (false, _) => bail!("{SEND_SAS_ARG} did not finish"),
+    }
+}
+
+/// The helper itself (`--send-sas`, SYSTEM in session 0): process exit code 0 on success.
+pub fn run_send_sas() -> i32 {
+    match input::sas::send() {
+        Ok(()) => 0,
+        Err(e) => {
+            tracing::warn!("Ctrl+Alt+Del not sent: {e:#}");
+            1
+        }
+    }
+}
+
 /// Starts `exe <args>` as SYSTEM in `session`, on its interactive window station.
 fn launch_in_session(session: u32, exe: &Path, args: &str) -> Result<HANDLE> {
     unsafe {
@@ -743,10 +777,11 @@ pub fn uninstall_service(name: &str) -> Result<()> {
 
 /// Bumped whenever the service or the pre-login host change: an app finding an older
 /// revision installed offers to reinstall the service, which refreshes its protected copy.
-pub const SERVICE_REVISION: u32 = 5;
-/// First revision whose agent knows Ctrl+Alt+Del (ADR 0070): an older agent drops the pipe
-/// on the unknown event, which would end remote control for the session.
-pub const SECURE_ATTENTION_REVISION: u32 = 5;
+pub const SERVICE_REVISION: u32 = 6;
+/// First revision whose agent sends Ctrl+Alt+Del from session 0 (ADR 0070). Before 5 the
+/// agent drops the pipe on the unknown event (no more remote control for the session); 5
+/// calls `SendSAS` from the user's session, which Windows ignores.
+pub const SECURE_ATTENTION_REVISION: u32 = 6;
 const REVISION_FILE: &str = "revision";
 
 /// The service that runs the agent of `product` ("remote" or "quick").

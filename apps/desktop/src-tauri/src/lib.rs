@@ -865,6 +865,11 @@ pub fn run() {
                 }
                 return;
             }
+            // Ctrl+Alt+Del helper, started by the agent as SYSTEM in session 0 (ADR 0070).
+            Some(agent::windows::SEND_SAS_ARG) => {
+                init_logging(agent::windows::log_dir());
+                std::process::exit(agent::windows::run_send_sas());
+            }
             // Install/remove the service (already elevated by the UAC prompt we requested).
             Some("--install-service") => {
                 let exe = std::env::current_exe().expect("exe path");

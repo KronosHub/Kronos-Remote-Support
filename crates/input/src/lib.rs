@@ -7,7 +7,7 @@
 pub mod block;
 mod keymap;
 #[cfg(target_os = "windows")]
-mod sas;
+pub mod sas;
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
