@@ -828,3 +828,4 @@
   sessione 1 no. 2.3.4: helper `--send-sas` lanciato in sessione 0 dall'agente.
 - Reattività (ADR 0072): video a 60 fps quando la codifica è hardware (software resta a 30), movimenti del mouse
   inviati subito con 4 ms di distanza minima. Nella 2.3.4 insieme alla correzione di Ctrl+Alt+Canc.
+- Pubblicata la 2.3.4 (release in CI tutta verde, `latest.json` con 11 piattaforme).
