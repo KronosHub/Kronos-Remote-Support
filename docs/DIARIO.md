@@ -840,3 +840,4 @@
   immagine degli appunti; hash dell'ultima immagine e riga del trasferimento ritardata. Il vetro resta.
 - Ritardo di ~1 s solo con host Windows: code piene tra agente, pipe e cattura condivisa. Slot con l'ultimo
   fotogramma e agente che cattura solo dopo `FrameDone` (ADR 0073). Da misurare sulla VM.
+- Pubblicata la 2.3.5 (release in CI tutta verde, `latest.json` con 11 piattaforme).
