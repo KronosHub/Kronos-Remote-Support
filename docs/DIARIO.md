@@ -852,3 +852,4 @@
   del cambio: il messaggio non partiva. Il menu Schermi è renderizzato accanto a `.screens-anchor`, e il gestore
   `pointerdown` "clic fuori" lo chiudeva prima del clic (dalla 2.2.3; il pannello del pallino funzionava). Per
   sicurezza `describe` usa il rettangolo del monitor se la modalità non si legge.
+- Pubblicata la 2.3.6 (release in CI tutta verde, `latest.json` con 11 piattaforme).
