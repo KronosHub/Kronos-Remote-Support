@@ -7,7 +7,8 @@ Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**
   invece che a pezzi, quindi arrivano più fotogrammi e con meno ritardo. Sul computer controllato l'app chiede di
   aggiornare il servizio (una conferma di amministratore).
 - **Ctrl+Alt+Canc**: la schermata di sicurezza compare anche la prima volta, senza schermo nero.
-- **Più schermi su Windows**: se uno schermo non dice la sua risoluzione, compare lo stesso nel menu Schermi.
+- **Menu Schermi**: scegliere un altro schermo del partner, o tutti insieme, ora funziona (il menu si chiudeva
+  prima di ricevere il clic). Dal pannello del pallino funzionava già.
 - Il menu della tastiera ha di nuovo la sua larghezza, con le voci su una riga.
 
 ## 2.3.5 — 2026-11-16

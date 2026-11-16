@@ -3999,7 +3999,9 @@
 <svelte:window
   onpointerdown={(e) => {
     if (unattendedMenu && !(e.target as Element).closest?.(".menu-anchor")) unattendedMenu = false;
-    if (screensOpen && !(e.target as Element).closest?.(".screens-anchor")) screensOpen = false;
+    // The screens menu is a sibling of its anchor (it hangs from the bar's edge): a press inside
+    // it must not close it before the click picks a screen.
+    if (screensOpen && !(e.target as Element).closest?.(".screens-anchor, .screens-pop")) screensOpen = false;
     if (keysOpen && !(e.target as Element).closest?.(".keys-anchor")) keysOpen = false;
   }}
   onkeydown={(e) => {

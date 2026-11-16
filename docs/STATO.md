@@ -6,10 +6,11 @@
 ## Fatto
 - 2.3.6: pixel dell'agente in una sezione condivisa in sola lettura per l'app (`StartCapture.shared_memory`,
   `Reply::SharedFrame`, `SharedFrames`/`SharedFramesView`; sulla VM 30 → 73 fps sul solo trasferimento; ADR 0075),
-  `SERVICE_REVISION` 8; GDI per 1,5 s dopo un cambio di desktop (`PRIMER_WINDOW`, ADR 0070); `describe` non fa più
-  fallire l'elenco degli schermi se la modalità di un monitor non si legge, e l'host registra gli schermi offerti;
-  menu tastiera con la regola `.screens-pop.keys-pop`. Da provare: fps e ritardo sulla VM, notebook con due schermi
-  (se manca ancora il secondo, leggere "displays offered" nel log del notebook)
+  `SERVICE_REVISION` 8; GDI per 1,5 s dopo un cambio di desktop (`PRIMER_WINDOW`, ADR 0070); menu Schermi che si
+  chiudeva al `pointerdown` prima del clic (il menu è fratello di `.screens-anchor`, bug dalla 2.2.3); `describe` non
+  fa più fallire l'elenco degli schermi se la modalità di un monitor non si legge, e l'host registra gli schermi
+  offerti; menu tastiera con la regola `.screens-pop.keys-pop`. Da provare: fps e ritardo sulla VM, cambio di schermo
+  sul notebook con due monitor (cattura dall'agente mai provata su un monitor secondario)
 - 2.3.5 (pubblicata 2026-11-16, `latest.json` con 11 piattaforme): fotogramma GDI subito dopo ogni cambio di desktop e GDI di riserva se DXGI non si apre (Ctrl+Alt+Canc
   visibile senza clic, verificato sulla VM con l'esempio `secure_desktop`; ADR 0070). Cattura condivisa con uno slot
   per iscritto e agente a ritmo (`paced`, `Request::FrameDone`) contro il ritardo di ~1 s con host Windows (ADR

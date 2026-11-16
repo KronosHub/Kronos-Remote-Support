@@ -848,5 +848,7 @@
   `.keys-pop` con la stessa specificità.
 - Misure sulla VM con esempi cross-compilati: cattura ~50 ms, riduzione ~31 ms, pipe 30–90 ms per fotogramma
   (mio legge a 4 KB). Memoria condivisa: 30 → 73 fps sul percorso agente → app (ADR 0075).
-- Secondo schermo: probabile errore di `Monitor::width/height` su un monitor, che svuotava tutto l'elenco; ora si usa
-  il rettangolo del monitor. Non verificato su un PC con due schermi.
+- Secondo schermo del notebook: elencato bene, ma sceglierlo non faceva nulla. Nei log del notebook nessuna traccia
+  del cambio: il messaggio non partiva. Il menu Schermi è renderizzato accanto a `.screens-anchor`, e il gestore
+  `pointerdown` "clic fuori" lo chiudeva prima del clic (dalla 2.2.3; il pannello del pallino funzionava). Per
+  sicurezza `describe` usa il rettangolo del monitor se la modalità non si legge.
