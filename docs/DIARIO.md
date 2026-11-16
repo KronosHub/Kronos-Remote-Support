@@ -822,3 +822,4 @@
   rinnovata solo a cambio di `SERVICE_REVISION`) e chiudeva la pipe sull'evento sconosciuto. 2.3.3: revisione 5,
   evento mandato solo ad agenti aggiornati, menu tastiera (Controllo, Blocca input, Ctrl + Alt + Canc) al posto dei
   pulsanti nella barra, come chiesto dall'utente.
+- Pubblicata la 2.3.3 (release in CI tutta verde, `latest.json` con 11 piattaforme).
