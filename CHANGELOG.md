@@ -7,7 +7,9 @@ Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**
   (prima scendeva fino a 946×532); calano invece i fotogrammi al secondo. Quando lo schermo si ferma, l'immagine viene
   rifinita e torna nitida.
 - **Connessioni lente più stabili**: dopo un intoppo la qualità risale con calma invece di tornare subito al limite,
-  e i fotogrammi completi sono meno frequenti. Niente più latenza oltre il secondo a ondate.
+  e i fotogrammi completi sono meno frequenti. Corretto anche un difetto che, con una connessione lenta, faceva
+  rispedire ogni pacchetto perso fino a dieci volte e intasava la linea (6–7 Mbit/s in arrivo per un video da 0,3).
+  Niente più latenza oltre il secondo a ondate. Serve la 2.3.7 su entrambi i computer.
 - **Barra della sessione**: "Qualità ridotta" e "Resync/min" su due righe con il valore sotto; ogni valore ha uno
   spazio fisso, così niente si sposta quando i numeri cambiano.
 

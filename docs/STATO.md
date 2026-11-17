@@ -7,8 +7,9 @@
 - 2.3.7: niente `scale_for`/`PIXEL_BUDGETS` (la banda abbassa solo gli fps, `fps_for` fino a 5), tetto all'85 % del
   bitrate della congestione per 60 s, keyframe al più uno al secondo, `REFINE_PASSES` a schermo fermo (ADR 0076,
   0041 superata); barra con "Qualità ridotta" e "Resync/min" su due righe e larghezze fisse. Esempio
-  `codec/examples/refine.rs` (PSNR con FFmpeg per VideoToolbox). Da capire: ↓ della barra a 6–7 Mbit/s con video a
-  0,3 Mbit/s (altra sessione aperta sullo stesso Mac?)
+  `codec/examples/refine.rs` (PSNR con FFmpeg per VideoToolbox). Generatore NACK al massimo 2 richieste per pacchetto
+  (`transport::nack_generator`, `session::interceptors`): il predefinito rispediva ogni perdita ~11 volte con 1 s di
+  RTT (`tests/nack_storm.rs`), da qui il ↓ a 6–7 Mbit/s con video a 0,3. Da provare con il Mac mini via internet
 - 2.3.6 (pubblicata 2026-11-16, `latest.json` con 11 piattaforme): pixel dell'agente in una sezione condivisa in sola lettura per l'app (`StartCapture.shared_memory`,
   `Reply::SharedFrame`, `SharedFrames`/`SharedFramesView`; sulla VM 30 → 73 fps sul solo trasferimento; ADR 0075),
   `SERVICE_REVISION` 8; GDI per 1,5 s dopo un cambio di desktop (`PRIMER_WINDOW`, ADR 0070); menu Schermi che si

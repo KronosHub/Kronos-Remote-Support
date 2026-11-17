@@ -3,6 +3,8 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use rtc::interceptor::{NackResponderBuilder, Slot};
+use rtc::rtp_transceiver::rtp_sender::RTCPFeedback;
 use signaling_proto::{ClientMessage, IceServer, SessionId, SignalPayload};
 use tokio::sync::{mpsc, watch};
 use webrtc::data_channel::{DataChannel, RTCDataChannelInit};
@@ -10,7 +12,7 @@ use webrtc::peer_connection::{
     MediaEngine, PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler,
     RTCConfigurationBuilder, RTCIceCandidateInit, RTCIceServer, RTCIceTransportPolicy,
     RTCPeerConnectionIceEvent, RTCPeerConnectionState, RTCSessionDescription, Registry,
-    register_default_interceptors,
+    configure_rtcp_reports, configure_simulcast_extension_headers, configure_twcc_receiver_only,
 };
 
 use rtc::rtp_transceiver::rtp_sender::RtpCodecKind;
@@ -301,6 +303,26 @@ fn local_bind_addrs() -> Vec<String> {
     }
 }
 
+/// The library's default interceptors (`register_default_interceptors`), with our NACK
+/// generator in place of the default one (see [`crate::nack_generator`]).
+fn interceptors(media: &mut MediaEngine) -> Result<Registry> {
+    for parameter in ["", "pli"] {
+        media.register_feedback(
+            RTCPFeedback {
+                typ: "nack".to_owned(),
+                parameter: parameter.to_owned(),
+            },
+            RtpCodecKind::Video,
+        );
+    }
+    let registry = Registry::new()
+        .with(Slot::NackResponder, NackResponderBuilder::new().build())
+        .with(Slot::NackGenerator, crate::nack_generator().build());
+    configure_simulcast_extension_headers(media)?;
+    let registry = configure_twcc_receiver_only(registry, media)?;
+    Ok(configure_rtcp_reports(registry))
+}
+
 impl PeerSession {
     /// Builds the peer connection. The offerer immediately creates the control channel
     /// and sends its offer; the answerer waits for [`handle_signal`](Self::handle_signal).
@@ -314,7 +336,7 @@ impl PeerSession {
     ) -> Result<Self> {
         let mut media = MediaEngine::default();
         media.register_default_codecs()?;
-        let registry = register_default_interceptors(Registry::new(), &mut media)?;
+        let registry = interceptors(&mut media)?;
 
         let (channels_tx, channels) = mpsc::unbounded_channel();
         let (tracks_tx, tracks) = mpsc::unbounded_channel();

@@ -861,3 +861,6 @@
 - Misure PSNR con OpenH264 e VideoToolbox (FFmpeg compilato in locale, decodifica con ffmpeg perché OpenH264 legge
   solo il baseline): a risoluzione piena il testo regge già a 1 Mbit/s. Risoluzione fissa, tetto dopo la
   congestione, keyframe meno frequenti, ritocco a schermo fermo (ADR 0076).
+- ↓ a 6–7 Mbit/s con video a 0,3: nettop conferma il traffico reale; nei report del viewer pochi pacchetti "ricevuti"
+  perché i doppioni sono scartati. Causa: NACK predefiniti ogni 100 ms senza limite. Simulazione con gli interceptor
+  veri: 11 ritrasmissioni per perdita, 2 con il nostro generatore. Tutto nella 2.3.7.
