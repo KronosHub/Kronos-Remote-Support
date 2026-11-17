@@ -204,6 +204,13 @@ const HEAVY_ENCODE: f64 = 0.6;
 /// Frames encoded before judging the encoding time (the first ones include warm-up).
 const HEAVY_SAMPLE: u32 = 60;
 
+/// Once the picture stops changing, the last frame is encoded again `REFINE_PASSES` times,
+/// `REFINE_GAP` apart: captures only come when the screen changes, so without this the text
+/// stays as blurred as the last frame of a scroll. Each pass spends the bit budget on what
+/// is left of the error, and the picture converges to sharp.
+const REFINE_PASSES: u8 = 6;
+const REFINE_GAP: Duration = Duration::from_millis(200);
+
 /// Minimum spacing between forced keyframes.
 const MIN_KEYFRAME_GAP: Duration = Duration::from_millis(300);
 
@@ -422,6 +429,8 @@ fn encode_loop(
     // Newest captured frame not encoded yet (frame rate lowered by adaptive quality).
     let mut pending: Option<Frame> = None;
     let mut last_encoded: Option<Instant> = None;
+    // Refinement passes still to do on the last frame (see `REFINE_PASSES`).
+    let mut refine_left: u8 = 0;
     let mut applied_bitrate = config.bitrate_bps;
     let mut interval = Duration::from_secs(1) / encoder_max_fps(&*encoder, config.fps).max(1);
 
@@ -488,7 +497,10 @@ fn encode_loop(
             _ => Duration::from_millis(100),
         };
         match source.next_frame(wait) {
-            Ok(Some(frame)) => pending = Some(frame),
+            Ok(Some(frame)) => {
+                pending = Some(frame);
+                refine_left = REFINE_PASSES;
+            }
             Ok(None) => {}
             Err(e) => {
                 tracing::warn!("capture stopped: {e}");
@@ -515,6 +527,19 @@ fn encode_loop(
                     continue;
                 }
             },
+            // The screen is still: the same picture again, sharper each time.
+            None if refine_left > 0 && last_encoded.is_some_and(|t| t.elapsed() >= REFINE_GAP) => {
+                match &last_frame {
+                    Some(previous) => {
+                        refine_left -= 1;
+                        Frame {
+                            captured_at: Instant::now(),
+                            ..previous.clone()
+                        }
+                    }
+                    None => continue,
+                }
+            }
             None => continue,
         };
         if (frame.width, frame.height) != captured_size {

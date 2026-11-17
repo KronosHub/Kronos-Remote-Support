@@ -2757,14 +2757,14 @@
           </span>
         {/if}
         {#if view.limited}
-          <span class={view.limited.kbps < 450 ? "critical" : "caution"}
+          <span class="st-two {view.limited.kbps < 450 ? 'critical' : 'caution'}"
             title="Banda insufficiente: il partner ha ridotto qualità e fotogrammi ({view.limited.fps} fps max) e, sotto 0,8 Mbit/s, la risoluzione. Torna al massimo quando la rete migliora.">
-            Qualità ridotta <b>{rate(view.limited.kbps)}</b></span>
+            <span>Qualità ridotta</span><b class="st-kbps">{rate(view.limited.kbps)}</b></span>
         {/if}
         {#if resyncCount > 0}
-          <span class={level(resyncCount, 2, 5)}
+          <span class="st-two {level(resyncCount, 2, 5)}"
             title="Volte nell'ultimo minuto in cui l'immagine è stata ricostruita da capo perché si erano persi dati in rete (giallo da 2, rosso da 5)">
-            Resync/min <b>{resyncCount}</b></span>
+            <span>Resync/min</span><b class="st-count">{resyncCount}</b></span>
         {/if}
       </div>
       {#if view.transfer && transferRowShown}
@@ -4852,7 +4852,7 @@
      move the picture under the bar). */
   .st-grid-row b {
     text-align: right;
-    min-width: 8.5ch;
+    min-width: 10ch;
   }
   .st-cpu-grid .st-grid-row b {
     min-width: 4.5ch;
@@ -4860,11 +4860,29 @@
   .st-cpu-grid .st-grid-row b.st-ram {
     min-width: 6.5ch;
   }
+  /* Widths for the longest value of each field ("1400 ms", "60/60 fps", "999 kbit/s"):
+     values changing every second never move what follows. */
   .st-lat b {
-    min-width: 6ch;
+    min-width: 7.5ch;
   }
   .st-fps .st-row b {
-    min-width: 8ch;
+    min-width: 9.5ch;
+  }
+  .st-res b {
+    min-width: 9ch;
+  }
+  /* Label on top, value below (reduced quality, resyncs). */
+  .vstats > span.st-two {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    line-height: 1.2;
+  }
+  .st-two b.st-kbps {
+    min-width: 10ch;
+  }
+  .st-two b.st-count {
+    min-width: 3ch;
   }
   .st-grid-row .st-meter {
     width: 48px;
