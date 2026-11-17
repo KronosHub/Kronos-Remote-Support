@@ -867,3 +867,4 @@
 - Su richiesta dell'utente: minimo 10 fps, sotto quella soglia risoluzione a piccoli passi (5 %), e lo stesso quando
   CPU o GPU non reggono; pulsante HD arancione da attivo. La 2.3.7 già in compilazione è stata annullata (bozza e tag
   cancellati, mai pubblicata) e rifatta con tutto.
+- Pubblicata la 2.3.7 (release in CI tutta verde, `latest.json` con 11 piattaforme).
