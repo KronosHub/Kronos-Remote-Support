@@ -853,3 +853,11 @@
   `pointerdown` "clic fuori" lo chiudeva prima del clic (dalla 2.2.3; il pannello del pallino funzionava). Per
   sicurezza `describe` usa il rettangolo del monitor se la modalità non si legge.
 - Pubblicata la 2.3.6 (release in CI tutta verde, `latest.json` con 11 piattaforme).
+
+## 2026-11-17 — 2.3.7: testo leggibile con poca banda
+- USB inoltrato: valutato (usbip-win2 firmato per Windows; sul Mac servono permessi Apple a pagamento), scartato.
+- Collegati al Mac mini via internet: 946×532, 1–10 fps, latenza 1,1–1,4 s, resync 29–40/min. Log del Mac mini:
+  qualità adattiva in altalena 250 kbit/s ↔ 5 Mbit/s e 63 cambi di risoluzione in 30 minuti, ognuno con keyframe.
+- Misure PSNR con OpenH264 e VideoToolbox (FFmpeg compilato in locale, decodifica con ffmpeg perché OpenH264 legge
+  solo il baseline): a risoluzione piena il testo regge già a 1 Mbit/s. Risoluzione fissa, tetto dopo la
+  congestione, keyframe meno frequenti, ritocco a schermo fermo (ADR 0076).

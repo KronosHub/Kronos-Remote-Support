@@ -76,8 +76,8 @@ impl Default for StreamConfig {
     fn default() -> Self {
         Self {
             source: Source::Screen { display_id: None },
-            // Sharp text on large and Retina screens; slow links and slow machines step
-            // down from here (`rate::scale_for`, `HEAVY_ENCODE`).
+            // Sharp text on large and Retina screens; slow machines step down from here
+            // (`HEAVY_ENCODE`), slow links send fewer frames (`rate::fps_for`).
             max_size: (2560, 1600),
             // 60 with a hardware encoder; software encoders stay at `SOFTWARE_MAX_FPS`.
             fps: 60,
@@ -212,7 +212,7 @@ const REFINE_PASSES: u8 = 6;
 const REFINE_GAP: Duration = Duration::from_millis(200);
 
 /// Minimum spacing between forced keyframes.
-const MIN_KEYFRAME_GAP: Duration = Duration::from_millis(300);
+const MIN_KEYFRAME_GAP: Duration = Duration::from_secs(1);
 
 struct SourceInfo {
     width: u32,
@@ -451,9 +451,9 @@ fn encode_loop(
             user_cap = cap;
             last_rescale = None;
         }
-        let wanted = rate::scale_for(applied_bitrate, scale, captured_pixels)
-            .min(cpu_cap)
-            .min(user_cap);
+        // Only the encoder's speed and the viewer's HD choice lower the resolution, never the
+        // bandwidth (fewer frames instead): text stays readable, no keyframe per change.
+        let wanted = cpu_cap.min(user_cap);
         let gap = if wanted < scale {
             rate::SCALE_DOWN_GAP
         } else {

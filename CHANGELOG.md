@@ -2,6 +2,15 @@
 
 Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**, quando la versione è disponibile.
 
+## 2.3.7 — 2026-11-17
+- **Testo leggibile anche con poca banda**: con una connessione lenta l'immagine non viene più rimpicciolita
+  (prima scendeva fino a 946×532); calano invece i fotogrammi al secondo. Quando lo schermo si ferma, l'immagine viene
+  rifinita e torna nitida.
+- **Connessioni lente più stabili**: dopo un intoppo la qualità risale con calma invece di tornare subito al limite,
+  e i fotogrammi completi sono meno frequenti. Niente più latenza oltre il secondo a ondate.
+- **Barra della sessione**: "Qualità ridotta" e "Resync/min" su due righe con il valore sotto; ogni valore ha uno
+  spazio fisso, così niente si sposta quando i numeri cambiano.
+
 ## 2.3.6 — 2026-11-16
 - **Più fluido con i computer Windows**: l'immagine passa dal servizio all'app attraverso la memoria condivisa
   invece che a pezzi, quindi arrivano più fotogrammi e con meno ritardo. Sul computer controllato l'app chiede di

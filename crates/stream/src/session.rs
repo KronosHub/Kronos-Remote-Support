@@ -16,7 +16,7 @@ use crate::{StreamChange, StreamConfig, StreamHandle};
 const PING_INTERVAL: Duration = Duration::from_secs(1);
 const USAGE_INTERVAL: Duration = Duration::from_secs(2);
 /// Do not flood the host with keyframe requests while packets keep getting lost.
-const MIN_KEYFRAME_REQUEST_GAP: Duration = Duration::from_millis(500);
+const MIN_KEYFRAME_REQUEST_GAP: Duration = Duration::from_secs(1);
 /// Nothing heard from the partner for this long (it pings every second, the host answers and
 /// reports usage every 2 s): the session is over even if no goodbye arrived.
 const PEER_TIMEOUT: Duration = Duration::from_secs(20);

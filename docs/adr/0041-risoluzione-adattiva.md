@@ -40,3 +40,6 @@ dell'utente (rischio di lasciarlo nero).
 - **Bitrate massimo per dimensione**: 4 Mbit/s fino a 1080p, in proporzione ai pixel oltre (tetto 6 Mbit/s;
   `rate::max_bitrate_for`); vale per l'encoder e per il regolatore (quindi "Qualità ridotta" resta corretta).
 - **Keyframe periodico ogni 60 s** (prima 10 s): le richieste di keyframe dopo le perdite restano immediate.
+
+## Aggiornamento 2.3.7
+Sostituita dall'ADR 0076: la banda non riduce più la risoluzione (cambi continui, keyframe, testo illeggibile).

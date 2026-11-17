@@ -2758,7 +2758,7 @@
         {/if}
         {#if view.limited}
           <span class="st-two {view.limited.kbps < 450 ? 'critical' : 'caution'}"
-            title="Banda insufficiente: il partner ha ridotto qualità e fotogrammi ({view.limited.fps} fps max) e, sotto 0,8 Mbit/s, la risoluzione. Torna al massimo quando la rete migliora.">
+            title="Banda insufficiente: il partner ha ridotto qualità e fotogrammi ({view.limited.fps} fps max), non la risoluzione: a schermo fermo l'immagine torna nitida. Torna al massimo quando la rete migliora.">
             <span>Qualità ridotta</span><b class="st-kbps">{rate(view.limited.kbps)}</b></span>
         {/if}
         {#if resyncCount > 0}
