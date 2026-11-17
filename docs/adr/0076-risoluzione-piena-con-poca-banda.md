@@ -1,4 +1,4 @@
-# 0076 — Risoluzione piena con poca banda, tetto dopo la congestione
+# 0076 — Prima meno fotogrammi, poi la risoluzione a piccoli passi; NACK limitati
 
 **Data:** 2026-11-17 · **Stato:** accettata (sostituisce la riduzione di risoluzione per banda dell'ADR 0041)
 
@@ -13,8 +13,13 @@ Misure in locale (`crates/codec/examples/refine.rs`, screenshot reale 1920×1080
 ~38–39 dB a 1 Mbit/s, ~50 dB a 3 Mbit/s; il problema di leggibilità era la risoluzione, non la compressione.
 
 ## Decisione
-- La banda non riduce più la risoluzione: solo la lentezza dell'encoder (`HEAVY_ENCODE`) e la scelta HD del viewer.
-  Con poca banda calano i fotogrammi (`fps_for`: 12 fps da 450 kbit/s, 8 da 300, 5 sotto).
+- **Prima i fotogrammi, poi la risoluzione, a piccoli passi.** Con poca banda calano gli fps (`fps_for`: 20 da
+  800 kbit/s, 12 da 450, mai sotto 10). Sotto 450 kbit/s, dove anche 10 fps dello schermo intero sarebbero sfocati,
+  cala la risoluzione in passi del 5 % del lato (`scale_for`: pixel in proporzione alla banda, riferimento
+  2560×1440 a 450 kbit/s, minimo 40 %), giù subito e su solo con il 25 % di margine e dopo 10 s.
+- **CPU o GPU lente, stesso comportamento**: l'encoder va alla velocità che regge (fps più bassi); se un fotogramma
+  richiede più di 100 ms (sotto 10 fps) la risoluzione scende di un passo, e risale di un passo quando la misura
+  sulla dimensione successiva starebbe sotto 80 ms. Sostituisce il limite fisso a 1080p per l'encoder software lento.
 - **Tetto dopo la congestione**: alla prima riduzione di un episodio il controllo ricorda il bitrate che ha
   incontrato il muro e per 60 s risale solo all'85 % di quello (`CEILING_SHARE`, `CEILING_HOLD`).
 - Keyframe: al massimo uno al secondo dall'host (`MIN_KEYFRAME_GAP`) e una richiesta al secondo dal viewer.

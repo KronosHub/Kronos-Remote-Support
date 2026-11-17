@@ -76,8 +76,8 @@ impl Default for StreamConfig {
     fn default() -> Self {
         Self {
             source: Source::Screen { display_id: None },
-            // Sharp text on large and Retina screens; slow machines step down from here
-            // (`HEAVY_ENCODE`), slow links send fewer frames (`rate::fps_for`).
+            // Sharp text on large and Retina screens; slow links and slow machines send fewer
+            // frames first, then step the resolution down (`rate::scale_for`, `SLOW_ENCODE`).
             max_size: (2560, 1600),
             // 60 with a hardware encoder; software encoders stay at `SOFTWARE_MAX_FPS`.
             fps: 60,
@@ -198,11 +198,14 @@ fn encoder_max_fps(encoder: &dyn VideoEncoder, max_fps: u32) -> u32 {
     }
 }
 
-/// Average encoding time above this share of the frame interval (at `SOFTWARE_MAX_FPS`): the machine struggles
-/// with a large screen, so it is held to [`rate::FULL_HD_PIXELS`] for the rest of the session.
-const HEAVY_ENCODE: f64 = 0.6;
-/// Frames encoded before judging the encoding time (the first ones include warm-up).
-const HEAVY_SAMPLE: u32 = 60;
+/// A slow machine is treated like a slow link (ADR 0076): first fewer frames, as fast as it
+/// encodes; when even 10 fps do not fit (`SLOW_ENCODE`: shrink and encode of one frame) the
+/// resolution goes down one `rate::SCALE_STEP`, and back up a step when the next size would
+/// still encode within `FAST_ENCODE`.
+const SLOW_ENCODE: Duration = Duration::from_millis(100);
+const FAST_ENCODE: Duration = Duration::from_millis(80);
+/// Frames encoded at a size before judging its encoding time (the first ones include warm-up).
+const HEAVY_SAMPLE: u32 = 20;
 
 /// Once the picture stops changing, the last frame is encoded again `REFINE_PASSES` times,
 /// `REFINE_GAP` apart: captures only come when the screen changes, so without this the text
@@ -451,9 +454,11 @@ fn encode_loop(
             user_cap = cap;
             last_rescale = None;
         }
-        // Only the encoder's speed and the viewer's HD choice lower the resolution, never the
-        // bandwidth (fewer frames instead): text stays readable, no keyframe per change.
-        let wanted = cpu_cap.min(user_cap);
+        // The bandwidth lowers the frame rate first and the resolution only below 10 fps
+        // (`rate::scale_for`): text stays readable, few keyframes from resolution changes.
+        let wanted = rate::scale_for(applied_bitrate, scale, captured_pixels)
+            .min(cpu_cap)
+            .min(user_cap);
         let gap = if wanted < scale {
             rate::SCALE_DOWN_GAP
         } else {
@@ -471,6 +476,9 @@ fn encode_loop(
                     // A new encoder starts with a keyframe carrying the new size.
                     encoder = resized;
                     scale = wanted;
+                    // The new size has its own encoding time.
+                    encode_avg = None;
+                    encoded_frames = 0;
                     last_rescale = Some(Instant::now());
                     last_keyframe = Some(Instant::now());
                     keyframe.store(false, Ordering::Relaxed);
@@ -579,20 +587,27 @@ fn encode_loop(
         let took = work_started.elapsed();
         encode_avg = Some(encode_avg.map_or(took, |avg| avg.mul_f64(0.9) + took.mul_f64(0.1)));
         encoded_frames = encoded_frames.saturating_add(1);
-        let full_rate = Duration::from_secs(1) / SOFTWARE_MAX_FPS;
-        if cpu_cap == 100
-            && !encoder.is_hardware()
-            && encoded_frames >= HEAVY_SAMPLE
-            && u64::from(width) * u64::from(height) > rate::FULL_HD_PIXELS
-            && encode_avg.is_some_and(|avg| avg > full_rate.mul_f64(HEAVY_ENCODE))
+        if encoded_frames >= HEAVY_SAMPLE
+            && let Some(avg) = encode_avg
+            && last_rescale.is_none_or(|t| t.elapsed() >= rate::SCALE_DOWN_GAP)
         {
-            cpu_cap = rate::scale_to_fit(captured_pixels, rate::FULL_HD_PIXELS);
-            tracing::warn!(
-                avg_ms = encode_avg.map(|a| a.as_millis()),
-                size = ?(width, height),
-                cap = cpu_cap,
-                "encoding too slow for this screen size, limiting the resolution"
-            );
+            let pixels_ratio = |from: u32, to: u32| f64::from(to * to) / f64::from(from * from);
+            let next_up = (scale + rate::SCALE_STEP).min(100);
+            if avg > SLOW_ENCODE && scale > rate::MIN_SCALE {
+                cpu_cap = scale.saturating_sub(rate::SCALE_STEP).max(rate::MIN_SCALE);
+                tracing::warn!(
+                    avg_ms = avg.as_millis(),
+                    size = ?(width, height),
+                    cap = cpu_cap,
+                    "encoding slower than 10 fps, lowering the resolution a step"
+                );
+            } else if cpu_cap < 100
+                && scale == cpu_cap
+                && last_rescale.is_none_or(|t| t.elapsed() >= rate::SCALE_UP_GAP)
+                && avg.mul_f64(pixels_ratio(scale, next_up)) < FAST_ENCODE
+            {
+                cpu_cap = next_up;
+            }
         }
         match result {
             Ok(Some(encoded)) => {

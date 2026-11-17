@@ -143,17 +143,49 @@ impl RateController {
 }
 
 /// Frame rate that goes with a bitrate: below about 1.5 Mbit/s a busy screen at full rate
-/// can only be encoded blurry, so fewer, sharper frames are sent instead. The resolution
-/// stays: text must stay readable, and every resolution change costs a keyframe.
+/// can only be encoded blurry, so fewer, sharper frames are sent instead. Never below 10:
+/// under that the resolution gives way ([`scale_for`]).
 pub fn fps_for(bitrate: u32, max_fps: u32) -> u32 {
     let fps = match bitrate {
         1_500_000.. => max_fps,
         800_000.. => 20,
         450_000.. => 12,
-        300_000.. => 8,
-        _ => 5,
+        _ => 10,
     };
     fps.min(max_fps).max(1)
+}
+
+/// From this bitrate down even 10 fps of the whole screen would be too blurry: the
+/// resolution gives way, in micro-steps, instead of the frame rate (ADR 0076).
+const TEN_FPS_BITRATE: u32 = 450_000;
+/// Pixels that `TEN_FPS_BITRATE` carries readably at 10 fps (2560x1440); fewer in
+/// proportion below it.
+const TEN_FPS_PIXELS: u64 = 2560 * 1440;
+/// Resolution steps (percent of each side) and the lowest one.
+pub const SCALE_STEP: u32 = 5;
+pub const MIN_SCALE: u32 = 40;
+/// Before going back up, the bitrate must exceed the step's threshold by this much (in
+/// percent): each resolution change costs a keyframe, so it must not flap.
+const SCALE_UP_MARGIN: u32 = 125;
+
+fn scale_below(bitrate: u32, pixels: u64) -> u32 {
+    if bitrate >= TEN_FPS_BITRATE {
+        return 100;
+    }
+    let budget = TEN_FPS_PIXELS * u64::from(bitrate) / u64::from(TEN_FPS_BITRATE);
+    let scale = scale_to_fit(pixels, budget);
+    (scale / SCALE_STEP * SCALE_STEP).clamp(MIN_SCALE, 100)
+}
+
+/// Resolution (percent of each side) for `bitrate`, from the `current` one: down at once,
+/// up only with a margin.
+pub fn scale_for(bitrate: u32, current: u32, pixels: u64) -> u32 {
+    let target = scale_below(bitrate, pixels);
+    if target < current {
+        return target;
+    }
+    let reduced = u64::from(bitrate) * 100 / u64::from(SCALE_UP_MARGIN);
+    scale_below(reduced as u32, pixels).max(current)
 }
 
 /// Pixels of 1080p: the limit for machines that encode too slowly and with HD turned off.
@@ -276,9 +308,26 @@ mod tests {
         assert_eq!(fps_for(4_000_000, 30), 30);
         assert_eq!(fps_for(1_000_000, 30), 20);
         assert_eq!(fps_for(500_000, 30), 12);
-        assert_eq!(fps_for(350_000, 30), 8);
-        assert_eq!(fps_for(250_000, 30), 5);
-        assert_eq!(fps_for(250_000, 3), 3);
+        assert_eq!(fps_for(250_000, 30), 10);
+        assert_eq!(fps_for(250_000, 5), 5);
+    }
+
+    #[test]
+    fn resolution_stays_full_down_to_ten_frames_per_second() {
+        const QHD: u64 = 2560 * 1440;
+        assert_eq!(scale_for(4_000_000, 100, QHD), 100);
+        assert_eq!(scale_for(450_000, 100, QHD), 100);
+        // Below 450 kbit/s: small steps, in proportion to the missing bandwidth.
+        assert_eq!(scale_for(420_000, 100, QHD), 95);
+        assert_eq!(scale_for(360_000, 100, QHD), 85);
+        assert_eq!(scale_for(250_000, 100, QHD), 70);
+        assert_eq!(scale_for(50_000, 100, QHD), 40);
+        // Back up only 25 % above the step's threshold.
+        assert_eq!(scale_for(420_000, 85, QHD), 85);
+        assert_eq!(scale_for(570_000, 85, QHD), 100);
+        // A 1080p screen keeps its size down to about 250 kbit/s.
+        assert_eq!(scale_for(260_000, 100, 1920 * 1080), 100);
+        assert_eq!(scale_for(200_000, 100, 1920 * 1080), 85);
     }
 
     #[test]

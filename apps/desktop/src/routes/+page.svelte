@@ -2598,7 +2598,7 @@
                 <svg class="i" viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4z" /><path d="M16 9a4 4 0 0 1 0 6" /></svg><span class="lbl">Audio</span>
               </button>
             {/if}
-            <button type="button" class:on={view.hd} onclick={toggleHd}
+            <button type="button" class="text-only" class:on={view.hd} onclick={toggleHd}
               title={view.hd
                 ? "HD attivo: con la rete buona fino a 2560×1600. Clic per limitare a 1080p (meno banda e CPU)"
                 : "HD spento: al massimo 1080p. Clic per riattivarlo"}>HD</button>
@@ -4657,7 +4657,9 @@
     background: var(--g-on);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
   }
-  .vseg button.on svg {
+  .vseg button.on svg,
+  /* HD has no icon: its text takes the colour the others give their icon. */
+  .vseg button.on.text-only {
     color: var(--accent);
   }
   .vseg button.unread {

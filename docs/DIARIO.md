@@ -864,3 +864,6 @@
 - ↓ a 6–7 Mbit/s con video a 0,3: nettop conferma il traffico reale; nei report del viewer pochi pacchetti "ricevuti"
   perché i doppioni sono scartati. Causa: NACK predefiniti ogni 100 ms senza limite. Simulazione con gli interceptor
   veri: 11 ritrasmissioni per perdita, 2 con il nostro generatore. Tutto nella 2.3.7.
+- Su richiesta dell'utente: minimo 10 fps, sotto quella soglia risoluzione a piccoli passi (5 %), e lo stesso quando
+  CPU o GPU non reggono; pulsante HD arancione da attivo. La 2.3.7 già in compilazione è stata annullata (bozza e tag
+  cancellati, mai pubblicata) e rifatta con tutto.

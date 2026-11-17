@@ -3,15 +3,16 @@
 Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**, quando la versione è disponibile.
 
 ## 2.3.7 — 2026-11-17
-- **Testo leggibile anche con poca banda**: con una connessione lenta l'immagine non viene più rimpicciolita
-  (prima scendeva fino a 946×532); calano invece i fotogrammi al secondo. Quando lo schermo si ferma, l'immagine viene
-  rifinita e torna nitida.
+- **Testo leggibile anche con poca banda**: con una connessione lenta calano prima i fotogrammi al secondo, fino a 10,
+  e solo sotto quella soglia la risoluzione, a piccoli passi (prima crollava a gradini fino a 946×532). Lo stesso
+  quando il computer controllato non regge la codifica. Quando lo schermo si ferma, l'immagine viene rifinita e torna
+  nitida.
 - **Connessioni lente più stabili**: dopo un intoppo la qualità risale con calma invece di tornare subito al limite,
   e i fotogrammi completi sono meno frequenti. Corretto anche un difetto che, con una connessione lenta, faceva
   rispedire ogni pacchetto perso fino a dieci volte e intasava la linea (6–7 Mbit/s in arrivo per un video da 0,3).
   Niente più latenza oltre il secondo a ondate. Serve la 2.3.7 su entrambi i computer.
 - **Barra della sessione**: "Qualità ridotta" e "Resync/min" su due righe con il valore sotto; ogni valore ha uno
-  spazio fisso, così niente si sposta quando i numeri cambiano.
+  spazio fisso, così niente si sposta quando i numeri cambiano. Il pulsante HD attivo è arancione come gli altri.
 
 ## 2.3.6 — 2026-11-16
 - **Più fluido con i computer Windows**: l'immagine passa dal servizio all'app attraverso la memoria condivisa
