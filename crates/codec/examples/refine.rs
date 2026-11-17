@@ -79,40 +79,41 @@ fn main() -> anyhow::Result<()> {
     let mut decoder = openh264::decoder::Decoder::new()?;
     let mut rgb = vec![0u8; (w * h * 3) as usize];
     let mut ts = 0;
-    let mut step = |frame: &[u8], refer: &[u8], label: &str, encoder: &mut Box<dyn VideoEncoder>| {
-        ts += 33;
-        let Some(encoded) = encoder.encode_bgra(frame, w, h, ts).unwrap() else {
-            println!("{label}: no output");
-            return;
-        };
-        // `REFINE_DUMP=<dir>`: stream and source frames for decoding with ffmpeg (the
-        // OpenH264 decoder reads only the baseline profile, not the hardware encoder's High).
-        if let Some(dir) = std::env::var_os("REFINE_DUMP") {
-            use std::io::Write;
-            let dir = std::path::PathBuf::from(dir);
-            let append = |name: &str, data: &[u8]| {
-                std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(dir.join(name))
-                    .unwrap()
-                    .write_all(data)
-                    .unwrap()
+    let mut step =
+        |frame: &[u8], refer: &[u8], label: &str, encoder: &mut Box<dyn VideoEncoder>| {
+            ts += 33;
+            let Some(encoded) = encoder.encode_bgra(frame, w, h, ts).unwrap() else {
+                println!("{label}: no output");
+                return;
             };
-            append("stream.h264", &encoded.data);
-            append("source.bgra", frame);
-            println!("{label}: {:>6} bytes", encoded.data.len());
-            return;
-        }
-        if let Some(yuv) = decoder.decode(&encoded.data).unwrap() {
-            yuv.write_rgb8(&mut rgb);
-            println!(
-                "{label}: {:>6} bytes  PSNR {:.1} dB",
-                encoded.data.len(),
-                psnr(&rgb, refer)
-            );
-        }
-    };
+            // `REFINE_DUMP=<dir>`: stream and source frames for decoding with ffmpeg (the
+            // OpenH264 decoder reads only the baseline profile, not the hardware encoder's High).
+            if let Some(dir) = std::env::var_os("REFINE_DUMP") {
+                use std::io::Write;
+                let dir = std::path::PathBuf::from(dir);
+                let append = |name: &str, data: &[u8]| {
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(dir.join(name))
+                        .unwrap()
+                        .write_all(data)
+                        .unwrap()
+                };
+                append("stream.h264", &encoded.data);
+                append("source.bgra", frame);
+                println!("{label}: {:>6} bytes", encoded.data.len());
+                return;
+            }
+            if let Some(yuv) = decoder.decode(&encoded.data).unwrap() {
+                yuv.write_rgb8(&mut rgb);
+                println!(
+                    "{label}: {:>6} bytes  PSNR {:.1} dB",
+                    encoded.data.len(),
+                    psnr(&rgb, refer)
+                );
+            }
+        };
     for i in 0..15 {
         // `drop`: halfway through the scroll the link degrades to 250 kbit/s at 10 fps.
         if i == 7 && args.iter().any(|a| a == "drop") {
@@ -130,7 +131,12 @@ fn main() -> anyhow::Result<()> {
         encoder.set_rate(kbps * 1000, 2);
     }
     for pass in 1..=6 {
-        step(&still, &still_ref, &format!("still pass {pass}"), &mut encoder);
+        step(
+            &still,
+            &still_ref,
+            &format!("still pass {pass}"),
+            &mut encoder,
+        );
     }
     Ok(())
 }
