@@ -28,6 +28,11 @@ fn main() {
     let seconds: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(10);
     std::fs::create_dir_all(&dir).unwrap();
     #[cfg(windows)]
+    println!(
+        "on the user's desktop: {}",
+        stream::cursor::on_user_desktop()
+    );
+    #[cfg(windows)]
     for (name, shape) in stream::cursor::system_pictures() {
         match shape {
             Some(shape) => println!(

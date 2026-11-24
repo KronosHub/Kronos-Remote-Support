@@ -4,7 +4,7 @@ Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**
 
 ## 2.3.8 — 2026-11-24
 - **Il cursore segue quello del computer controllato**: sopra un testo diventa la I, sopra un link la manina, sui
-  bordi delle finestre le frecce per ridimensionare, durante un'attesa la rotellina. Prima era sempre una freccia.
+  bordi delle finestre le frecce per ridimensionare, durante un'attesa la rotellina. Prima era sempre una freccia. Sulla schermata di Ctrl+Alt+Canc resta la freccia.
   Funziona con computer controllati Windows e Mac; serve la 2.3.8 su entrambi i computer.
 
 ## 2.3.7 — 2026-11-17

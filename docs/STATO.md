@@ -6,7 +6,7 @@
 ## Fatto
 - 2.3.8 (non ancora pubblicata): cursore del partner (ADR 0077). L'host manda `ControlMsg::Cursor` a ogni cambio
   (`stream::cursor`: Windows parole chiave CSS per i cursori di sistema e PNG per gli altri, macOS PNG 2x da
-  `currentSystemCursor`; Linux no); il viewer applica `session::cursor_css` al canvas mentre controlla. Provato con
+  `currentSystemCursor`; Linux no); il viewer applica `session::cursor_css` al canvas mentre controlla; freccia sul desktop sicuro di Windows. Provato con
   `examples/cursor_probe` sul Mac e sulla VM (sessione utente); valore CSS verificato in WebKit. Da provare dal vivo.
 - 2.3.7 (pubblicata 2026-11-17, `latest.json` con 11 piattaforme): prima gli fps (`fps_for`, minimo 10), poi la risoluzione a passi del 5 % (`scale_for` sotto 450 kbit/s;
   encoder lento: `SLOW_ENCODE` 100 ms giù, `FAST_ENCODE` 80 ms su, al posto del limite a 1080p), tetto all'85 % del

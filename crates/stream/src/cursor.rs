@@ -3,7 +3,8 @@
 //! Sampled a few times per second on a thread of its own; only changes are reported.
 //! Windows: the system cursors map to CSS names (the viewer shows its own native ones),
 //! other cursors travel as a picture. macOS: always a picture (the cursor's 2x image).
-//! Linux: not sampled (the viewer keeps its arrow).
+//! On the Windows secure desktop (Ctrl+Alt+Del) the arrow. Linux: not sampled (the viewer
+//! keeps its arrow).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -72,7 +73,7 @@ pub fn watch(stop: Arc<AtomicBool>, mut on_change: impl FnMut(Shape) + Send + 's
 
 #[cfg(windows)]
 #[doc(hidden)]
-pub use platform::system_pictures;
+pub use platform::{on_user_desktop, system_pictures};
 
 /// PNG of tightly packed RGBA pixels.
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -89,6 +90,9 @@ mod platform {
     use windows_sys::Win32::Graphics::Gdi::{
         BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection,
         DIB_RGB_COLORS, DeleteDC, DeleteObject, GetObjectW, HBITMAP, SelectObject,
+    };
+    use windows_sys::Win32::System::StationsAndDesktops::{
+        CloseDesktop, DESKTOP_READOBJECTS, GetUserObjectInformationW, OpenInputDesktop, UOI_NAME,
     };
     use windows_sys::Win32::UI::HiDpi::GetDpiForSystem;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -108,11 +112,11 @@ mod platform {
     pub fn sample(state: &mut State) -> Option<Shape> {
         let mut info: CURSORINFO = unsafe { std::mem::zeroed() };
         info.cbSize = size_of::<CURSORINFO>() as u32;
-        // Fails on a desktop this process cannot see (the secure desktop): keep the last one.
-        if unsafe { GetCursorInfo(&mut info) } == 0 {
-            return None;
-        }
-        let handle = if info.flags & CURSOR_SHOWING == 0 {
+        // On the secure desktop (Ctrl+Alt+Del, UAC, lock screen) this process sees neither
+        // the desktop nor its pointer: always the arrow there.
+        let handle = if !on_user_desktop() || unsafe { GetCursorInfo(&mut info) } == 0 {
+            SECURE
+        } else if info.flags & CURSOR_SHOWING == 0 {
             0
         } else {
             info.hCursor as isize
@@ -121,8 +125,10 @@ mod platform {
             return None;
         }
         state.last = Some(handle);
-        if handle == 0 {
-            return Some(Shape::Named("none"));
+        match handle {
+            SECURE => return Some(Shape::Named("default")),
+            0 => return Some(Shape::Named("none")),
+            _ => {}
         }
         if state.named.is_empty() {
             state.named = system_cursors();
@@ -131,6 +137,32 @@ mod platform {
             return Some(Shape::Named(name));
         }
         picture(info.hCursor)
+    }
+
+    /// Stands for "on a desktop this process cannot see" in `State::last`.
+    const SECURE: isize = -1;
+
+    /// The input desktop is the user's own ("Default"), not the secure one ("Winlogon"),
+    /// which a user process cannot even open.
+    pub fn on_user_desktop() -> bool {
+        let desk = unsafe { OpenInputDesktop(0, 0, DESKTOP_READOBJECTS) };
+        if desk.is_null() {
+            return false;
+        }
+        let mut buf = [0u16; 64];
+        let mut needed = 0u32;
+        let ok = unsafe {
+            GetUserObjectInformationW(
+                desk as _,
+                UOI_NAME,
+                buf.as_mut_ptr().cast(),
+                (buf.len() * 2) as u32,
+                &mut needed,
+            )
+        };
+        unsafe { CloseDesktop(desk) };
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        ok == 0 || String::from_utf16_lossy(&buf[..len]).eq_ignore_ascii_case("default")
     }
 
     /// The shared handles of the system cursors and the CSS cursor each one stands for.

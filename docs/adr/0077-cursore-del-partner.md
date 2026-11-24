@@ -22,7 +22,8 @@ trascinare o un'attesa. Con un partner Mac il puntatore è disegnato nel video m
 - **Il viewer** trasforma il messaggio in un valore CSS (`session::cursor_css`: solo parole chiave o PNG in base64
   validati, punto caldo in punti, `-webkit-image-set(… Nx) x y, default`) e lo applica al canvas mentre controlla.
   Verificato che WebKit lo accetta.
-- Sulla schermata di sicurezza di Windows l'app non vede il puntatore: resta l'ultima forma.
+- Sulla schermata di sicurezza di Windows (Ctrl+Alt+Canc, UAC, blocco) l'app non vede il puntatore: se il desktop
+  di input non si apre o non è "Default" (`OpenInputDesktop`), freccia.
 
 ## Conseguenze
 - Serve la nuova versione su entrambi i computer.
