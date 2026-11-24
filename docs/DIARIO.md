@@ -877,3 +877,4 @@
   cursori di sistema disegnati (I-beam a inversione nero). VM ripulita e spenta.
 - Su richiesta: sulla schermata Ctrl+Alt+Canc sempre la freccia (desktop di input non apribile o non "Default").
   La 2.3.8 già in compilazione è stata annullata (bozza e tag cancellati, mai pubblicata) e rifatta.
+- Pubblicata la 2.3.8 (release in CI tutta verde, `latest.json` con 11 piattaforme).
