@@ -329,6 +329,10 @@ pub async fn serve_host(
         send_modes(&channel, handle.display_id, allowed, None).await;
     }
     let usage_task = tokio::spawn(report_usage(channel.clone()));
+    // The pointer's shape, for the viewer to show the same one (not for the test picture).
+    let cursor_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cursor_task = matches!(config.source, crate::Source::Screen { .. })
+        .then(|| tokio::spawn(report_cursor(channel.clone(), cursor_stop.clone())));
 
     // Report how remote control is going: first success, and failures (once each kind).
     let mut health_check = tokio::time::interval(Duration::from_secs(2));
@@ -697,6 +701,10 @@ pub async fn serve_host(
         }
     };
     usage_task.abort();
+    cursor_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Some(task) = cursor_task {
+        task.abort();
+    }
     // Dropping the sink releases any key or button still held by the viewer.
     stop_in_background(handle, input);
     display_resize.release().await;
@@ -725,6 +733,78 @@ async fn report_usage(channel: Arc<dyn DataChannel>) {
             send(&channel, &msg).await;
         }
     }
+}
+
+/// Tells the viewer every change of the pointer's shape (ADR 0077); only the latest one is
+/// sent when changes come faster than the channel takes them.
+async fn report_cursor(channel: Arc<dyn DataChannel>, stop: Arc<std::sync::atomic::AtomicBool>) {
+    let (tx, mut rx) = tokio::sync::watch::channel(None::<crate::cursor::Shape>);
+    crate::cursor::watch(stop, move |shape| {
+        let _ = tx.send(Some(shape));
+    });
+    while rx.changed().await.is_ok() {
+        let Some(shape) = rx.borrow_and_update().clone() else {
+            continue;
+        };
+        send(&channel, &cursor_message(shape)).await;
+    }
+}
+
+fn cursor_message(shape: crate::cursor::Shape) -> ControlMsg {
+    use base64::Engine;
+    match shape {
+        crate::cursor::Shape::Named(name) => ControlMsg::Cursor {
+            name: Some(name.to_owned()),
+            png: None,
+            hot_x: 0,
+            hot_y: 0,
+            scale: 1.0,
+        },
+        crate::cursor::Shape::Image {
+            png,
+            hot_x,
+            hot_y,
+            scale,
+        } => ControlMsg::Cursor {
+            name: None,
+            png: Some(base64::engine::general_purpose::STANDARD.encode(png)),
+            hot_x,
+            hot_y,
+            scale,
+        },
+    }
+}
+
+/// The CSS `cursor` value for a `ControlMsg::Cursor`: the keyword, or the picture at its
+/// size in points with the hot spot (in points too), falling back to the arrow.
+pub fn cursor_css(
+    name: Option<&str>,
+    png: Option<&str>,
+    hot_x: u32,
+    hot_y: u32,
+    scale: f32,
+) -> String {
+    if let Some(name) = name {
+        // Only plain keywords reach the page's style.
+        if !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+            return name.to_owned();
+        }
+        return "default".into();
+    }
+    let Some(png) = png.filter(|p| {
+        p.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
+    }) else {
+        return "default".into();
+    };
+    let scale = if scale.is_finite() {
+        scale.clamp(1.0, 4.0)
+    } else {
+        1.0
+    };
+    let x = (hot_x as f32 / scale).round() as u32;
+    let y = (hot_y as f32 / scale).round() as u32;
+    format!("-webkit-image-set(url(\"data:image/png;base64,{png}\") {scale}x) {x} {y}, default")
 }
 
 fn area(r: capture::Rect) -> input::Area {
@@ -1147,6 +1227,8 @@ pub enum ViewerEvent {
     ConnectionLost,
     /// The host has been silent for a few seconds (true) or speaks again (false).
     Silent(bool),
+    /// The host's pointer changed: the CSS `cursor` value to show over the picture.
+    Cursor(String),
     /// The host's sound cannot be played (here or on the host); the button goes off.
     AudioUnavailable(String),
     /// The host could not send Ctrl+Alt+Del; why.
@@ -1362,6 +1444,15 @@ pub async fn run_viewer(
                     Some(ControlMsg::SecureAttentionFailed { message }) => {
                         on_event(ViewerEvent::SecureAttentionFailed(message));
                     }
+                    Some(ControlMsg::Cursor { name, png, hot_x, hot_y, scale }) => {
+                        on_event(ViewerEvent::Cursor(cursor_css(
+                            name.as_deref(),
+                            png.as_deref(),
+                            hot_x,
+                            hot_y,
+                            scale,
+                        )));
+                    }
                     Some(ControlMsg::AudioUnavailable { message }) => {
                         let _ = sound.set_enabled(false).await;
                         on_event(ViewerEvent::AudioUnavailable(message));
@@ -1487,4 +1578,33 @@ pub async fn run_viewer(
     };
     video_task.abort();
     on_event(ViewerEvent::Ended(reason));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cursor_css;
+
+    #[test]
+    fn cursor_names_pass_and_anything_else_falls_back_to_the_arrow() {
+        assert_eq!(cursor_css(Some("text"), None, 0, 0, 1.0), "text");
+        assert_eq!(
+            cursor_css(Some("nwse-resize"), None, 0, 0, 1.0),
+            "nwse-resize"
+        );
+        assert_eq!(cursor_css(Some("url(x)"), None, 0, 0, 1.0), "default");
+        assert_eq!(cursor_css(None, Some("a\")b"), 0, 0, 1.0), "default");
+        assert_eq!(cursor_css(None, None, 0, 0, 1.0), "default");
+    }
+
+    #[test]
+    fn cursor_pictures_put_the_hot_spot_in_points() {
+        assert_eq!(
+            cursor_css(None, Some("iVBO+/="), 20, 32, 2.0),
+            "-webkit-image-set(url(\"data:image/png;base64,iVBO+/=\") 2x) 10 16, default"
+        );
+        assert_eq!(
+            cursor_css(None, Some("iVBO"), 7, 3, f32::NAN),
+            "-webkit-image-set(url(\"data:image/png;base64,iVBO\") 1x) 7 3, default"
+        );
+    }
 }

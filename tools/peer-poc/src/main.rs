@@ -573,6 +573,7 @@ async fn view(
             ViewerEvent::ScreenUnavailable(e) => println!("Host has no screen yet: {e}"),
             ViewerEvent::AudioUnavailable(e) => println!("Sound unavailable: {e}"),
             ViewerEvent::SecureAttentionFailed(e) => println!("Ctrl+Alt+Del not sent: {e}"),
+            ViewerEvent::Cursor(_) => {}
             ViewerEvent::ResolutionAdjustable => println!("Host can match its resolution"),
             ViewerEvent::DisplayModes { modes, current, .. } => {
                 println!("Host offers {} resolutions, now {current:?}", modes.len())

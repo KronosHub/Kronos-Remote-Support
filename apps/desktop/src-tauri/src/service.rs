@@ -132,6 +132,11 @@ pub enum UiEvent {
         session: SessionId,
         enabled: bool,
     },
+    /// The partner's pointer shape: the CSS `cursor` value for the picture (ADR 0077).
+    ViewCursor {
+        session: SessionId,
+        css: String,
+    },
     /// The partner's sound is (no longer) playing.
     ViewAudio {
         session: SessionId,
@@ -3010,6 +3015,9 @@ async fn view_partner(
                     log(app, "info", format!("blocco input del partner: {message}"));
                     shared.view_event(app, session, UiEvent::ViewNotice { session, message });
                 }
+            }
+            ViewerEvent::Cursor(css) => {
+                shared.view_event(app, session, UiEvent::ViewCursor { session, css })
             }
             ViewerEvent::SecureAttentionFailed(message) => {
                 log(app, "warn", format!("Ctrl+Alt+Canc non inviato: {message}"));

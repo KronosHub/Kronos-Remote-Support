@@ -868,3 +868,10 @@
   CPU o GPU non reggono; pulsante HD arancione da attivo. La 2.3.7 già in compilazione è stata annullata (bozza e tag
   cancellati, mai pubblicata) e rifatta con tutto.
 - Pubblicata la 2.3.7 (release in CI tutta verde, `latest.json` con 11 piattaforme).
+
+## 2026-11-24 — 2.3.8: cursore del partner
+- Richiesta: il cursore sopra il video era sempre una freccia. L'host ora guarda la forma del puntatore ogni 100 ms
+  e la manda al viewer (ADR 0077). `NSCursor.currentSystemCursor` funziona ancora su macOS 27 (prova in Swift).
+- VM: `schtasks /it` restava "In coda" (la VM è a batteria); serve un'attività con `-AllowStartIfOnBatteries`
+  (`Register-ScheduledTask`). `cursor_probe` nella sessione utente: freccia riconosciuta come `default`, i 14
+  cursori di sistema disegnati (I-beam a inversione nero). VM ripulita e spenta.

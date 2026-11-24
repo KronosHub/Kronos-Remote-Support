@@ -2,6 +2,11 @@
 
 Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**, quando la versione è disponibile.
 
+## 2.3.8 — 2026-11-24
+- **Il cursore segue quello del computer controllato**: sopra un testo diventa la I, sopra un link la manina, sui
+  bordi delle finestre le frecce per ridimensionare, durante un'attesa la rotellina. Prima era sempre una freccia.
+  Funziona con computer controllati Windows e Mac; serve la 2.3.8 su entrambi i computer.
+
 ## 2.3.7 — 2026-11-17
 - **Testo leggibile anche con poca banda**: con una connessione lenta calano prima i fotogrammi al secondo, fino a 10,
   e solo sotto quella soglia la risoluzione, a piccoli passi (prima crollava a gradini fino a 946×532). Lo stesso

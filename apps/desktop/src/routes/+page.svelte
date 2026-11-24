@@ -37,6 +37,7 @@
         ram_mb: number | null;
       }
     | { kind: "view_partner_usage"; session: number; cpu: number; ram_mb: number }
+    | { kind: "view_cursor"; session: number; css: string }
     | { kind: "view_quality"; session: number; kbps: number; fps: number; limited: boolean }
     | { kind: "view_clipboard"; session: number; enabled: boolean }
     | { kind: "view_audio"; session: number; enabled: boolean }
@@ -125,6 +126,8 @@
     /** CPU (% of the machine) and memory (MB) of this app and of the partner's. */
     local: { cpu: number; ram: number } | null;
     partner: { cpu: number; ram: number } | null;
+    /** The partner's pointer shape as a CSS `cursor` value (null: the arrow; ADR 0077). */
+    cursor: string | null;
     /** Set while the partner lowered the quality for lack of bandwidth. */
     limited: { kbps: number; fps: number } | null;
     /** Clipboard shared with the partner (null until known). */
@@ -944,6 +947,9 @@
             view.local = { cpu: event.cpu, ram: event.ram_mb };
         }
         break;
+      case "view_cursor":
+        if (view?.session === event.session) view.cursor = event.css;
+        break;
       case "view_partner_usage":
         if (view?.session === event.session) view.partner = { cpu: event.cpu, ram: event.ram_mb };
         break;
@@ -1574,6 +1580,7 @@
       net: null,
       local: null,
       partner: null,
+      cursor: null,
       clipboard: null,
       notice: null,
       ended: null,
@@ -2785,6 +2792,7 @@
         style:height={picture ? `${picture.cssHeight}px` : null}
         tabindex="0"
         class:controlling={view.control}
+        style:cursor={view.control && view.cursor ? view.cursor : null}
         onmousemove={onMouseMove}
         onmousedown={(e) => onMouseButton(e, true)}
         onmouseup={(e) => onMouseButton(e, false)}

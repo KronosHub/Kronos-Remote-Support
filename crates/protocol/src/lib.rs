@@ -154,11 +154,31 @@ pub enum ControlMsg {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
+    /// Host → viewer: the host's mouse pointer changed shape (ADR 0077). `name`: a CSS cursor
+    /// keyword ("default", "text", "pointer", "none" when hidden...); otherwise `png` (base64)
+    /// with its hot spot in pixels of the picture and `scale` pixels per point. Older viewers
+    /// ignore it.
+    Cursor {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        png: Option<String>,
+        #[serde(default)]
+        hot_x: u32,
+        #[serde(default)]
+        hot_y: u32,
+        #[serde(default = "one")]
+        scale: f32,
+    },
     /// Host → viewer: a `SecureAttention` (Ctrl+Alt+Del) could not be sent; `message` says why.
     /// Older viewers ignore it.
     SecureAttentionFailed {
         message: String,
     },
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

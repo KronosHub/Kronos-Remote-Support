@@ -1397,7 +1397,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-remoto"
-version = "2.3.7"
+version = "2.3.8"
 dependencies = [
  "agent",
  "anyhow",
@@ -5278,13 +5278,16 @@ dependencies = [
  "anyhow",
  "arboard",
  "audio",
+ "base64 0.22.1",
  "bytes",
  "capture",
  "codec",
  "image",
  "input",
  "libc",
+ "objc2",
  "objc2-app-kit",
+ "objc2-foundation",
  "protocol",
  "serde",
  "serde_json",

@@ -5,6 +5,7 @@
 
 pub mod awake;
 pub mod clipboard;
+pub mod cursor;
 pub mod files;
 pub mod fs;
 pub mod rate;
