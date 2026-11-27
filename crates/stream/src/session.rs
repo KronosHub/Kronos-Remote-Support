@@ -785,6 +785,11 @@ pub fn cursor_css(
     scale: f32,
 ) -> String {
     if let Some(name) = name {
+        // A hidden pointer stays an arrow: on a Windows partner it is not in the picture, and
+        // 2.3.8 hosts sent "none" whenever no mouse was plugged in there.
+        if name == "none" {
+            return "default".into();
+        }
         // Only plain keywords reach the page's style.
         if !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
             return name.to_owned();
@@ -1592,6 +1597,7 @@ mod tests {
             "nwse-resize"
         );
         assert_eq!(cursor_css(Some("url(x)"), None, 0, 0, 1.0), "default");
+        assert_eq!(cursor_css(Some("none"), None, 0, 0, 1.0), "default");
         assert_eq!(cursor_css(None, Some("a\")b"), 0, 0, 1.0), "default");
         assert_eq!(cursor_css(None, None, 0, 0, 1.0), "default");
     }

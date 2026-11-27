@@ -11,6 +11,9 @@ Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**
 - **Monitor virtuale dal terminale**: su un PC Windows senza schermi il comando propone di installarlo; `m` lo
   installa o lo rimuove. Sul Mac lo schermo virtuale nasce da solo quando manca un monitor: `m` lo rende lo schermo
   principale ("Computer usato solo da remoto") o torna agli schermi reali.
+- **Cursore di nuovo visibile sui computer Windows**: sui PC senza mouse collegato (usati solo da remoto, macchine
+  virtuali) o quando Windows nasconde il puntatore, il cursore spariva del tutto. Ora resta la freccia. Basta la 2.4.0
+  su chi controlla.
 
 ## 2.3.8 — 2026-11-24
 - **Il cursore segue quello del computer controllato**: sopra un testo diventa la I, sopra un link la manina, sui

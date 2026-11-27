@@ -118,8 +118,11 @@ mod platform {
         // the desktop nor its pointer: always the arrow there.
         let handle = if !on_user_desktop() || unsafe { GetCursorInfo(&mut info) } == 0 {
             SECURE
-        } else if info.flags & CURSOR_SHOWING == 0 {
-            0
+        } else if info.flags & CURSOR_SHOWING == 0 || info.hCursor.is_null() {
+            // Windows hides the pointer when no mouse is plugged in (remote-only PCs, VMs) or
+            // while touch, pen or typing hide it; the pointer is not in the frames either, so
+            // "none" left the viewer with no pointer at all: show the arrow instead.
+            HIDDEN
         } else {
             info.hCursor as isize
         };
@@ -128,8 +131,7 @@ mod platform {
         }
         state.last = Some(handle);
         match handle {
-            SECURE => return Some(Shape::Named("default")),
-            0 => return Some(Shape::Named("none")),
+            SECURE | HIDDEN => return Some(Shape::Named("default")),
             _ => {}
         }
         if state.named.is_empty() {
@@ -143,6 +145,8 @@ mod platform {
 
     /// Stands for "on a desktop this process cannot see" in `State::last`.
     const SECURE: isize = -1;
+    /// Stands for "Windows reports the pointer hidden" in `State::last`.
+    const HIDDEN: isize = 0;
 
     /// The input desktop is the user's own ("Default"), not the secure one ("Winlogon"),
     /// which a user process cannot even open.

@@ -891,3 +891,5 @@
   nessuno collegato (ADR 0078, ultima sezione). Mac: resta non fattibile (ADR 0056), e il Mac dell'utente ha
   FileVault attivo.
 
+- Segnalazione: con un partner Windows il cursore non si vedeva. Windows dà il puntatore per nascosto senza mouse
+  collegato; l'host mandava `none`. Ora freccia dall'host e `none` → `default` nel viewer (ADR 0077, aggiornamento).

@@ -31,3 +31,11 @@ trascinare o un'attesa. Con un partner Mac il puntatore è disegnato nel video m
   forma giusta e senza ritardo.
 - Prova: `cargo run -p stream --example cursor_probe -- <cartella> [secondi]` stampa i cambiamenti e salva le
   immagini; su Windows disegna anche tutti i cursori di sistema (provato sulla VM, sessione utente).
+
+## Aggiornamento 2.4.0 — puntatore "nascosto"
+Segnalazione: con un partner Windows il cursore non si vedeva. Windows dà il puntatore per nascosto (niente
+`CURSOR_SHOWING`) quando non c'è un mouse collegato (PC usati solo da remoto, macchine virtuali) o mentre tocco,
+penna o digitazione lo nascondono; l'host mandava `none`, e siccome su Windows il puntatore non è nei fotogrammi il
+viewer restava senza. Ora l'host manda la freccia, e il viewer trasforma comunque `none` in `default` (vale anche
+con host 2.3.8).
+
