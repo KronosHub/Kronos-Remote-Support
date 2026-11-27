@@ -14,6 +14,7 @@ use std::time::Duration;
 pub const SAMPLE_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Largest picture sent (bigger cursors keep the previous shape).
+#[cfg(any(windows, target_os = "macos"))]
 const MAX_SIDE: u32 = 256;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -37,6 +38,7 @@ pub struct Watcher {
 impl Watcher {
     pub fn new() -> Self {
         Self {
+            #[allow(clippy::default_constructed_unit_structs)] // a unit struct on Linux only
             state: platform::State::default(),
         }
     }
