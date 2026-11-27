@@ -1424,6 +1424,7 @@ impl Ctx {
 }
 
 fn emit(app: &AppHandle, event: UiEvent) {
+    crate::cli::publish(&event);
     let _ = app.emit("service", event);
 }
 
@@ -2485,7 +2486,9 @@ async fn serve_partner(
     match result {
         Ok(Access::Approved) => {}
         Ok(Access::Unattended) => {
-            crate::show_main_window(app);
+            if !crate::cli::attached() {
+                crate::show_main_window(app);
+            }
             log(
                 app,
                 "info",
@@ -2681,8 +2684,11 @@ async fn serve_partner(
             duration_secs: hosting_since.elapsed().as_secs(),
         },
     );
-    // The popup with the duration lives in the main window, which may be in the tray.
-    crate::show_main_window(app);
+    // The popup with the duration lives in the main window, which may be in the tray (the
+    // terminal shows the duration itself).
+    if !crate::cli::attached() {
+        crate::show_main_window(app);
+    }
     // A password that served one connection is not reused for the next one.
     shared.rotate_password(app);
     log(
@@ -2749,7 +2755,11 @@ async fn ask_user(app: &AppHandle, shared: &Arc<Shared>, session: SessionId, fro
     }
     let (tx, rx) = oneshot::channel();
     shared.approvals.lock().unwrap().insert(session, tx);
-    crate::show_main_window(app);
+    // Answered in the terminal when `kronos-remote` is running (ADR 0078); the window
+    // still has the popup if someone opens it.
+    if !crate::cli::attached() {
+        crate::show_main_window(app);
+    }
     emit(
         app,
         UiEvent::ApprovalRequest {

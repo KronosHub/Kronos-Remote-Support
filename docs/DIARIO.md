@@ -878,3 +878,16 @@
 - Su richiesta: sulla schermata Ctrl+Alt+Canc sempre la freccia (desktop di input non apribile o non "Default").
   La 2.3.8 già in compilazione è stata annullata (bozza e tag cancellati, mai pubblicata) e rifatta.
 - Pubblicata la 2.3.8 (release in CI tutta verde, `latest.json` con 11 piattaforme).
+
+## 2026-11-27 — 2.4.0: comando da terminale
+- Richiesta: usare l'app da terminale con un comando che mostri ID, password e conferma di connessione. Scelte
+  dell'utente: nome `kronos-remote`, il comando si aggancia all'app aperta (altrimenti la avvia), installazione con
+  un pulsante nelle Preferenze. Aggiunte durante il lavoro: proporre il monitor virtuale quando serve, e `m` anche
+  sul Mac (lì diventa "Computer usato solo da remoto", lo schermo virtuale non si installa). ADR 0078.
+- Prove sul Mac: con l'app 2.3.8 installata aperta, le copie di prova si scontravano con l'istanza singola (socket
+  fisso in `/tmp` per identificativo); usate due build con `TAURI_CONFIG` e identificativi `tech.kronos.krstesta`/`b`.
+  Trovato e corretto: il resoconto di fine sessione mostrava la finestra e l'app avviata dal comando non usciva.
+- Su richiesta: verificato sulla VM Windows il riavvio con "Avvia all'accesso" e la schermata di accesso senza
+  nessuno collegato (ADR 0078, ultima sezione). Mac: resta non fattibile (ADR 0056), e il Mac dell'utente ha
+  FileVault attivo.
+

@@ -2,6 +2,16 @@
 
 Le note di ogni versione compaiono nell'app, in **Preferenze › Aggiornamenti**, quando la versione è disponibile.
 
+## 2.4.0 — 2026-11-27
+- **Comando da terminale `kronos-remote`**: in un terminale mostra l'ID e la password di questo computer e chiede lì
+  se accettare chi si collega (s / n). Si aggancia all'app se è aperta, altrimenti la avvia nascosta e la chiude
+  all'uscita. Comandi: `p` nuova password, `i` di nuovo ID e password, `d` disconnetti, `m` monitor virtuale, `q`
+  esci. Si installa da **Preferenze › Generali › Comando da terminale** (sul Mac chiede la password di
+  amministratore).
+- **Monitor virtuale dal terminale**: su un PC Windows senza schermi il comando propone di installarlo; `m` lo
+  installa o lo rimuove. Sul Mac lo schermo virtuale nasce da solo quando manca un monitor: `m` lo rende lo schermo
+  principale ("Computer usato solo da remoto") o torna agli schermi reali.
+
 ## 2.3.8 — 2026-11-24
 - **Il cursore segue quello del computer controllato**: sopra un testo diventa la I, sopra un link la manina, sui
   bordi delle finestre le frecce per ridimensionare, durante un'attesa la rotellina. Prima era sempre una freccia. Sulla schermata di Ctrl+Alt+Canc resta la freccia.

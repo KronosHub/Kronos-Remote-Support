@@ -1,3 +1,4 @@
+mod cli;
 mod devices_file;
 mod logs;
 mod permissions;
@@ -18,7 +19,7 @@ use tauri_plugin_autostart::ManagerExt;
 use tracing_subscriber::Layer;
 
 /// Command-line flag used by the login item: start without showing the window.
-const HIDDEN_ARG: &str = "--hidden";
+pub(crate) const HIDDEN_ARG: &str = "--hidden";
 
 /// "Quick access" build (ADR 0031): runs without installation and only shares this screen.
 /// No tray, login item, updater or saved devices; closing the window quits. It keeps its
@@ -732,7 +733,7 @@ fn init_logging(dir: Option<std::path::PathBuf>) {
 }
 
 /// The app's configuration; the pre-login host opens no window at all.
-fn context() -> tauri::Context<tauri::Wry> {
+pub(crate) fn context() -> tauri::Context<tauri::Wry> {
     let mut context = tauri::generate_context!();
     if logon_host() {
         context.config_mut().app.windows.clear();
@@ -847,6 +848,15 @@ fn test_connect(app: &AppHandle) {
 const ASYNC_WORKERS: usize = 4;
 
 pub fn run() {
+    // Text mode (ADR 0078): a terminal client of the running app, no Tauri of its own.
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.get(1).map(String::as_str) == Some(cli::CLI_ARG) {
+            std::process::exit(cli::run(&args[2..]));
+        }
+    }
+    // Started by `kronos-remote`: quits when the command ends.
+    let cli_owned = std::env::args().any(|a| a == cli::OWNED_ARG);
     // Windows helper modes, before any Tauri/window setup.
     #[cfg(windows)]
     {
@@ -991,7 +1001,7 @@ pub fn run() {
             .plugin(tauri_plugin_updater::Builder::new().build());
     }
     let app = builder
-        .setup(|app| {
+        .setup(move |app| {
             if let Some(dir) = LOGON_HOST.get() {
                 #[cfg(windows)]
                 init_logging_as(agent::windows::log_dir(), "kronos-logon-host");
@@ -1019,13 +1029,16 @@ pub fn run() {
                     );
                 }
                 let data_dir = app.path().app_data_dir()?;
-                app.manage(Service::start(app.handle().clone(), data_dir)?);
-                show_main_window(app.handle());
+                app.manage(Service::start(app.handle().clone(), data_dir.clone())?);
+                cli::start_server(app.handle(), data_dir, cli_owned);
+                if !cli_owned {
+                    show_main_window(app.handle());
+                }
                 return Ok(());
             }
             init_logging(app.path().app_log_dir().ok());
             let data_dir = app.path().app_data_dir()?;
-            let service = Service::start(app.handle().clone(), data_dir)?;
+            let service = Service::start(app.handle().clone(), data_dir.clone())?;
             // Admin-windows (UAC) agent is opt-out: offer to install the service once, unless
             // the user declined before or it is already installed.
             #[cfg(windows)]
@@ -1057,6 +1070,7 @@ pub fn run() {
                 });
             }
             app.manage(service);
+            cli::start_server(app.handle(), data_dir, cli_owned);
             test_connect(app.handle());
             build_tray(app)?;
             if !std::env::args().any(|a| a == HIDDEN_ARG) {
@@ -1123,6 +1137,8 @@ pub fn run() {
             devices_file_locked,
             import_devices,
             logs::export_logs,
+            cli::cli_command_status,
+            cli::install_cli_command,
             permissions::get_permissions,
             permissions::open_permission_settings,
             uac::uac_support,

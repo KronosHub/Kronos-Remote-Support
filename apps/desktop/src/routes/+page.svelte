@@ -577,6 +577,11 @@
     error: false,
   });
   let virtualMonitorError = $state("");
+  /** The `kronos-remote` text-mode command (ADR 0078). */
+  type CliCommand = { supported: boolean; installed: boolean; path: string | null; message: string | null };
+  let cliCommand = $state<CliCommand | null>(null);
+  let cliCommandBusy = $state(false);
+  let cliCommandError = $state("");
   /** macOS, remote only: the virtual display's possible sizes and the one fixed (ADR 0065). */
   type VirtualSize = { sizes: [number, number][]; fixed: [number, number] | null };
   let virtualSize = $state<VirtualSize | null>(null);
@@ -1288,6 +1293,7 @@
     else if (update.kind === "available") prefsTab = "updates";
     if (update.kind !== "available") checkUpdate();
     invoke<VirtualMonitor>("virtual_monitor_status").then((v) => (virtualMonitor = v));
+    invoke<CliCommand>("cli_command_status").then((c) => (cliCommand = c));
     invoke<VirtualSize>("virtual_size").then((v) => (virtualSize = v));
   }
 
@@ -1325,6 +1331,19 @@
       addLog("info", `log salvati in ${path}`);
     } catch (e) {
       logsExport = { busy: false, message: String(e), error: true };
+    }
+  }
+  /** Writes the `kronos-remote` command (macOS asks for the administrator password). */
+  async function installCliCommand() {
+    if (cliCommandBusy) return;
+    cliCommandBusy = true;
+    cliCommandError = "";
+    try {
+      cliCommand = await invoke<CliCommand>("install_cli_command");
+    } catch (e) {
+      cliCommandError = String(e);
+    } finally {
+      cliCommandBusy = false;
     }
   }
   async function setVirtualMonitor(install: boolean) {
@@ -3617,6 +3636,30 @@
         <button type="button" class="switch" role="switch" aria-checked={autostart} aria-label="Avvia all'accesso"
           onclick={toggleAutostart}><span></span></button>
       </div>
+      {#if cliCommand?.supported}
+      <div class="pref">
+        <div class="pref-text">
+          <span class="pref-title">Comando da terminale</span>
+          <span class="hint small">
+            Scrivi <span class="mono">kronos-remote</span> in un terminale per vedere ID e password e accettare da lì
+            chi si collega.
+          </span>
+          {#if cliCommandError}
+            <span class="error">{cliCommandError}</span>
+          {:else if cliCommand.message}
+            <span class="hint small">{cliCommand.message}</span>
+          {:else if cliCommand.installed && cliCommand.path}
+            <span class="hint small">Installato in <span class="mono">{cliCommand.path}</span></span>
+          {/if}
+        </div>
+        <div class="pref-actions">
+          {#if cliCommandBusy}<span class="spinner"></span>{/if}
+          <button class="icon-btn" disabled={cliCommandBusy} onclick={installCliCommand}>
+            {cliCommand.installed ? "Reinstalla" : "Installa"}
+          </button>
+        </div>
+      </div>
+      {/if}
     </section>
 
     {:else if prefsTab === "connections"}
